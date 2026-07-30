@@ -1,0 +1,24 @@
+[package]
+name = "xexec"
+version = "0.1.0"
+edition = "2021"
+description = "Execution-analytics engine over crypto tick data, powered by Polars."
+license = "MIT"
+repository = "https://github.com/ghoshp83/polars-execution-lab"
+
+[lib]
+name = "xexec"
+path = "src/lib.rs"
+
+[[bin]]
+name = "xexec"
+path = "src/bin/xexec.rs"
+
+[dependencies]
+polars = { version = "0.44", default-features = false, features = ["lazy"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3

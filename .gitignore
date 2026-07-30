@@ -1,0 +1,29 @@
+# secrets / credentials
+*.key
+*.pem
+.env
+.env.*
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# rust
+/target/
+
+# captured live-data artifacts (the checked-in sample under data/ is kept)
+/out/
+*.parquet
+
+# workspace-only internal docs (never published)
+docs/decisions.md
+docs/progress.md
+docs/USER_GUIDE.md
