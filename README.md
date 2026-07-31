@@ -3,9 +3,10 @@
 **One execution-analytics engine, written once in Polars, run from both Rust and Python — proven identical on the same market-data replay.**
 
 Crypto trading desks measure execution the same way equities desks do: against
-**VWAP** and **TWAP** benchmarks, and by **implementation shortfall** versus the
-price when the order arrived. This project builds that measurement engine over
-live crypto tick data — the OHLCV/VWAP bar aggregation and the session
+**VWAP** and **TWAP** benchmarks, by **order-flow imbalance** (which side of the
+book drove the trades), and by **implementation shortfall** versus the price when
+the order arrived. This project builds that measurement engine over live crypto
+tick data — the OHLCV/VWAP bar aggregation and the session
 benchmarks are expressed **once** with the [Polars](https://pola.rs) query
 engine and executed **natively in Rust** (the compiled hot path) and **in
 Python** (the research and evaluation layer). A cross-language test asserts the
@@ -39,7 +40,7 @@ flowchart LR
     RP --> RUST
     RP --> PY
 
-    RUST --> BENCH[VWAP / TWAP / OHLCV bars]
+    RUST --> BENCH[VWAP / TWAP / OHLCV bars<br/>order-flow imbalance]
     PY --> BENCH
     PY --> FILLS["Execution sim - POV / TWAP<br/>implementation shortfall, slippage"]
 
@@ -90,7 +91,7 @@ XEXEC_BIN=target/release/xexec uv run pytest -m equivalence
 | **Rust** for the hot path | Compiled, allocation-lean, embeddable. This is the code you would put next to a live feed; the Python mirror is where you prototype and evaluate. |
 | **Python** for research | The fill simulation, transaction-cost analytics, and evaluation live where iteration is fastest, over the identical engine. |
 | **Coinbase WS** | Genuinely live, tick-level, ungated market data (no API key for market data) — the one free source that makes execution-algorithm analytics *real* rather than illustrative. |
-| **NDJSON replay** | A dead-simple, diffable, language-neutral contract. It is the websocket-replay primitive and doubles as the deterministic CI/backtest source. |
+| **NDJSON replay** | A dead-simple, diffable, language-neutral contract. It is the websocket-replay primitive and doubles as the deterministic CI/backtest source. A **Parquet** sink (`xexeclab convert`) is available for large captures where columnar storage pays off. |
 
 ## Operational characteristics
 
