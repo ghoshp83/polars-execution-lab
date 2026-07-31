@@ -7,7 +7,7 @@ import asyncio
 import json
 
 from . import __version__
-from .engine import bars, read_ticks, session_twap, session_vwap, summary
+from .engine import bars, read_ticks, session_twap, session_vwap, summary, write_ticks
 from .events import EventLog
 from .fills import pov_fill, twap_fill
 
@@ -25,6 +25,11 @@ def cmd_synth(a: argparse.Namespace) -> None:
 
     n = synthetic_ticks(a.out, n=a.n, seed=a.seed, product=a.product)
     print(f"wrote {n} synthetic ticks -> {a.out}")
+
+
+def cmd_convert(a: argparse.Namespace) -> None:
+    n = write_ticks(read_ticks(a.input), a.out)
+    print(f"converted {n} ticks {a.input} -> {a.out}")
 
 
 def cmd_summary(a: argparse.Namespace) -> None:
@@ -129,6 +134,11 @@ def main(argv: list[str] | None = None) -> None:
     ps.add_argument("--seed", type=int, default=7)
     ps.add_argument("--product", default="BTC-USD")
     ps.set_defaults(fn=cmd_synth)
+
+    pc = sub.add_parser("convert", help="convert a replay between NDJSON and Parquet")
+    pc.add_argument("--input", required=True, help="source replay (.ndjson/.jsonl/.parquet)")
+    pc.add_argument("--out", required=True, help="destination (.ndjson/.jsonl/.parquet)")
+    pc.set_defaults(fn=cmd_convert)
 
     for name, fn in (
         ("summary", cmd_summary),

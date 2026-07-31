@@ -25,8 +25,28 @@ def _r8(x: float) -> float:
 
 
 def read_ticks(path: str | Path) -> pl.DataFrame:
-    """Read canonical ticks from an NDJSON replay file, sorted by time."""
-    return pl.read_ndjson(str(path)).sort("ts_ns")
+    """Read canonical ticks from a replay file, sorted by time.
+
+    NDJSON (`.ndjson`/`.jsonl`) is the cross-language contract; Parquet is a
+    columnar sink for large captures. The format is chosen by file extension.
+    """
+    p = str(path)
+    df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
+    return df.sort("ts_ns")
+
+
+def write_ticks(df: pl.DataFrame, path: str | Path) -> int:
+    """Persist canonical ticks as Parquet (`.parquet`) or NDJSON by extension.
+
+    Parquet is a compact columnar sink for large captures; NDJSON stays the
+    portable replay the Rust engine also reads. Returns the row count written.
+    """
+    p = str(path)
+    if p.endswith(".parquet"):
+        df.write_parquet(p)
+    else:
+        df.write_ndjson(p)
+    return df.height
 
 
 def bars(df: pl.DataFrame, bucket_ns: int) -> pl.DataFrame:
