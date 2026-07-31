@@ -103,8 +103,26 @@ def session_twap(df: pl.DataFrame) -> float:
     return _r8(num / den)
 
 
+def order_flow(df: pl.DataFrame) -> tuple[float, float, float]:
+    """Buy volume, sell volume, and order-flow imbalance over all ticks.
+
+    Imbalance is ``(buy - sell) / (buy + sell)`` in ``[-1, 1]``: positive means
+    buy-initiated trades dominated the flow. Mirrors the Rust ``order_flow``.
+    """
+    row = df.select(
+        pl.col("size").filter(pl.col("side") == "buy").sum().alias("buy"),
+        pl.col("size").filter(pl.col("side") == "sell").sum().alias("sell"),
+    )
+    buy = row["buy"][0] or 0.0
+    sell = row["sell"][0] or 0.0
+    total = buy + sell
+    imbalance = 0.0 if total == 0 else (buy - sell) / total
+    return _r8(buy), _r8(sell), _r8(imbalance)
+
+
 def summary(df: pl.DataFrame, product: str, bucket_ns: int) -> dict:
-    """Full summary: session VWAP + TWAP + per-bucket bars, rounded to match Rust."""
+    """Full summary: session VWAP + TWAP + order-flow imbalance + per-bucket
+    bars, rounded to match Rust."""
     raw = bars(df, bucket_ns).to_dicts()
     bar_rows = [
         {
@@ -118,11 +136,15 @@ def summary(df: pl.DataFrame, product: str, bucket_ns: int) -> dict:
         }
         for r in raw
     ]
+    buy_volume, sell_volume, imbalance = order_flow(df)
     return {
         "product": product,
         "bucket_ns": bucket_ns,
         "ticks": df.height,
         "vwap": session_vwap(df),
         "twap": session_twap(df),
+        "buy_volume": buy_volume,
+        "sell_volume": sell_volume,
+        "imbalance": imbalance,
         "bars": bar_rows,
     }

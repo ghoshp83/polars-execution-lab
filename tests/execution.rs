@@ -1,4 +1,4 @@
-use xexec::execution::{bars, session_twap, session_vwap, summary};
+use xexec::execution::{bars, order_flow, session_twap, session_vwap, summary};
 use xexec::model::Tick;
 use xexec::replay::read_ticks;
 
@@ -66,4 +66,30 @@ fn twap_differs_from_vwap_and_summary_is_consistent() {
     assert_eq!(s.vwap, vwap);
     assert_eq!(s.twap, twap);
     assert_eq!(s.bars.len(), 3);
+}
+
+#[test]
+fn order_flow_splits_volume_and_bounds_imbalance() {
+    let ticks = load();
+    let (buy, sell, imbalance) = order_flow(&ticks).unwrap();
+    let total: f64 = ticks.iter().map(|t| t.size).sum();
+    // Buy and sell volume must partition the total traded volume.
+    assert!(
+        (buy + sell - total).abs() < 1e-6,
+        "buy + sell must equal total volume"
+    );
+    assert!(
+        (-1.0..=1.0).contains(&imbalance),
+        "imbalance is a ratio in [-1, 1]"
+    );
+    // The imbalance sign must agree with which side traded more.
+    let expected_sign = (buy - sell).signum();
+    assert!(
+        imbalance == 0.0 || imbalance.signum() == expected_sign,
+        "imbalance sign tracks the heavier side"
+    );
+    let s = summary(&ticks, "BTC-USD", BUCKET_1S).unwrap();
+    assert_eq!(s.buy_volume, buy);
+    assert_eq!(s.sell_volume, sell);
+    assert_eq!(s.imbalance, imbalance);
 }

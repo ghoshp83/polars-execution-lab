@@ -1,4 +1,11 @@
-from xexeclab.engine import bars, read_ticks, session_twap, session_vwap, summary
+from xexeclab.engine import (
+    bars,
+    order_flow,
+    read_ticks,
+    session_twap,
+    session_vwap,
+    summary,
+)
 
 SAMPLE = "data/sample_ticks.ndjson"
 BUCKET_1S = 1_000_000_000
@@ -34,3 +41,15 @@ def test_twap_differs_from_vwap_and_summary_consistent():
     assert len(s["bars"]) == 3
     assert s["vwap"] == session_vwap(df)
     assert s["twap"] == session_twap(df)
+
+
+def test_order_flow_splits_volume_and_bounds_imbalance():
+    df = read_ticks(SAMPLE)
+    buy, sell, imbalance = order_flow(df)
+    # Buy and sell volume must partition the total traded volume.
+    assert abs(buy + sell - df["size"].sum()) < 1e-6
+    assert -1.0 <= imbalance <= 1.0
+    # The imbalance sign must agree with which side traded more.
+    assert imbalance == 0.0 or (imbalance > 0) == (buy > sell)
+    s = summary(df, "BTC-USD", BUCKET_1S)
+    assert (s["buy_volume"], s["sell_volume"], s["imbalance"]) == (buy, sell, imbalance)

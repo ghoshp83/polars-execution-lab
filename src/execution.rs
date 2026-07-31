@@ -29,6 +29,9 @@ pub struct Summary {
     pub ticks: usize,
     pub vwap: f64,
     pub twap: f64,
+    pub buy_volume: f64,
+    pub sell_volume: f64,
+    pub imbalance: f64,
     pub bars: Vec<Bar>,
 }
 
@@ -157,14 +160,51 @@ pub fn session_twap(ticks: &[Tick]) -> Result<f64> {
     Ok(r8(num / den))
 }
 
-/// Full summary: session VWAP + TWAP + per-bucket bars.
+/// Buy volume, sell volume, and order-flow imbalance over all ticks, reduced
+/// with the Polars engine. Imbalance is `(buy - sell) / (buy + sell)` in
+/// `[-1, 1]`: positive means buy-initiated trades dominated the flow.
+pub fn order_flow(ticks: &[Tick]) -> Result<(f64, f64, f64)> {
+    if ticks.is_empty() {
+        return Err(anyhow!("no ticks"));
+    }
+    let size: Vec<f64> = ticks.iter().map(|t| t.size).collect();
+    let side: Vec<String> = ticks.iter().map(|t| t.side.clone()).collect();
+    let out = df!("size" => size, "side" => side)?
+        .lazy()
+        .select([
+            col("size")
+                .filter(col("side").eq(lit("buy")))
+                .sum()
+                .alias("buy"),
+            col("size")
+                .filter(col("side").eq(lit("sell")))
+                .sum()
+                .alias("sell"),
+        ])
+        .collect()?;
+    let buy = out.column("buy")?.f64()?.get(0).unwrap_or(0.0);
+    let sell = out.column("sell")?.f64()?.get(0).unwrap_or(0.0);
+    let total = buy + sell;
+    let imbalance = if total == 0.0 {
+        0.0
+    } else {
+        (buy - sell) / total
+    };
+    Ok((r8(buy), r8(sell), r8(imbalance)))
+}
+
+/// Full summary: session VWAP + TWAP + order-flow imbalance + per-bucket bars.
 pub fn summary(ticks: &[Tick], product: &str, bucket_ns: i64) -> Result<Summary> {
+    let (buy_volume, sell_volume, imbalance) = order_flow(ticks)?;
     Ok(Summary {
         product: product.to_string(),
         bucket_ns,
         ticks: ticks.len(),
         vwap: session_vwap(ticks)?,
         twap: session_twap(ticks)?,
+        buy_volume,
+        sell_volume,
+        imbalance,
         bars: bars(ticks, bucket_ns)?,
     })
 }
