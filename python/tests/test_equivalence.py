@@ -48,4 +48,7 @@ def test_rust_and_python_summaries_are_identical():
     assert rust["ticks"] == py["ticks"]
     assert rust["vwap"] == py["vwap"]
     assert rust["twap"] == py["twap"]
+    assert rust["buy_volume"] == py["buy_volume"]
+    assert rust["sell_volume"] == py["sell_volume"]
+    assert rust["imbalance"] == py["imbalance"]
     assert rust["bars"] == py["bars"]
