@@ -11,11 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from xexeclab.engine import read_ticks, summary
+from xexeclab.engine import quote_metrics, read_quotes, read_ticks, summary
 
 pytestmark = pytest.mark.equivalence
 
 SAMPLE = "data/sample_ticks.ndjson"
+QUOTE_SAMPLE = "data/sample_quotes.ndjson"
 BUCKET_MS = 1000
 
 
@@ -52,3 +53,26 @@ def test_rust_and_python_summaries_are_identical():
     assert rust["sell_volume"] == py["sell_volume"]
     assert rust["imbalance"] == py["imbalance"]
     assert rust["bars"] == py["bars"]
+
+
+def test_rust_and_python_quote_metrics_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    proc = subprocess.run(
+        [binary, "book", "--input", QUOTE_SAMPLE],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    df = read_quotes(QUOTE_SAMPLE)
+    py = quote_metrics(df, df["product"][0])
+
+    assert rust["quotes"] == py["quotes"]
+    assert rust["avg_spread"] == py["avg_spread"]
+    assert rust["avg_mid"] == py["avg_mid"]
+    assert rust["avg_microprice"] == py["avg_microprice"]
+    assert rust["avg_book_imbalance"] == py["avg_book_imbalance"]
