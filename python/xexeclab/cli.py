@@ -7,7 +7,16 @@ import asyncio
 import json
 
 from . import __version__
-from .engine import bars, read_ticks, session_twap, session_vwap, summary, write_ticks
+from .engine import (
+    bars,
+    quote_metrics,
+    read_quotes,
+    read_ticks,
+    session_twap,
+    session_vwap,
+    summary,
+    write_ticks,
+)
 from .events import EventLog
 from .fills import pov_fill, twap_fill
 
@@ -27,6 +36,21 @@ def cmd_synth(a: argparse.Namespace) -> None:
     print(f"wrote {n} synthetic ticks -> {a.out}")
 
 
+def cmd_ingest_quotes(a: argparse.Namespace) -> None:
+    from .ingest import stream_coinbase_quotes
+
+    log = EventLog(a.event_log)
+    n = asyncio.run(stream_coinbase_quotes(a.product, a.out, a.max_quotes, log))
+    print(f"captured {n} quotes -> {a.out}")
+
+
+def cmd_synth_quotes(a: argparse.Namespace) -> None:
+    from .ingest import synthetic_quotes
+
+    n = synthetic_quotes(a.out, n=a.n, seed=a.seed, product=a.product)
+    print(f"wrote {n} synthetic quotes -> {a.out}")
+
+
 def cmd_convert(a: argparse.Namespace) -> None:
     n = write_ticks(read_ticks(a.input), a.out)
     print(f"converted {n} ticks {a.input} -> {a.out}")
@@ -36,6 +60,12 @@ def cmd_summary(a: argparse.Namespace) -> None:
     df = read_ticks(a.input)
     product = df["product"][0] if df.height else a.product
     print(json.dumps(summary(df, product, a.bucket_ms * 1_000_000)))
+
+
+def cmd_book(a: argparse.Namespace) -> None:
+    df = read_quotes(a.input)
+    product = df["product"][0] if df.height else a.product
+    print(json.dumps(quote_metrics(df, product)))
 
 
 def cmd_bars(a: argparse.Namespace) -> None:
@@ -135,10 +165,31 @@ def main(argv: list[str] | None = None) -> None:
     ps.add_argument("--product", default="BTC-USD")
     ps.set_defaults(fn=cmd_synth)
 
+    piq = sub.add_parser(
+        "ingest-quotes", help="capture live Coinbase top-of-book quotes (auto-reconnect)"
+    )
+    piq.add_argument("--product", default="BTC-USD")
+    piq.add_argument("--out", required=True)
+    piq.add_argument("--max-quotes", type=int, default=500)
+    piq.add_argument("--event-log", default=None)
+    piq.set_defaults(fn=cmd_ingest_quotes)
+
+    psq = sub.add_parser("synth-quotes", help="write a deterministic synthetic quote replay")
+    psq.add_argument("--out", required=True)
+    psq.add_argument("--n", type=int, default=200)
+    psq.add_argument("--seed", type=int, default=7)
+    psq.add_argument("--product", default="BTC-USD")
+    psq.set_defaults(fn=cmd_synth_quotes)
+
     pc = sub.add_parser("convert", help="convert a replay between NDJSON and Parquet")
     pc.add_argument("--input", required=True, help="source replay (.ndjson/.jsonl/.parquet)")
     pc.add_argument("--out", required=True, help="destination (.ndjson/.jsonl/.parquet)")
     pc.set_defaults(fn=cmd_convert)
+
+    pb = sub.add_parser("book", help="top-of-book microstructure metrics over a quote replay")
+    pb.add_argument("--input", required=True, help="quote replay (.ndjson/.jsonl/.parquet)")
+    pb.add_argument("--product", default="BTC-USD")
+    pb.set_defaults(fn=cmd_book)
 
     for name, fn in (
         ("summary", cmd_summary),
