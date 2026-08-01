@@ -14,6 +14,7 @@ from pathlib import Path
 import polars as pl
 
 TICK_COLUMNS = ("ts_ns", "product", "price", "size", "side", "trade_id")
+QUOTE_COLUMNS = ("ts_ns", "product", "bid", "bid_size", "ask", "ask_size")
 
 
 def _r8(x: float) -> float:
@@ -30,6 +31,13 @@ def read_ticks(path: str | Path) -> pl.DataFrame:
     NDJSON (`.ndjson`/`.jsonl`) is the cross-language contract; Parquet is a
     columnar sink for large captures. The format is chosen by file extension.
     """
+    p = str(path)
+    df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
+    return df.sort("ts_ns")
+
+
+def read_quotes(path: str | Path) -> pl.DataFrame:
+    """Read canonical top-of-book quotes from an NDJSON replay, sorted by time."""
     p = str(path)
     df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
     return df.sort("ts_ns")
@@ -118,6 +126,35 @@ def order_flow(df: pl.DataFrame) -> tuple[float, float, float]:
     total = buy + sell
     imbalance = 0.0 if total == 0 else (buy - sell) / total
     return _r8(buy), _r8(sell), _r8(imbalance)
+
+
+def quote_metrics(df: pl.DataFrame, product: str) -> dict:
+    """Session top-of-book microstructure metrics, rounded to match Rust.
+
+    Every field is the mean of a per-quote quantity (see the Rust
+    ``QuoteSummary`` doc): average spread, mid, size-weighted microprice, and
+    book imbalance ``(bid_size - ask_size) / (bid_size + ask_size)`` in
+    ``[-1, 1]``. Mirrors the Rust ``quote_metrics`` expression for expression.
+    """
+    if df.height == 0:
+        raise ValueError("no quotes")
+    depth = pl.col("bid_size") + pl.col("ask_size")
+    row = df.select(
+        (pl.col("ask") - pl.col("bid")).mean().alias("avg_spread"),
+        ((pl.col("bid") + pl.col("ask")) / 2.0).mean().alias("avg_mid"),
+        ((pl.col("bid") * pl.col("ask_size") + pl.col("ask") * pl.col("bid_size")) / depth)
+        .mean()
+        .alias("avg_microprice"),
+        ((pl.col("bid_size") - pl.col("ask_size")) / depth).mean().alias("avg_book_imbalance"),
+    )
+    return {
+        "product": product,
+        "quotes": df.height,
+        "avg_spread": _r8(row["avg_spread"][0]),
+        "avg_mid": _r8(row["avg_mid"][0]),
+        "avg_microprice": _r8(row["avg_microprice"][0]),
+        "avg_book_imbalance": _r8(row["avg_book_imbalance"][0]),
+    }
 
 
 def summary(df: pl.DataFrame, product: str, bucket_ns: int) -> dict:

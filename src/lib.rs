@@ -8,4 +8,5 @@
 
 pub mod execution;
 pub mod model;
+pub mod quote;
 pub mod replay;
