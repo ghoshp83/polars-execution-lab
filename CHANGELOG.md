@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-08-01
+
+### Added
+- **Top-of-book quote microstructure** in the shared engine: a new canonical
+  `Quote` schema (`bid`/`bid_size`/`ask`/`ask_size`) and `quote_metrics`
+  reporting mean spread, mid, size-weighted **microprice**, and **book
+  imbalance** = `(bid_size - ask_size) / (bid_size + ask_size)` in `[-1, 1]`.
+  Computed with the same Polars expressions in the Rust crate (`quote::quote_metrics`)
+  and Python (`quote_metrics`), and held identical by a second cross-language
+  equivalence test.
+- **`book` subcommand** in both CLIs (`xexec book` / `xexeclab book`) plus a
+  checked-in `data/sample_quotes.ndjson` replay.
+- **Live top-of-book ingest with auto-reconnect**: `xexeclab ingest-quotes`
+  subscribes to Coinbase's `ticker` channel and resumes the capture across
+  dropped connections (logged per reconnect); `xexeclab synth-quotes` writes a
+  deterministic quote replay for offline runs and CI.
+
+### Changed
+- Test suite grows to 26 (7 Rust + 19 Python), including a second equivalence
+  test over the quote engine.
+
 ## [0.2.0] - 2026-07-31
 
 ### Added
