@@ -9,7 +9,9 @@ import json
 from . import __version__
 from .engine import (
     bars,
+    depth_metrics,
     quote_metrics,
+    read_book,
     read_quotes,
     read_ticks,
     session_twap,
@@ -51,6 +53,21 @@ def cmd_synth_quotes(a: argparse.Namespace) -> None:
     print(f"wrote {n} synthetic quotes -> {a.out}")
 
 
+def cmd_ingest_book(a: argparse.Namespace) -> None:
+    from .ingest import stream_coinbase_book
+
+    log = EventLog(a.event_log)
+    n = asyncio.run(stream_coinbase_book(a.product, a.out, a.max_snapshots, a.levels, log))
+    print(f"captured {n} book snapshots -> {a.out}")
+
+
+def cmd_synth_book(a: argparse.Namespace) -> None:
+    from .ingest import synthetic_book
+
+    n = synthetic_book(a.out, n_snapshots=a.n, levels=a.levels, seed=a.seed, product=a.product)
+    print(f"wrote {n} synthetic book rows -> {a.out}")
+
+
 def cmd_convert(a: argparse.Namespace) -> None:
     n = write_ticks(read_ticks(a.input), a.out)
     print(f"converted {n} ticks {a.input} -> {a.out}")
@@ -66,6 +83,12 @@ def cmd_book(a: argparse.Namespace) -> None:
     df = read_quotes(a.input)
     product = df["product"][0] if df.height else a.product
     print(json.dumps(quote_metrics(df, product)))
+
+
+def cmd_depth(a: argparse.Namespace) -> None:
+    df = read_book(a.input)
+    product = df["product"][0] if df.height else a.product
+    print(json.dumps(depth_metrics(df, product)))
 
 
 def cmd_bars(a: argparse.Namespace) -> None:
@@ -87,9 +110,16 @@ def _run_algo(a: argparse.Namespace):
     bucket_ns = a.bucket_ms * 1_000_000
     if a.algo == "pov":
         return df, pov_fill(
-            df, side=a.side, parent_qty=a.qty, participation=a.participation, bucket_ns=bucket_ns
+            df,
+            side=a.side,
+            parent_qty=a.qty,
+            participation=a.participation,
+            bucket_ns=bucket_ns,
+            impact_bps=a.impact_bps,
         )
-    return df, twap_fill(df, side=a.side, parent_qty=a.qty, bucket_ns=bucket_ns)
+    return df, twap_fill(
+        df, side=a.side, parent_qty=a.qty, bucket_ns=bucket_ns, impact_bps=a.impact_bps
+    )
 
 
 def cmd_simulate(a: argparse.Namespace) -> None:
@@ -102,9 +132,16 @@ def cmd_eval(a: argparse.Namespace) -> None:
     bucket_ns = a.bucket_ms * 1_000_000
     benchmark = session_vwap(df)
     pov = pov_fill(
-        df, side=a.side, parent_qty=a.qty, participation=a.participation, bucket_ns=bucket_ns
+        df,
+        side=a.side,
+        parent_qty=a.qty,
+        participation=a.participation,
+        bucket_ns=bucket_ns,
+        impact_bps=a.impact_bps,
     )
-    twap = twap_fill(df, side=a.side, parent_qty=a.qty, bucket_ns=bucket_ns)
+    twap = twap_fill(
+        df, side=a.side, parent_qty=a.qty, bucket_ns=bucket_ns, impact_bps=a.impact_bps
+    )
 
     def slip(px: float) -> float:
         raw = (px - benchmark) / benchmark * 1e4
@@ -142,6 +179,12 @@ def _add_algo(p: argparse.ArgumentParser) -> None:
     p.add_argument("--side", choices=["buy", "sell"], default="buy")
     p.add_argument("--qty", type=float, default=1.0, help="parent order quantity")
     p.add_argument("--participation", type=float, default=0.2, help="POV rate in (0, 1]")
+    p.add_argument(
+        "--impact-bps",
+        type=float,
+        default=0.0,
+        help="linear market impact in bps per unit of bar participation (0 = pure VWAP)",
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -190,6 +233,29 @@ def main(argv: list[str] | None = None) -> None:
     pb.add_argument("--input", required=True, help="quote replay (.ndjson/.jsonl/.parquet)")
     pb.add_argument("--product", default="BTC-USD")
     pb.set_defaults(fn=cmd_book)
+
+    pd = sub.add_parser("depth", help="L2 depth microstructure metrics over a book replay")
+    pd.add_argument("--input", required=True, help="book replay (.ndjson/.jsonl/.parquet)")
+    pd.add_argument("--product", default="BTC-USD")
+    pd.set_defaults(fn=cmd_depth)
+
+    pib = sub.add_parser(
+        "ingest-book", help="reconstruct the live Coinbase L2 book (auto-reconnect backfill)"
+    )
+    pib.add_argument("--product", default="BTC-USD")
+    pib.add_argument("--out", required=True)
+    pib.add_argument("--max-snapshots", type=int, default=500)
+    pib.add_argument("--levels", type=int, default=10, help="top levels per side to record")
+    pib.add_argument("--event-log", default=None)
+    pib.set_defaults(fn=cmd_ingest_book)
+
+    psb = sub.add_parser("synth-book", help="write a deterministic synthetic L2 book replay")
+    psb.add_argument("--out", required=True)
+    psb.add_argument("--n", type=int, default=100, help="number of snapshots")
+    psb.add_argument("--levels", type=int, default=5, help="levels per side")
+    psb.add_argument("--seed", type=int, default=7)
+    psb.add_argument("--product", default="BTC-USD")
+    psb.set_defaults(fn=cmd_synth_book)
 
     for name, fn in (
         ("summary", cmd_summary),
