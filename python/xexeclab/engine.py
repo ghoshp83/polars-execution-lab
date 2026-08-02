@@ -15,6 +15,7 @@ import polars as pl
 
 TICK_COLUMNS = ("ts_ns", "product", "price", "size", "side", "trade_id")
 QUOTE_COLUMNS = ("ts_ns", "product", "bid", "bid_size", "ask", "ask_size")
+BOOK_LEVEL_COLUMNS = ("ts_ns", "product", "side", "level", "price", "size")
 
 
 def _r8(x: float) -> float:
@@ -41,6 +42,13 @@ def read_quotes(path: str | Path) -> pl.DataFrame:
     p = str(path)
     df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
     return df.sort("ts_ns")
+
+
+def read_book(path: str | Path) -> pl.DataFrame:
+    """Read canonical L2 order-book levels from an NDJSON depth replay."""
+    p = str(path)
+    df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
+    return df.sort("ts_ns", "side", "level")
 
 
 def write_ticks(df: pl.DataFrame, path: str | Path) -> int:
@@ -154,6 +162,51 @@ def quote_metrics(df: pl.DataFrame, product: str) -> dict:
         "avg_mid": _r8(row["avg_mid"][0]),
         "avg_microprice": _r8(row["avg_microprice"][0]),
         "avg_book_imbalance": _r8(row["avg_book_imbalance"][0]),
+    }
+
+
+def depth_metrics(df: pl.DataFrame, product: str) -> dict:
+    """Session L2 depth microstructure metrics, rounded to match Rust.
+
+    Stage 1 collapses each snapshot (rows sharing a ``ts_ns``) to its resting
+    depth per side and its top-of-book spread; stage 2 averages those over the
+    window. Mirrors the Rust ``depth_metrics`` expression for expression -- the
+    ``.sort("ts_ns")`` fixes the summation order so the means are bit-identical.
+    See the Rust ``DepthSummary`` doc for the field meanings.
+    """
+    if df.height == 0:
+        raise ValueError("no book levels")
+    per_snap = (
+        df.group_by("ts_ns")
+        .agg(
+            pl.col("size").filter(pl.col("side") == "bid").sum().alias("bid_depth"),
+            pl.col("size").filter(pl.col("side") == "ask").sum().alias("ask_depth"),
+            pl.col("price")
+            .filter((pl.col("side") == "bid") & (pl.col("level") == 0))
+            .first()
+            .alias("best_bid"),
+            pl.col("price")
+            .filter((pl.col("side") == "ask") & (pl.col("level") == 0))
+            .first()
+            .alias("best_ask"),
+        )
+        .sort("ts_ns")
+    )
+    bid_depth = pl.col("bid_depth")
+    ask_depth = pl.col("ask_depth")
+    row = per_snap.select(
+        bid_depth.mean().alias("avg_bid_depth"),
+        ask_depth.mean().alias("avg_ask_depth"),
+        ((bid_depth - ask_depth) / (bid_depth + ask_depth)).mean().alias("avg_depth_imbalance"),
+        (pl.col("best_ask") - pl.col("best_bid")).mean().alias("avg_spread"),
+    )
+    return {
+        "product": product,
+        "snapshots": per_snap.height,
+        "avg_bid_depth": _r8(row["avg_bid_depth"][0]),
+        "avg_ask_depth": _r8(row["avg_ask_depth"][0]),
+        "avg_depth_imbalance": _r8(row["avg_depth_imbalance"][0]),
+        "avg_spread": _r8(row["avg_spread"][0]),
     }
 
 

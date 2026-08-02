@@ -6,6 +6,7 @@
 //! identical results on the same deterministic replay, so the "one engine,
 //! two languages" claim is verified, not asserted.
 
+pub mod depth;
 pub mod execution;
 pub mod model;
 pub mod quote;

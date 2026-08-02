@@ -1,4 +1,4 @@
-use crate::model::{Quote, Tick};
+use crate::model::{BookLevel, Quote, Tick};
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use std::fs::File;
@@ -35,5 +35,10 @@ pub fn read_ticks<P: AsRef<Path>>(path: P) -> Result<Vec<Tick>> {
 
 /// Read canonical top-of-book quotes from an NDJSON replay file.
 pub fn read_quotes<P: AsRef<Path>>(path: P) -> Result<Vec<Quote>> {
+    read_ndjson(path)
+}
+
+/// Read canonical L2 order-book levels from an NDJSON depth replay file.
+pub fn read_book<P: AsRef<Path>>(path: P) -> Result<Vec<BookLevel>> {
     read_ndjson(path)
 }

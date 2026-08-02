@@ -37,3 +37,24 @@ pub struct Quote {
     /// Resting size at the best ask.
     pub ask_size: f64,
 }
+
+/// One price level of an L2 order-book snapshot. A full snapshot is the set of
+/// rows sharing a `ts_ns`: several `bid` levels and several `ask` levels, each
+/// tagged with its `level` (0 = best). This is the on-the-wire schema of a
+/// depth replay file and the normalized form the `level2` book reconstruction
+/// emits, one JSON object per line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BookLevel {
+    /// Snapshot time as nanoseconds since the Unix epoch (UTC).
+    pub ts_ns: i64,
+    /// Product / symbol, e.g. "BTC-USD".
+    pub product: String,
+    /// Book side: "bid" or "ask".
+    pub side: String,
+    /// Depth rank on this side: 0 is the best (top of book).
+    pub level: i64,
+    /// Price at this level.
+    pub price: f64,
+    /// Resting size at this level.
+    pub size: f64,
+}
