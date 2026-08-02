@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Result};
+use xexec::depth::depth_metrics;
 use xexec::execution::{bars, session_twap, session_vwap, summary};
 use xexec::quote::quote_metrics;
-use xexec::replay::{read_quotes, read_ticks};
+use xexec::replay::{read_book, read_quotes, read_ticks};
 
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
@@ -10,7 +11,8 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
         .cloned()
 }
 
-const USAGE: &str = "usage: xexec <summary|vwap|twap|bars|book> --input <ndjson> [--bucket-ms N]";
+const USAGE: &str =
+    "usage: xexec <summary|vwap|twap|bars|book|depth> --input <ndjson> [--bucket-ms N]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -32,6 +34,20 @@ fn main() -> Result<()> {
         println!(
             "{}",
             serde_json::to_string(&quote_metrics(&quotes, &product)?)?
+        );
+        return Ok(());
+    }
+
+    // `depth` reads the L2 book-level schema, not trades.
+    if cmd == "depth" {
+        let levels = read_book(&input)?;
+        if levels.is_empty() {
+            return Err(anyhow!("no book levels in {input}"));
+        }
+        let product = levels[0].product.clone();
+        println!(
+            "{}",
+            serde_json::to_string(&depth_metrics(&levels, &product)?)?
         );
         return Ok(());
     }
