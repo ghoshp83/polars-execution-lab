@@ -44,3 +44,25 @@ def test_participation_is_validated():
     df = read_ticks(SAMPLE)
     with pytest.raises(ValueError):
         pov_fill(df, side="buy", parent_qty=1.0, participation=0, bucket_ns=BUCKET_1S)
+
+
+def test_market_impact_moves_the_fill_against_the_order():
+    df = read_ticks(SAMPLE)
+    base = pov_fill(df, side="buy", parent_qty=1.0, participation=0.5, bucket_ns=BUCKET_1S)
+    impacted = pov_fill(
+        df, side="buy", parent_qty=1.0, participation=0.5, bucket_ns=BUCKET_1S, impact_bps=50.0
+    )
+    # A buy pays up under impact: higher average price and worse shortfall.
+    assert impacted.avg_price > base.avg_price
+    assert impacted.is_bps > base.is_bps
+    # A sell of the same schedule is filled worse in the opposite direction.
+    sell = twap_fill(df, side="sell", parent_qty=1.0, bucket_ns=BUCKET_1S, impact_bps=50.0)
+    sell_base = twap_fill(df, side="sell", parent_qty=1.0, bucket_ns=BUCKET_1S)
+    assert sell.avg_price < sell_base.avg_price
+
+
+def test_zero_impact_is_the_pure_vwap_benchmark():
+    df = read_ticks(SAMPLE)
+    a = twap_fill(df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S)
+    b = twap_fill(df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S, impact_bps=0.0)
+    assert a.avg_price == b.avg_price

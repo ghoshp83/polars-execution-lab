@@ -6,8 +6,10 @@ observed bars, and score the result against the arrival price (implementation
 shortfall) and the session VWAP benchmark.
 
 Honest scope: this is a *simulation* over historical bars -- it does not route
-orders to a venue and assumes each child fills at its bar's VWAP with no market
-impact. It measures schedule quality, not live execution.
+orders to a venue. Each child fills at its bar's VWAP, optionally adjusted by a
+linear temporary market-impact model (`impact_bps`) that charges more the larger
+a fraction of the bar's volume the child consumes. It measures schedule quality,
+not live execution.
 """
 
 from __future__ import annotations
@@ -40,6 +42,21 @@ def _arrival(df: pl.DataFrame) -> float:
     return float(df.sort("ts_ns")["price"][0])
 
 
+def _impact_price(vwap: float, qty: float, volume: float, side: str, impact_bps: float) -> float:
+    """Linear temporary-impact fill price.
+
+    A child taking `qty` out of a bar of `volume` moves the price against itself
+    by `impact_bps` basis points per unit of participation: a buy pays up, a sell
+    receives less. With `impact_bps == 0` the fill is exactly the bar VWAP, so the
+    impact model is opt-in and the default preserves the pure-schedule benchmark.
+    """
+    if impact_bps == 0.0 or volume <= 0:
+        return vwap
+    participation = qty / volume
+    signed = impact_bps if side == "buy" else -impact_bps
+    return vwap * (1.0 + signed * 1e-4 * participation)
+
+
 def pov_fill(
     df: pl.DataFrame,
     *,
@@ -47,9 +64,11 @@ def pov_fill(
     parent_qty: float,
     participation: float,
     bucket_ns: int,
+    impact_bps: float = 0.0,
 ) -> FillResult:
     """Percentage-of-volume: take up to `participation` * bar_volume each bar,
-    filling at that bar's VWAP, until the parent order is exhausted."""
+    filling at that bar's VWAP (adjusted by `impact_bps` market impact), until the
+    parent order is exhausted."""
     if not 0 < participation <= 1:
         raise ValueError("participation must be in (0, 1]")
     if parent_qty <= 0:
@@ -66,11 +85,12 @@ def pov_fill(
         take = min(remaining, participation * row["volume"])
         if take <= 0:
             continue
-        notional += take * row["vwap"]
+        price = _impact_price(row["vwap"], take, row["volume"], side, impact_bps)
+        notional += take * price
         filled += take
         remaining -= take
         schedule.append(
-            {"bucket_ns": row["bucket_ns"], "qty": round(take, 8), "price": round(row["vwap"], 8)}
+            {"bucket_ns": row["bucket_ns"], "qty": round(take, 8), "price": round(price, 8)}
         )
 
     avg_price = notional / filled if filled > 0 else 0.0
@@ -92,8 +112,10 @@ def twap_fill(
     side: str,
     parent_qty: float,
     bucket_ns: int,
+    impact_bps: float = 0.0,
 ) -> FillResult:
-    """TWAP: an equal child quantity in every bar, filled at that bar's VWAP."""
+    """TWAP: an equal child quantity in every bar, filled at that bar's VWAP
+    (adjusted by `impact_bps` market impact)."""
     if parent_qty <= 0:
         raise ValueError("parent_qty must be positive")
     bar_rows = bars(df, bucket_ns).to_dicts()
@@ -106,13 +128,14 @@ def twap_fill(
     filled = 0.0
     schedule: list[dict] = []
     for row in bar_rows:
-        notional += slice_qty * row["vwap"]
+        price = _impact_price(row["vwap"], slice_qty, row["volume"], side, impact_bps)
+        notional += slice_qty * price
         filled += slice_qty
         schedule.append(
             {
                 "bucket_ns": row["bucket_ns"],
                 "qty": round(slice_qty, 8),
-                "price": round(row["vwap"], 8),
+                "price": round(price, 8),
             }
         )
 
