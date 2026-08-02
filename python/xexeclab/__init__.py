@@ -4,4 +4,4 @@ The Python analytics mirror the Rust engine expression-for-expression so both
 compute identical benchmarks on the same replay (see the equivalence test).
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

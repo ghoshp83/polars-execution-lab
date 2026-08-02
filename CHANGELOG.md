@@ -4,6 +4,37 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-08-02
+
+### Added
+- **L2 order-book depth microstructure** in the shared engine: a new canonical
+  `BookLevel` schema (`side`/`level`/`price`/`size` per snapshot) and
+  `depth_metrics`, a two-stage Polars pipeline that reduces each snapshot to its
+  per-side resting depth and top-of-book spread, then averages over the window —
+  reporting `avg_bid_depth`, `avg_ask_depth`, `avg_depth_imbalance` =
+  `(bid_depth - ask_depth) / (bid_depth + ask_depth)` in `[-1, 1]`, and
+  `avg_spread`. Computed with the same expressions in the Rust crate
+  (`depth::depth_metrics`) and Python, and held identical by a **third**
+  cross-language equivalence test.
+- **`depth` subcommand** in both CLIs (`xexec depth` / `xexeclab depth`) plus a
+  checked-in `data/sample_book.ndjson` replay.
+- **Live L2 book reconstruction with backfill-on-reconnect**: `xexeclab
+  ingest-book` subscribes to Coinbase's `level2_batch` channel, seeds the book
+  from the `snapshot`, applies each `l2update` statefully, and writes the top-N
+  levels per side; on a dropped connection it reconnects and the fresh snapshot
+  re-seeds the book (a clean backfill, logged per reconnect via
+  `book_ingest_reconnect`). `xexeclab synth-book` writes a deterministic depth
+  replay for offline runs and CI.
+- **Linear market-impact model** in the fill simulator: `pov_fill` / `twap_fill`
+  accept `impact_bps`, charging a child order a bps cost proportional to the
+  fraction of the bar's volume it consumes (a buy pays up, a sell receives less);
+  `impact_bps=0` preserves the pure-VWAP benchmark. Exposed as
+  `xexeclab simulate|eval --impact-bps`.
+
+### Changed
+- Test suite grows to 38 (10 Rust + 28 Python), including a third equivalence
+  test over the depth engine.
+
 ## [0.3.0] - 2026-08-01
 
 ### Added

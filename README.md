@@ -4,10 +4,11 @@
 
 Crypto trading desks measure execution the same way equities desks do: against
 **VWAP** and **TWAP** benchmarks, by **order-flow imbalance** (which side of the
-book drove the trades), by **top-of-book microstructure** (spread, microprice,
-book imbalance), and by **implementation shortfall** versus the price when the
-order arrived. This project builds that measurement engine over live crypto
-tick and quote data — the aggregations and benchmarks are expressed **once** with
+book drove the trades), by **top-of-book and L2 depth microstructure** (spread,
+microprice, resting depth, depth imbalance), and by **implementation shortfall**
+versus the price when the order arrived. This project builds that measurement
+engine over live crypto tick, quote, and order-book data — the aggregations and
+benchmarks are expressed **once** with
 the [Polars](https://pola.rs) query engine and executed **natively in Rust** (the
 compiled hot path) and **in Python** (the research and evaluation layer). A
 cross-language test asserts the two produce **byte-identical** summaries, so
@@ -25,17 +26,19 @@ transaction-cost analytics.
 ```mermaid
 flowchart LR
     subgraph ingest[Market data]
-        CB[Coinbase WebSocket<br/>trades + ticker, auto-reconnect]
+        CB[Coinbase WebSocket<br/>trades + ticker + level2, auto-reconnect]
         SYN[Synthetic generator<br/>deterministic]
     end
     CB -->|normalize| RP[(NDJSON replay<br/>canonical ticks)]
     CB -->|normalize| QRP[(NDJSON replay<br/>top-of-book quotes)]
+    CB -->|reconstruct L2| BRP[(NDJSON replay<br/>order-book levels)]
     SYN --> RP
     SYN --> QRP
+    SYN --> BRP
 
     subgraph engine[Shared Polars engine - defined once]
         direction TB
-        RUST["Rust crate - src/execution.rs, src/quote.rs<br/>polars crate - compiled hot path"]
+        RUST["Rust crate - execution.rs, quote.rs, depth.rs<br/>polars crate - compiled hot path"]
         PY["Python - xexeclab/engine.py<br/>polars bindings - research layer"]
     end
 
@@ -43,15 +46,20 @@ flowchart LR
     RP --> PY
     QRP --> RUST
     QRP --> PY
+    BRP --> RUST
+    BRP --> PY
 
     RUST --> BENCH[VWAP / TWAP / OHLCV bars<br/>order-flow imbalance]
     PY --> BENCH
     RUST --> BOOK[Quote microstructure<br/>spread / microprice / book imbalance]
     PY --> BOOK
-    PY --> FILLS["Execution sim - POV / TWAP<br/>implementation shortfall, slippage"]
+    RUST --> DEPTH[L2 depth microstructure<br/>resting depth / depth imbalance / spread]
+    PY --> DEPTH
+    PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
 
     BENCH -.->|assert identical| EQ{{Cross-language<br/>equivalence test}}
     BOOK -.->|assert identical| EQ
+    DEPTH -.->|assert identical| EQ
 
     style engine fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
     style EQ fill:#134e4a,stroke:#2dd4bf,color:#e2e8f0
@@ -79,11 +87,18 @@ uv run xexeclab eval    --input data/sample_ticks.ndjson --algo pov --side buy -
 # top-of-book microstructure (spread / microprice / book imbalance)
 uv run xexeclab book    --input data/sample_quotes.ndjson
 
+# L2 depth microstructure (resting depth / depth imbalance / spread)
+uv run xexeclab depth   --input data/sample_book.ndjson
+
+# execution sim with a market-impact model (bps per unit of bar participation)
+uv run xexeclab eval    --input data/sample_ticks.ndjson --algo pov --side buy --qty 1.0 --participation 0.2 --impact-bps 50
+
 # capture real live market data from Coinbase (no API key needed)
-uv run xexeclab ingest        --product BTC-USD --out out/btc.ndjson    --max-trades 500 --event-log out/events.jsonl
-uv run xexeclab ingest-quotes --product BTC-USD --out out/btc_book.ndjson --max-quotes 500   # auto-reconnects
+uv run xexeclab ingest        --product BTC-USD --out out/btc.ndjson       --max-trades 500 --event-log out/events.jsonl
+uv run xexeclab ingest-quotes --product BTC-USD --out out/btc_quotes.ndjson --max-quotes 500      # auto-reconnects
+uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --max-snapshots 500 --levels 10  # reconstructs L2, backfills on reconnect
 uv run xexeclab summary --input out/btc.ndjson
-uv run xexeclab book    --input out/btc_book.ndjson
+uv run xexeclab depth   --input out/btc_book.ndjson
 
 # --- Rust engine ---------------------------------------------------
 cargo run --release --bin xexec -- summary --input data/sample_ticks.ndjson --bucket-ms 1000
@@ -111,11 +126,12 @@ XEXEC_BIN=target/release/xexec uv run pytest -m equivalence
   both languages.
 - **Cross-language equivalence** is enforced in CI, not just documented.
 - **Structured observability**: ingest emits a JSONL event log
-  (`ingest_start` / `ingest_progress` / `ingest_complete`, and for quotes
-  `quote_ingest_reconnect` when the live feed drops and resumes) with a
-  documented schema (see `python/xexeclab/events.py`).
-- **Resilient live capture**: the quote collector auto-reconnects to the
-  Coinbase feed and resumes appending, logging each reconnect so gaps are visible.
+  (`ingest_start` / `ingest_progress` / `ingest_complete`, and per-reconnect
+  `quote_ingest_reconnect` / `book_ingest_reconnect` when a live feed drops and
+  resumes) with a documented schema (see `python/xexeclab/events.py`).
+- **Resilient live capture**: the quote and L2-book collectors auto-reconnect to
+  the Coinbase feed and resume; on reconnect the book is re-seeded from a fresh
+  snapshot (backfill), and each reconnect is logged so discontinuities are visible.
 - **Bar width is a parameter** (`--bucket-ms`); benchmarks scale to any horizon.
 - CI runs two jobs: Rust (`fmt` + `clippy -D warnings` + `test`) and Python
   (`ruff` + `pytest` + the equivalence test that builds the Rust binary).
@@ -142,18 +158,22 @@ XEXEC_BIN=target/release/xexec uv run pytest -m equivalence   # both agree
 This is a **market-data and execution-analytics** project, not a trading system.
 
 - The execution algorithms (POV, TWAP) are **simulated over historical bars**.
-  Each child order is assumed to fill at its bar's VWAP with **no market impact**
-  and **no order routing** to any venue. It measures *schedule quality*, not live
-  execution, and must not be used to trade.
+  Each child order fills at its bar's VWAP, optionally adjusted by a **linear
+  market-impact model** (`--impact-bps`); there is still **no order routing** to
+  any venue. It measures *schedule quality*, not live execution, and must not be
+  used to trade. The impact model is a first-order stand-in, not a calibrated
+  cost curve.
 - **Market making and smart order routing** — parts of what a real execution
   firm does — are out of scope here; only the market-data and post-trade
   analytics slice is built.
 - Live data comes from Coinbase's public feed; availability and rate limits are
-  the exchange's. The checked-in `data/sample_ticks.ndjson` and
-  `data/sample_quotes.ndjson` let every command and test run with no network.
-- Quote metrics are computed from **top-of-book** best bid/ask (Coinbase's
-  `ticker` channel), not full L2 depth — enough for spread, microprice, and
-  book-imbalance analytics, but not a depth-of-book reconstruction.
+  the exchange's. The checked-in `data/sample_ticks.ndjson`,
+  `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
+  and test run with no network.
+- L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
+  snapshot plus batched deltas) and recorded to the top-N levels per side —
+  enough for resting-depth, depth-imbalance, and spread analytics. It is not a
+  microsecond, full-precision book and carries no queue-position modelling.
 
 ## License
 
