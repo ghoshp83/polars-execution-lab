@@ -66,3 +66,23 @@ def test_zero_impact_is_the_pure_vwap_benchmark():
     a = twap_fill(df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S)
     b = twap_fill(df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S, impact_bps=0.0)
     assert a.avg_price == b.avg_price
+
+
+def test_sqrt_model_charges_more_than_linear_at_low_participation():
+    df = read_ticks(SAMPLE)
+    one_bar = 10**18  # a bucket wide enough to hold the whole sample in one bar
+    # A single sub-1 participation slice: sqrt(p) > p, so the concave law is
+    # steeper than linear near zero and marks the buy up further.
+    linear = twap_fill(
+        df, side="buy", parent_qty=0.5, bucket_ns=one_bar, impact_bps=100.0, impact_model="linear"
+    )
+    sqrt = twap_fill(
+        df, side="buy", parent_qty=0.5, bucket_ns=one_bar, impact_bps=100.0, impact_model="sqrt"
+    )
+    assert sqrt.avg_price > linear.avg_price > 0
+
+
+def test_invalid_impact_model_is_rejected():
+    df = read_ticks(SAMPLE)
+    with pytest.raises(ValueError):
+        twap_fill(df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S, impact_model="cubic")

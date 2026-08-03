@@ -10,8 +10,10 @@ from . import __version__
 from .engine import (
     bars,
     depth_metrics,
+    impact_curve,
     quote_metrics,
     read_book,
+    read_impact,
     read_quotes,
     read_ticks,
     session_twap,
@@ -91,6 +93,12 @@ def cmd_depth(a: argparse.Namespace) -> None:
     print(json.dumps(depth_metrics(df, product)))
 
 
+def cmd_impact(a: argparse.Namespace) -> None:
+    df = read_impact(a.input)
+    product = df["product"][0] if df.height else a.product
+    print(json.dumps(impact_curve(df, product, a.coef_bps)))
+
+
 def cmd_bars(a: argparse.Namespace) -> None:
     df = read_ticks(a.input)
     for row in bars(df, a.bucket_ms * 1_000_000).iter_rows(named=True):
@@ -116,9 +124,15 @@ def _run_algo(a: argparse.Namespace):
             participation=a.participation,
             bucket_ns=bucket_ns,
             impact_bps=a.impact_bps,
+            impact_model=a.impact_model,
         )
     return df, twap_fill(
-        df, side=a.side, parent_qty=a.qty, bucket_ns=bucket_ns, impact_bps=a.impact_bps
+        df,
+        side=a.side,
+        parent_qty=a.qty,
+        bucket_ns=bucket_ns,
+        impact_bps=a.impact_bps,
+        impact_model=a.impact_model,
     )
 
 
@@ -138,9 +152,15 @@ def cmd_eval(a: argparse.Namespace) -> None:
         participation=a.participation,
         bucket_ns=bucket_ns,
         impact_bps=a.impact_bps,
+        impact_model=a.impact_model,
     )
     twap = twap_fill(
-        df, side=a.side, parent_qty=a.qty, bucket_ns=bucket_ns, impact_bps=a.impact_bps
+        df,
+        side=a.side,
+        parent_qty=a.qty,
+        bucket_ns=bucket_ns,
+        impact_bps=a.impact_bps,
+        impact_model=a.impact_model,
     )
 
     def slip(px: float) -> float:
@@ -183,7 +203,13 @@ def _add_algo(p: argparse.ArgumentParser) -> None:
         "--impact-bps",
         type=float,
         default=0.0,
-        help="linear market impact in bps per unit of bar participation (0 = pure VWAP)",
+        help="market impact in bps per unit of participation load (0 = pure VWAP)",
+    )
+    p.add_argument(
+        "--impact-model",
+        choices=["linear", "sqrt"],
+        default="linear",
+        help="impact cost shape: linear in participation, or the concave sqrt law",
     )
 
 
@@ -238,6 +264,16 @@ def main(argv: list[str] | None = None) -> None:
     pd.add_argument("--input", required=True, help="book replay (.ndjson/.jsonl/.parquet)")
     pd.add_argument("--product", default="BTC-USD")
     pd.set_defaults(fn=cmd_depth)
+
+    pim = sub.add_parser(
+        "impact", help="square-root market-impact cost curve over a participation schedule"
+    )
+    pim.add_argument("--input", required=True, help="impact replay (.ndjson/.jsonl/.parquet)")
+    pim.add_argument(
+        "--coef-bps", type=float, default=10.0, help="impact in bps at full participation"
+    )
+    pim.add_argument("--product", default="BTC-USD")
+    pim.set_defaults(fn=cmd_impact)
 
     pib = sub.add_parser(
         "ingest-book", help="reconstruct the live Coinbase L2 book (auto-reconnect backfill)"
