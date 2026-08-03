@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-08-03
+
+### Added
+- **Calibrated square-root market-impact cost curve** in the shared engine: a new
+  canonical `ImpactSlice` schema (`ts_ns`/`product`/`participation`) and
+  `impact_curve`, which prices each slice of an execution schedule under the
+  concave square-root (Almgren-Chriss-style) law
+  `impact_bps = coef_bps * sqrt(participation)` — where `coef_bps` is the
+  calibration constant (impact in bps of taking the entire available volume) — and
+  summarises the schedule as `avg_impact_bps`, `max_impact_bps`, and
+  `total_impact_bps`. Computed with the same Polars expressions in the Rust crate
+  (`impact::impact_curve`) and Python, and held identical by a **fourth**
+  cross-language equivalence test.
+- **`impact` subcommand** in both CLIs (`xexec impact --coef-bps` /
+  `xexeclab impact --coef-bps`) plus a checked-in `data/sample_impact.ndjson`
+  replay.
+- **Selectable impact shape in the fill simulator**: `pov_fill` / `twap_fill` now
+  take `impact_model` = `linear` (cost proportional to participation, the prior
+  behaviour and default) or `sqrt` (the concave Almgren-Chriss law, so a child
+  eating twice the volume pays ~1.41x rather than 2x). Exposed as
+  `xexeclab simulate|eval --impact-model {linear,sqrt}`.
+
+### Changed
+- Test suite grows to 49 (14 Rust + 35 Python), including a fourth equivalence
+  test over the impact-curve engine.
+
 ## [0.4.0] - 2026-08-02
 
 ### Added

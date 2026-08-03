@@ -5,8 +5,9 @@
 Crypto trading desks measure execution the same way equities desks do: against
 **VWAP** and **TWAP** benchmarks, by **order-flow imbalance** (which side of the
 book drove the trades), by **top-of-book and L2 depth microstructure** (spread,
-microprice, resting depth, depth imbalance), and by **implementation shortfall**
-versus the price when the order arrived. This project builds that measurement
+microprice, resting depth, depth imbalance), by the **market impact** a schedule
+pays for the size it takes, and by **implementation shortfall** versus the price
+when the order arrived. This project builds that measurement
 engine over live crypto tick, quote, and order-book data — the aggregations and
 benchmarks are expressed **once** with
 the [Polars](https://pola.rs) query engine and executed **natively in Rust** (the
@@ -32,13 +33,14 @@ flowchart LR
     CB -->|normalize| RP[(NDJSON replay<br/>canonical ticks)]
     CB -->|normalize| QRP[(NDJSON replay<br/>top-of-book quotes)]
     CB -->|reconstruct L2| BRP[(NDJSON replay<br/>order-book levels)]
+    SCHED[Execution schedule<br/>participation slices] --> IRP[(NDJSON replay<br/>impact slices)]
     SYN --> RP
     SYN --> QRP
     SYN --> BRP
 
     subgraph engine[Shared Polars engine - defined once]
         direction TB
-        RUST["Rust crate - execution.rs, quote.rs, depth.rs<br/>polars crate - compiled hot path"]
+        RUST["Rust crate - execution.rs, quote.rs, depth.rs, impact.rs<br/>polars crate - compiled hot path"]
         PY["Python - xexeclab/engine.py<br/>polars bindings - research layer"]
     end
 
@@ -48,6 +50,8 @@ flowchart LR
     QRP --> PY
     BRP --> RUST
     BRP --> PY
+    IRP --> RUST
+    IRP --> PY
 
     RUST --> BENCH[VWAP / TWAP / OHLCV bars<br/>order-flow imbalance]
     PY --> BENCH
@@ -55,11 +59,14 @@ flowchart LR
     PY --> BOOK
     RUST --> DEPTH[L2 depth microstructure<br/>resting depth / depth imbalance / spread]
     PY --> DEPTH
+    RUST --> IMPACT[Market-impact curve<br/>sqrt Almgren-Chriss cost]
+    PY --> IMPACT
     PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
 
     BENCH -.->|assert identical| EQ{{Cross-language<br/>equivalence test}}
     BOOK -.->|assert identical| EQ
     DEPTH -.->|assert identical| EQ
+    IMPACT -.->|assert identical| EQ
 
     style engine fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
     style EQ fill:#134e4a,stroke:#2dd4bf,color:#e2e8f0
@@ -90,8 +97,11 @@ uv run xexeclab book    --input data/sample_quotes.ndjson
 # L2 depth microstructure (resting depth / depth imbalance / spread)
 uv run xexeclab depth   --input data/sample_book.ndjson
 
-# execution sim with a market-impact model (bps per unit of bar participation)
-uv run xexeclab eval    --input data/sample_ticks.ndjson --algo pov --side buy --qty 1.0 --participation 0.2 --impact-bps 50
+# square-root (Almgren-Chriss) market-impact cost curve over a participation schedule
+uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10
+
+# execution sim with a market-impact model (linear or the concave sqrt law)
+uv run xexeclab eval    --input data/sample_ticks.ndjson --algo pov --side buy --qty 1.0 --participation 0.2 --impact-bps 50 --impact-model sqrt
 
 # capture real live market data from Coinbase (no API key needed)
 uv run xexeclab ingest        --product BTC-USD --out out/btc.ndjson       --max-trades 500 --event-log out/events.jsonl
@@ -158,11 +168,14 @@ XEXEC_BIN=target/release/xexec uv run pytest -m equivalence   # both agree
 This is a **market-data and execution-analytics** project, not a trading system.
 
 - The execution algorithms (POV, TWAP) are **simulated over historical bars**.
-  Each child order fills at its bar's VWAP, optionally adjusted by a **linear
-  market-impact model** (`--impact-bps`); there is still **no order routing** to
-  any venue. It measures *schedule quality*, not live execution, and must not be
-  used to trade. The impact model is a first-order stand-in, not a calibrated
-  cost curve.
+  Each child order fills at its bar's VWAP, optionally adjusted by a market-impact
+  model (`--impact-bps` with `--impact-model linear` or `sqrt`); there is still
+  **no order routing** to any venue. It measures *schedule quality*, not live
+  execution, and must not be used to trade. The `sqrt` model is the concave
+  square-root (Almgren-Chriss) law; both model only **temporary** impact from a
+  single free coefficient — there is no permanent-impact term and no fit to a
+  desk's own fills, so the coefficient must be calibrated externally before the
+  numbers mean anything absolute.
 - **Market making and smart order routing** — parts of what a real execution
   firm does — are out of scope here; only the market-data and post-trade
   analytics slice is built.
