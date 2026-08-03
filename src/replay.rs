@@ -1,4 +1,4 @@
-use crate::model::{BookLevel, Quote, Tick};
+use crate::model::{BookLevel, ImpactSlice, Quote, Tick};
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use std::fs::File;
@@ -40,5 +40,10 @@ pub fn read_quotes<P: AsRef<Path>>(path: P) -> Result<Vec<Quote>> {
 
 /// Read canonical L2 order-book levels from an NDJSON depth replay file.
 pub fn read_book<P: AsRef<Path>>(path: P) -> Result<Vec<BookLevel>> {
+    read_ndjson(path)
+}
+
+/// Read canonical execution-schedule slices from an NDJSON impact replay file.
+pub fn read_impact<P: AsRef<Path>>(path: P) -> Result<Vec<ImpactSlice>> {
     read_ndjson(path)
 }

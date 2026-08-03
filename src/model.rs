@@ -58,3 +58,17 @@ pub struct BookLevel {
     /// Resting size at this level.
     pub size: f64,
 }
+
+/// One slice of an execution schedule, tagged with the fraction of the
+/// available volume it consumes. This is the on-the-wire schema of an impact
+/// replay file (one JSON object per line): the input to the square-root
+/// market-impact cost curve.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImpactSlice {
+    /// Slice time as nanoseconds since the Unix epoch (UTC).
+    pub ts_ns: i64,
+    /// Product / symbol, e.g. "BTC-USD".
+    pub product: String,
+    /// Fraction of the available volume this slice takes, in `(0, 1]`.
+    pub participation: f64,
+}

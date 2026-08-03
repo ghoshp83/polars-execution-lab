@@ -16,6 +16,7 @@ import polars as pl
 TICK_COLUMNS = ("ts_ns", "product", "price", "size", "side", "trade_id")
 QUOTE_COLUMNS = ("ts_ns", "product", "bid", "bid_size", "ask", "ask_size")
 BOOK_LEVEL_COLUMNS = ("ts_ns", "product", "side", "level", "price", "size")
+IMPACT_SLICE_COLUMNS = ("ts_ns", "product", "participation")
 
 
 def _r8(x: float) -> float:
@@ -49,6 +50,13 @@ def read_book(path: str | Path) -> pl.DataFrame:
     p = str(path)
     df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
     return df.sort("ts_ns", "side", "level")
+
+
+def read_impact(path: str | Path) -> pl.DataFrame:
+    """Read canonical execution-schedule slices from an NDJSON impact replay."""
+    p = str(path)
+    df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
+    return df.sort("ts_ns")
 
 
 def write_ticks(df: pl.DataFrame, path: str | Path) -> int:
@@ -207,6 +215,38 @@ def depth_metrics(df: pl.DataFrame, product: str) -> dict:
         "avg_ask_depth": _r8(row["avg_ask_depth"][0]),
         "avg_depth_imbalance": _r8(row["avg_depth_imbalance"][0]),
         "avg_spread": _r8(row["avg_spread"][0]),
+    }
+
+
+def impact_curve(df: pl.DataFrame, product: str, coef_bps: float) -> dict:
+    """Session market-impact cost curve over a participation schedule.
+
+    Each slice's temporary impact follows the square-root (Almgren-Chriss-style)
+    law ``impact_bps = coef_bps * sqrt(participation)``, where ``participation``
+    is the fraction of available volume the slice consumes and ``coef_bps`` is
+    the calibration constant (impact in bps of taking the entire available
+    volume). Mirrors the Rust ``impact_curve`` expression for expression -- the
+    ``.sort("ts_ns")`` fixes the summation order so the mean and total are
+    bit-identical across the two engines. See the Rust ``ImpactSummary`` doc for
+    the field meanings.
+    """
+    if df.height == 0:
+        raise ValueError("no impact slices")
+    per_slice = df.sort("ts_ns").with_columns(
+        (pl.col("participation").sqrt() * coef_bps).alias("impact_bps")
+    )
+    row = per_slice.select(
+        pl.col("impact_bps").mean().alias("avg_impact_bps"),
+        pl.col("impact_bps").max().alias("max_impact_bps"),
+        pl.col("impact_bps").sum().alias("total_impact_bps"),
+    )
+    return {
+        "product": product,
+        "slices": df.height,
+        "coef_bps": _r8(coef_bps),
+        "avg_impact_bps": _r8(row["avg_impact_bps"][0]),
+        "max_impact_bps": _r8(row["max_impact_bps"][0]),
+        "total_impact_bps": _r8(row["total_impact_bps"][0]),
     }
 
 
