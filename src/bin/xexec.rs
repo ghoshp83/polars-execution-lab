@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Result};
 use xexec::depth::depth_metrics;
 use xexec::execution::{bars, session_twap, session_vwap, summary};
+use xexec::impact::impact_curve;
 use xexec::quote::quote_metrics;
-use xexec::replay::{read_book, read_quotes, read_ticks};
+use xexec::replay::{read_book, read_impact, read_quotes, read_ticks};
 
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
@@ -12,7 +13,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth> --input <ndjson> [--bucket-ms N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|impact> --input <ndjson> [--bucket-ms N] [--coef-bps N]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -48,6 +49,24 @@ fn main() -> Result<()> {
         println!(
             "{}",
             serde_json::to_string(&depth_metrics(&levels, &product)?)?
+        );
+        return Ok(());
+    }
+
+    // `impact` reads the execution-schedule slice schema, not trades.
+    if cmd == "impact" {
+        let coef_bps: f64 = arg_value(&args, "--coef-bps")
+            .map(|s| s.parse())
+            .transpose()?
+            .unwrap_or(10.0);
+        let slices = read_impact(&input)?;
+        if slices.is_empty() {
+            return Err(anyhow!("no impact slices in {input}"));
+        }
+        let product = slices[0].product.clone();
+        println!(
+            "{}",
+            serde_json::to_string(&impact_curve(&slices, &product, coef_bps)?)?
         );
         return Ok(());
     }

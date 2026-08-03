@@ -13,8 +13,10 @@ import pytest
 
 from xexeclab.engine import (
     depth_metrics,
+    impact_curve,
     quote_metrics,
     read_book,
+    read_impact,
     read_quotes,
     read_ticks,
     summary,
@@ -25,7 +27,9 @@ pytestmark = pytest.mark.equivalence
 SAMPLE = "data/sample_ticks.ndjson"
 QUOTE_SAMPLE = "data/sample_quotes.ndjson"
 BOOK_SAMPLE = "data/sample_book.ndjson"
+IMPACT_SAMPLE = "data/sample_impact.ndjson"
 BUCKET_MS = 1000
+COEF_BPS = 12.5
 
 
 def _find_binary() -> str | None:
@@ -107,3 +111,26 @@ def test_rust_and_python_depth_metrics_are_identical():
     assert rust["avg_ask_depth"] == py["avg_ask_depth"]
     assert rust["avg_depth_imbalance"] == py["avg_depth_imbalance"]
     assert rust["avg_spread"] == py["avg_spread"]
+
+
+def test_rust_and_python_impact_curves_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    proc = subprocess.run(
+        [binary, "impact", "--input", IMPACT_SAMPLE, "--coef-bps", str(COEF_BPS)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    df = read_impact(IMPACT_SAMPLE)
+    py = impact_curve(df, df["product"][0], COEF_BPS)
+
+    assert rust["slices"] == py["slices"]
+    assert rust["coef_bps"] == py["coef_bps"]
+    assert rust["avg_impact_bps"] == py["avg_impact_bps"]
+    assert rust["max_impact_bps"] == py["max_impact_bps"]
+    assert rust["total_impact_bps"] == py["total_impact_bps"]
