@@ -19,7 +19,7 @@ fn square_root_curve_summarises_the_sample_schedule() {
     let slices = load();
     // participations 0.01/0.04/0.09/0.16/0.25 -> sqrt 0.1/0.2/0.3/0.4/0.5; with
     // coef_bps=10 the per-slice impact is 1/2/3/4/5 bps: avg 3, max 5, total 15.
-    let m = impact_curve(&slices, "BTC-USD", 10.0).unwrap();
+    let m = impact_curve(&slices, "BTC-USD", 10.0, 0.0).unwrap();
     assert_eq!(m.slices, 5);
     assert!((m.avg_impact_bps - 3.0).abs() < 1e-9);
     assert!((m.max_impact_bps - 5.0).abs() < 1e-9);
@@ -30,19 +30,43 @@ fn square_root_curve_summarises_the_sample_schedule() {
 fn impact_is_concave_in_participation() {
     // Doubling participation less than doubles the impact (sqrt, not linear):
     // going 0.25 -> 0.5 lifts sqrt-participation by 0.5 -> ~0.707, a 1.41x move.
-    let small = impact_curve(&[slice(0, 0.25)], "BTC-USD", 10.0).unwrap();
-    let big = impact_curve(&[slice(0, 0.5)], "BTC-USD", 10.0).unwrap();
+    let small = impact_curve(&[slice(0, 0.25)], "BTC-USD", 10.0, 0.0).unwrap();
+    let big = impact_curve(&[slice(0, 0.5)], "BTC-USD", 10.0, 0.0).unwrap();
     assert!(big.avg_impact_bps > small.avg_impact_bps);
     assert!(big.avg_impact_bps < 2.0 * small.avg_impact_bps);
 }
 
 #[test]
 fn zero_participation_costs_nothing() {
-    let m = impact_curve(&[slice(0, 0.0)], "BTC-USD", 10.0).unwrap();
+    let m = impact_curve(&[slice(0, 0.0)], "BTC-USD", 10.0, 0.0).unwrap();
     assert!((m.avg_impact_bps - 0.0).abs() < 1e-9);
 }
 
 #[test]
 fn empty_schedule_is_rejected() {
-    assert!(impact_curve(&[], "BTC-USD", 10.0).is_err());
+    assert!(impact_curve(&[], "BTC-USD", 10.0, 0.0).is_err());
+}
+
+#[test]
+fn permanent_term_is_linear_and_adds_to_total_cost() {
+    let slices = load();
+    // Permanent impact is linear: perm_coef_bps * participation. On the sample
+    // (participations sum 0.55, mean 0.11) with perm_coef_bps=20 the permanent
+    // cost is avg 2.2, total 11.0 -- and total_cost = temporary 15 + permanent 11.
+    let m = impact_curve(&slices, "BTC-USD", 10.0, 20.0).unwrap();
+    assert!((m.avg_perm_impact_bps - 2.2).abs() < 1e-9);
+    assert!((m.total_perm_impact_bps - 11.0).abs() < 1e-9);
+    assert!((m.total_impact_bps - 15.0).abs() < 1e-9);
+    assert!((m.total_cost_bps - 26.0).abs() < 1e-9);
+}
+
+#[test]
+fn zero_perm_coef_is_the_pure_square_root_curve() {
+    // With no permanent coefficient the permanent fields vanish and the full
+    // round-trip cost collapses to the temporary square-root total (back-compat).
+    let slices = load();
+    let m = impact_curve(&slices, "BTC-USD", 10.0, 0.0).unwrap();
+    assert!((m.perm_coef_bps - 0.0).abs() < 1e-9);
+    assert!((m.total_perm_impact_bps - 0.0).abs() < 1e-9);
+    assert!((m.total_cost_bps - m.total_impact_bps).abs() < 1e-9);
 }

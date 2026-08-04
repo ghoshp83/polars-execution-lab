@@ -218,35 +218,49 @@ def depth_metrics(df: pl.DataFrame, product: str) -> dict:
     }
 
 
-def impact_curve(df: pl.DataFrame, product: str, coef_bps: float) -> dict:
-    """Session market-impact cost curve over a participation schedule.
+def impact_curve(
+    df: pl.DataFrame, product: str, coef_bps: float, perm_coef_bps: float = 0.0
+) -> dict:
+    """Session market-impact cost curve, priced under two-term Almgren-Chriss.
 
-    Each slice's temporary impact follows the square-root (Almgren-Chriss-style)
-    law ``impact_bps = coef_bps * sqrt(participation)``, where ``participation``
-    is the fraction of available volume the slice consumes and ``coef_bps`` is
-    the calibration constant (impact in bps of taking the entire available
-    volume). Mirrors the Rust ``impact_curve`` expression for expression -- the
-    ``.sort("ts_ns")`` fixes the summation order so the mean and total are
-    bit-identical across the two engines. See the Rust ``ImpactSummary`` doc for
-    the field meanings.
+    Each slice pays a **temporary** cost following the concave square-root law
+    ``temp_bps = coef_bps * sqrt(participation)`` (transient, dissipates after
+    the slice) and a **permanent** cost linear in size,
+    ``perm_bps = perm_coef_bps * participation`` (a lasting shift of the mid the
+    schedule leaves behind). ``participation`` is the fraction of available
+    volume the slice consumes; both coefficients are externally-calibrated
+    constants. With ``perm_coef_bps == 0`` the permanent fields are zero and
+    ``total_cost_bps`` collapses to ``total_impact_bps``. Mirrors the Rust
+    ``impact_curve`` expression for expression -- the ``.sort("ts_ns")`` fixes
+    the summation order so the means and totals are bit-identical across the two
+    engines. See the Rust ``ImpactSummary`` doc for the field meanings.
     """
     if df.height == 0:
         raise ValueError("no impact slices")
     per_slice = df.sort("ts_ns").with_columns(
-        (pl.col("participation").sqrt() * coef_bps).alias("impact_bps")
+        (pl.col("participation").sqrt() * coef_bps).alias("impact_bps"),
+        (pl.col("participation") * perm_coef_bps).alias("perm_impact_bps"),
     )
     row = per_slice.select(
         pl.col("impact_bps").mean().alias("avg_impact_bps"),
         pl.col("impact_bps").max().alias("max_impact_bps"),
         pl.col("impact_bps").sum().alias("total_impact_bps"),
+        pl.col("perm_impact_bps").mean().alias("avg_perm_impact_bps"),
+        pl.col("perm_impact_bps").sum().alias("total_perm_impact_bps"),
     )
+    total_impact = row["total_impact_bps"][0]
+    total_perm = row["total_perm_impact_bps"][0]
     return {
         "product": product,
         "slices": df.height,
         "coef_bps": _r8(coef_bps),
+        "perm_coef_bps": _r8(perm_coef_bps),
         "avg_impact_bps": _r8(row["avg_impact_bps"][0]),
         "max_impact_bps": _r8(row["max_impact_bps"][0]),
-        "total_impact_bps": _r8(row["total_impact_bps"][0]),
+        "total_impact_bps": _r8(total_impact),
+        "avg_perm_impact_bps": _r8(row["avg_perm_impact_bps"][0]),
+        "total_perm_impact_bps": _r8(total_perm),
+        "total_cost_bps": _r8(total_impact + total_perm),
     }
 
 

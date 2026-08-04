@@ -13,7 +13,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|impact> --input <ndjson> [--bucket-ms N] [--coef-bps N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|impact> --input <ndjson> [--bucket-ms N] [--coef-bps N] [--perm-coef-bps N]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -59,6 +59,10 @@ fn main() -> Result<()> {
             .map(|s| s.parse())
             .transpose()?
             .unwrap_or(10.0);
+        let perm_coef_bps: f64 = arg_value(&args, "--perm-coef-bps")
+            .map(|s| s.parse())
+            .transpose()?
+            .unwrap_or(0.0);
         let slices = read_impact(&input)?;
         if slices.is_empty() {
             return Err(anyhow!("no impact slices in {input}"));
@@ -66,7 +70,7 @@ fn main() -> Result<()> {
         let product = slices[0].product.clone();
         println!(
             "{}",
-            serde_json::to_string(&impact_curve(&slices, &product, coef_bps)?)?
+            serde_json::to_string(&impact_curve(&slices, &product, coef_bps, perm_coef_bps)?)?
         );
         return Ok(());
     }
