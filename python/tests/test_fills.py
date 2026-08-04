@@ -86,3 +86,35 @@ def test_invalid_impact_model_is_rejected():
     df = read_ticks(SAMPLE)
     with pytest.raises(ValueError):
         twap_fill(df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S, impact_model="cubic")
+
+
+def test_permanent_impact_drifts_the_schedule_price():
+    df = read_ticks(SAMPLE)
+    # Permanent impact accumulates across bars: a buy walks the price up for its
+    # own later children, so the average fill is worse than with no drift.
+    base = twap_fill(df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S)
+    drifted = twap_fill(df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S, perm_impact_bps=50.0)
+    assert drifted.avg_price > base.avg_price
+    # A sell drifts the price down against itself, in the opposite direction.
+    sell_base = twap_fill(df, side="sell", parent_qty=1.0, bucket_ns=BUCKET_1S)
+    sell_drift = twap_fill(
+        df, side="sell", parent_qty=1.0, bucket_ns=BUCKET_1S, perm_impact_bps=50.0
+    )
+    assert sell_drift.avg_price < sell_base.avg_price
+
+
+def test_permanent_impact_is_independent_of_the_temporary_term():
+    df = read_ticks(SAMPLE)
+    # With the temporary term switched off, a permanent coefficient still moves
+    # the average fill -- the two terms are separate costs.
+    pure = twap_fill(df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S, impact_bps=0.0)
+    perm_only = twap_fill(
+        df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S, impact_bps=0.0, perm_impact_bps=100.0
+    )
+    assert perm_only.avg_price > pure.avg_price
+    # And zero permanent coefficient is exactly the un-drifted benchmark.
+    assert perm_only.avg_price != pure.avg_price
+    zero = twap_fill(
+        df, side="buy", parent_qty=1.0, bucket_ns=BUCKET_1S, impact_bps=0.0, perm_impact_bps=0.0
+    )
+    assert zero.avg_price == pure.avg_price

@@ -6,13 +6,16 @@ observed bars, and score the result against the arrival price (implementation
 shortfall) and the session VWAP benchmark.
 
 Honest scope: this is a *simulation* over historical bars -- it does not route
-orders to a venue. Each child fills at its bar's VWAP, optionally adjusted by a
-temporary market-impact model (`impact_bps`) that charges more the larger a
-fraction of the bar's volume the child consumes. Two shapes are available: a
-`linear` model (cost proportional to participation) and a `sqrt` model (the
-concave square-root / Almgren-Chriss law, where the marginal cost of size
-falls as participation grows -- the empirically observed shape). It measures
-schedule quality, not live execution.
+orders to a venue. Each child fills at its bar's VWAP, optionally adjusted by
+the two-term Almgren-Chriss impact model. The *temporary* term (`impact_bps`)
+charges more the larger a fraction of the bar's volume the child consumes and
+resets each bar; two shapes are available -- a `linear` model (cost proportional
+to participation) and a `sqrt` model (the concave square-root / Almgren-Chriss
+law, where the marginal cost of size falls as participation grows). The
+*permanent* term (`perm_impact_bps`) is a lasting drift: each child shifts the
+working price in its own direction by an amount linear in its participation, and
+every later child fills off the drifted price -- so the schedule pays for the
+mid it walks away for good. It measures schedule quality, not live execution.
 """
 
 from __future__ import annotations
@@ -69,6 +72,18 @@ def _impact_price(
     return vwap * (1.0 + signed * 1e-4 * load)
 
 
+def _perm_drift(perm_impact_bps: float, qty: float, volume: float) -> float:
+    """Permanent price shift (as a fraction) a child of `qty` leaves behind.
+
+    Linear in participation, in the trade's own direction: `perm_impact_bps`
+    basis points at full participation. Returns 0 when there is no permanent
+    coefficient or no volume, so the permanent term is opt-in.
+    """
+    if perm_impact_bps == 0.0 or volume <= 0:
+        return 0.0
+    return perm_impact_bps * 1e-4 * (qty / volume)
+
+
 def pov_fill(
     df: pl.DataFrame,
     *,
@@ -78,10 +93,12 @@ def pov_fill(
     bucket_ns: int,
     impact_bps: float = 0.0,
     impact_model: str = "linear",
+    perm_impact_bps: float = 0.0,
 ) -> FillResult:
     """Percentage-of-volume: take up to `participation` * bar_volume each bar,
     filling at that bar's VWAP (adjusted by `impact_bps` under the `impact_model`
-    cost shape), until the parent order is exhausted."""
+    cost shape, and drifted by accumulated `perm_impact_bps`), until the parent
+    order is exhausted."""
     if not 0 < participation <= 1:
         raise ValueError("participation must be in (0, 1]")
     if parent_qty <= 0:
@@ -93,6 +110,8 @@ def pov_fill(
     remaining = parent_qty
     notional = 0.0
     filled = 0.0
+    sign = 1.0 if side == "buy" else -1.0
+    cum_perm = 0.0
     schedule: list[dict] = []
     for row in bars(df, bucket_ns).iter_rows(named=True):
         if remaining <= 0:
@@ -100,10 +119,12 @@ def pov_fill(
         take = min(remaining, participation * row["volume"])
         if take <= 0:
             continue
-        price = _impact_price(row["vwap"], take, row["volume"], side, impact_bps, impact_model)
+        base = row["vwap"] * (1.0 + sign * cum_perm)
+        price = _impact_price(base, take, row["volume"], side, impact_bps, impact_model)
         notional += take * price
         filled += take
         remaining -= take
+        cum_perm += _perm_drift(perm_impact_bps, take, row["volume"])
         schedule.append(
             {"bucket_ns": row["bucket_ns"], "qty": round(take, 8), "price": round(price, 8)}
         )
@@ -129,9 +150,11 @@ def twap_fill(
     bucket_ns: int,
     impact_bps: float = 0.0,
     impact_model: str = "linear",
+    perm_impact_bps: float = 0.0,
 ) -> FillResult:
     """TWAP: an equal child quantity in every bar, filled at that bar's VWAP
-    (adjusted by `impact_bps` under the `impact_model` cost shape)."""
+    (adjusted by `impact_bps` under the `impact_model` cost shape, and drifted by
+    accumulated `perm_impact_bps`)."""
     if parent_qty <= 0:
         raise ValueError("parent_qty must be positive")
     if impact_model not in IMPACT_MODELS:
@@ -144,11 +167,15 @@ def twap_fill(
     arrival = _arrival(df)
     notional = 0.0
     filled = 0.0
+    sign = 1.0 if side == "buy" else -1.0
+    cum_perm = 0.0
     schedule: list[dict] = []
     for row in bar_rows:
-        price = _impact_price(row["vwap"], slice_qty, row["volume"], side, impact_bps, impact_model)
+        base = row["vwap"] * (1.0 + sign * cum_perm)
+        price = _impact_price(base, slice_qty, row["volume"], side, impact_bps, impact_model)
         notional += slice_qty * price
         filled += slice_qty
+        cum_perm += _perm_drift(perm_impact_bps, slice_qty, row["volume"])
         schedule.append(
             {
                 "bucket_ns": row["bucket_ns"],
