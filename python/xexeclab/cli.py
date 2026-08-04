@@ -96,7 +96,7 @@ def cmd_depth(a: argparse.Namespace) -> None:
 def cmd_impact(a: argparse.Namespace) -> None:
     df = read_impact(a.input)
     product = df["product"][0] if df.height else a.product
-    print(json.dumps(impact_curve(df, product, a.coef_bps)))
+    print(json.dumps(impact_curve(df, product, a.coef_bps, a.perm_coef_bps)))
 
 
 def cmd_bars(a: argparse.Namespace) -> None:
@@ -125,6 +125,7 @@ def _run_algo(a: argparse.Namespace):
             bucket_ns=bucket_ns,
             impact_bps=a.impact_bps,
             impact_model=a.impact_model,
+            perm_impact_bps=a.perm_impact_bps,
         )
     return df, twap_fill(
         df,
@@ -133,6 +134,7 @@ def _run_algo(a: argparse.Namespace):
         bucket_ns=bucket_ns,
         impact_bps=a.impact_bps,
         impact_model=a.impact_model,
+        perm_impact_bps=a.perm_impact_bps,
     )
 
 
@@ -153,6 +155,7 @@ def cmd_eval(a: argparse.Namespace) -> None:
         bucket_ns=bucket_ns,
         impact_bps=a.impact_bps,
         impact_model=a.impact_model,
+        perm_impact_bps=a.perm_impact_bps,
     )
     twap = twap_fill(
         df,
@@ -161,6 +164,7 @@ def cmd_eval(a: argparse.Namespace) -> None:
         bucket_ns=bucket_ns,
         impact_bps=a.impact_bps,
         impact_model=a.impact_model,
+        perm_impact_bps=a.perm_impact_bps,
     )
 
     def slip(px: float) -> float:
@@ -209,7 +213,13 @@ def _add_algo(p: argparse.ArgumentParser) -> None:
         "--impact-model",
         choices=["linear", "sqrt"],
         default="linear",
-        help="impact cost shape: linear in participation, or the concave sqrt law",
+        help="temporary impact cost shape: linear in participation, or the concave sqrt law",
+    )
+    p.add_argument(
+        "--perm-impact-bps",
+        type=float,
+        default=0.0,
+        help="permanent impact in bps at full participation; drifts every later fill (0 = off)",
     )
 
 
@@ -270,7 +280,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     pim.add_argument("--input", required=True, help="impact replay (.ndjson/.jsonl/.parquet)")
     pim.add_argument(
-        "--coef-bps", type=float, default=10.0, help="impact in bps at full participation"
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    pim.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
     )
     pim.add_argument("--product", default="BTC-USD")
     pim.set_defaults(fn=cmd_impact)
