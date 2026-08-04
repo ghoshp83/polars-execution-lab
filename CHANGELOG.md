@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-08-04
+
+### Added
+- **Permanent-impact term — the impact model is now the full two-term
+  Almgren-Chriss cost.** `impact_curve` gains a `perm_coef_bps` argument that
+  prices each slice's *permanent* impact, a lasting shift of the mid linear in
+  size (`perm_bps = perm_coef_bps * participation`), alongside the existing
+  *temporary* square-root term. The summary now reports `perm_coef_bps`,
+  `avg_perm_impact_bps`, `total_perm_impact_bps`, and `total_cost_bps` (temporary
+  + permanent round-trip cost); with `perm_coef_bps = 0` the permanent fields are
+  zero and `total_cost_bps` collapses to `total_impact_bps`, so the pure
+  square-root curve stays the default. Computed with the same Polars expressions
+  in the Rust crate and Python, and held identical by the **fifth** field group
+  of the cross-language equivalence test.
+- **`--perm-coef-bps`** on both `impact` CLIs (`xexec impact` / `xexeclab impact`).
+- **Permanent price drift in the fill simulator**: `pov_fill` / `twap_fill` accept
+  `perm_impact_bps`, so each child order permanently shifts the working price in
+  its own direction and every later child fills off the drifted price — the
+  schedule pays for the mid it walks away for good. `perm_impact_bps = 0`
+  preserves the prior behaviour. Exposed as `xexeclab simulate|eval
+  --perm-impact-bps`.
+
+### Changed
+- Test suite grows to 55 (16 Rust + 39 Python): the equivalence test now also
+  asserts the permanent and total-cost fields under a non-zero `perm_coef_bps`.
+
 ## [0.5.0] - 2026-08-03
 
 ### Added

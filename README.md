@@ -59,7 +59,7 @@ flowchart LR
     PY --> BOOK
     RUST --> DEPTH[L2 depth microstructure<br/>resting depth / depth imbalance / spread]
     PY --> DEPTH
-    RUST --> IMPACT[Market-impact curve<br/>sqrt Almgren-Chriss cost]
+    RUST --> IMPACT[Market-impact curve<br/>Almgren-Chriss temporary + permanent]
     PY --> IMPACT
     PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
 
@@ -97,11 +97,11 @@ uv run xexeclab book    --input data/sample_quotes.ndjson
 # L2 depth microstructure (resting depth / depth imbalance / spread)
 uv run xexeclab depth   --input data/sample_book.ndjson
 
-# square-root (Almgren-Chriss) market-impact cost curve over a participation schedule
-uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10
+# two-term Almgren-Chriss market-impact cost curve (temporary sqrt + permanent linear)
+uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10 --perm-coef-bps 5
 
-# execution sim with a market-impact model (linear or the concave sqrt law)
-uv run xexeclab eval    --input data/sample_ticks.ndjson --algo pov --side buy --qty 1.0 --participation 0.2 --impact-bps 50 --impact-model sqrt
+# execution sim with temporary (linear|sqrt) and permanent market-impact terms
+uv run xexeclab eval    --input data/sample_ticks.ndjson --algo pov --side buy --qty 1.0 --participation 0.2 --impact-bps 50 --impact-model sqrt --perm-impact-bps 10
 
 # capture real live market data from Coinbase (no API key needed)
 uv run xexeclab ingest        --product BTC-USD --out out/btc.ndjson       --max-trades 500 --event-log out/events.jsonl
@@ -168,14 +168,15 @@ XEXEC_BIN=target/release/xexec uv run pytest -m equivalence   # both agree
 This is a **market-data and execution-analytics** project, not a trading system.
 
 - The execution algorithms (POV, TWAP) are **simulated over historical bars**.
-  Each child order fills at its bar's VWAP, optionally adjusted by a market-impact
-  model (`--impact-bps` with `--impact-model linear` or `sqrt`); there is still
-  **no order routing** to any venue. It measures *schedule quality*, not live
-  execution, and must not be used to trade. The `sqrt` model is the concave
-  square-root (Almgren-Chriss) law; both model only **temporary** impact from a
-  single free coefficient — there is no permanent-impact term and no fit to a
-  desk's own fills, so the coefficient must be calibrated externally before the
-  numbers mean anything absolute.
+  Each child order fills at its bar's VWAP, optionally adjusted by the two-term
+  Almgren-Chriss market-impact model: a **temporary** cost (`--impact-bps` with
+  `--impact-model linear` or the concave `sqrt` law) that resets each bar, and a
+  **permanent** drift (`--perm-impact-bps`) that accumulates as the schedule walks
+  the mid away for good. There is still **no order routing** to any venue. It
+  measures *schedule quality*, not live execution, and must not be used to trade.
+  Both impact terms are single free coefficients — there is **no fit to a desk's
+  own fills** (a calibration harness is future work), so the coefficients must be
+  set externally before the numbers mean anything absolute.
 - **Market making and smart order routing** — parts of what a real execution
   firm does — are out of scope here; only the market-data and post-trade
   analytics slice is built.
