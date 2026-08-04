@@ -30,6 +30,7 @@ BOOK_SAMPLE = "data/sample_book.ndjson"
 IMPACT_SAMPLE = "data/sample_impact.ndjson"
 BUCKET_MS = 1000
 COEF_BPS = 12.5
+PERM_COEF_BPS = 7.5
 
 
 def _find_binary() -> str | None:
@@ -118,8 +119,20 @@ def test_rust_and_python_impact_curves_are_identical():
     if not binary:
         pytest.skip("xexec Rust binary not built; run `cargo build --release`")
 
+    # Exercise both terms of the Almgren-Chriss model: a non-zero permanent
+    # coefficient means the permanent and total-cost fields are non-trivial, so
+    # the two engines must agree on the linear term and the round-trip sum too.
     proc = subprocess.run(
-        [binary, "impact", "--input", IMPACT_SAMPLE, "--coef-bps", str(COEF_BPS)],
+        [
+            binary,
+            "impact",
+            "--input",
+            IMPACT_SAMPLE,
+            "--coef-bps",
+            str(COEF_BPS),
+            "--perm-coef-bps",
+            str(PERM_COEF_BPS),
+        ],
         capture_output=True,
         text=True,
         check=True,
@@ -127,10 +140,14 @@ def test_rust_and_python_impact_curves_are_identical():
     rust = json.loads(proc.stdout)
 
     df = read_impact(IMPACT_SAMPLE)
-    py = impact_curve(df, df["product"][0], COEF_BPS)
+    py = impact_curve(df, df["product"][0], COEF_BPS, PERM_COEF_BPS)
 
     assert rust["slices"] == py["slices"]
     assert rust["coef_bps"] == py["coef_bps"]
+    assert rust["perm_coef_bps"] == py["perm_coef_bps"]
     assert rust["avg_impact_bps"] == py["avg_impact_bps"]
     assert rust["max_impact_bps"] == py["max_impact_bps"]
     assert rust["total_impact_bps"] == py["total_impact_bps"]
+    assert rust["avg_perm_impact_bps"] == py["avg_perm_impact_bps"]
+    assert rust["total_perm_impact_bps"] == py["total_perm_impact_bps"]
+    assert rust["total_cost_bps"] == py["total_cost_bps"]
