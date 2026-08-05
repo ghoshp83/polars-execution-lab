@@ -12,10 +12,12 @@ from pathlib import Path
 import pytest
 
 from xexeclab.engine import (
+    calibrate_impact,
     depth_metrics,
     impact_curve,
     quote_metrics,
     read_book,
+    read_calibration,
     read_impact,
     read_quotes,
     read_ticks,
@@ -28,6 +30,7 @@ SAMPLE = "data/sample_ticks.ndjson"
 QUOTE_SAMPLE = "data/sample_quotes.ndjson"
 BOOK_SAMPLE = "data/sample_book.ndjson"
 IMPACT_SAMPLE = "data/sample_impact.ndjson"
+CALIBRATION_SAMPLE = "data/sample_calibration.ndjson"
 BUCKET_MS = 1000
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -151,3 +154,30 @@ def test_rust_and_python_impact_curves_are_identical():
     assert rust["avg_perm_impact_bps"] == py["avg_perm_impact_bps"]
     assert rust["total_perm_impact_bps"] == py["total_perm_impact_bps"]
     assert rust["total_cost_bps"] == py["total_cost_bps"]
+
+
+def test_rust_and_python_calibration_fits_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The fit is a Polars aggregation (sufficient statistics) plus a 2x2 solve.
+    # Both engines must agree on the recovered coefficients *and* the fit-quality
+    # diagnostics -- the scalar linear algebra has to be bit-identical too, not
+    # just the sums.
+    proc = subprocess.run(
+        [binary, "calibrate", "--input", CALIBRATION_SAMPLE],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    df = read_calibration(CALIBRATION_SAMPLE)
+    py = calibrate_impact(df, df["product"][0])
+
+    assert rust["samples"] == py["samples"]
+    assert rust["coef_bps"] == py["coef_bps"]
+    assert rust["perm_coef_bps"] == py["perm_coef_bps"]
+    assert rust["rmse_bps"] == py["rmse_bps"]
+    assert rust["r_squared"] == py["r_squared"]
