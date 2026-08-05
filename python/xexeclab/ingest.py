@@ -9,6 +9,7 @@ generator produces a deterministic replay for demos and offline runs.
 from __future__ import annotations
 
 import json
+import math
 import random
 from datetime import UTC, datetime
 from pathlib import Path
@@ -312,6 +313,46 @@ def synthetic_quotes(
                 "ask_size": round(rng.uniform(0.1, 3.0), 4),
             }
             f.write(json.dumps(quote) + "\n")
+    return n
+
+
+def synthetic_calibration(
+    out_path: str | Path,
+    n: int = 200,
+    coef_bps: float = 10.0,
+    perm_coef_bps: float = 20.0,
+    noise_bps: float = 0.0,
+    seed: int = 7,
+    product: str = "BTC-USD",
+    start_ns: int = 1_719_792_000_000_000_000,
+) -> int:
+    """Write `n` deterministic realised-fill calibration samples.
+
+    A desk calibrates the impact model on its *own* fills; this generates a
+    stand-in set for demos and offline runs. Each sample draws a participation
+    in (0, 1] and prices its realised cost from the two-term Almgren-Chriss model
+    `coef_bps * sqrt(p) + perm_coef_bps * p`, plus optional Gaussian `noise_bps`.
+    With `noise_bps == 0` the samples lie exactly on the model, so
+    `calibrate_impact` recovers `(coef_bps, perm_coef_bps)` to floating-point
+    precision; with noise they are a realistic, imperfect fit target. Returns the
+    number of samples written.
+    """
+    rng = random.Random(seed)
+    ts = start_ns
+    with open(out_path, "w") as f:
+        for _ in range(n):
+            ts += int(rng.uniform(0.05, 0.6) * 1e9)
+            participation = round(rng.uniform(0.01, 0.5), 4)
+            cost = coef_bps * math.sqrt(participation) + perm_coef_bps * participation
+            if noise_bps > 0:
+                cost += rng.gauss(0.0, noise_bps)
+            sample = {
+                "ts_ns": ts,
+                "product": product,
+                "participation": participation,
+                "realised_bps": round(cost, 6),
+            }
+            f.write(json.dumps(sample) + "\n")
     return n
 
 
