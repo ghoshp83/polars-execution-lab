@@ -9,10 +9,12 @@ import json
 from . import __version__
 from .engine import (
     bars,
+    calibrate_impact,
     depth_metrics,
     impact_curve,
     quote_metrics,
     read_book,
+    read_calibration,
     read_impact,
     read_quotes,
     read_ticks,
@@ -97,6 +99,27 @@ def cmd_impact(a: argparse.Namespace) -> None:
     df = read_impact(a.input)
     product = df["product"][0] if df.height else a.product
     print(json.dumps(impact_curve(df, product, a.coef_bps, a.perm_coef_bps)))
+
+
+def cmd_calibrate(a: argparse.Namespace) -> None:
+    df = read_calibration(a.input)
+    product = df["product"][0] if df.height else a.product
+    print(json.dumps(calibrate_impact(df, product)))
+
+
+def cmd_synth_calibration(a: argparse.Namespace) -> None:
+    from .ingest import synthetic_calibration
+
+    n = synthetic_calibration(
+        a.out,
+        n=a.n,
+        coef_bps=a.coef_bps,
+        perm_coef_bps=a.perm_coef_bps,
+        noise_bps=a.noise_bps,
+        seed=a.seed,
+        product=a.product,
+    )
+    print(f"wrote {n} synthetic calibration samples -> {a.out}")
 
 
 def cmd_bars(a: argparse.Namespace) -> None:
@@ -290,6 +313,25 @@ def main(argv: list[str] | None = None) -> None:
     )
     pim.add_argument("--product", default="BTC-USD")
     pim.set_defaults(fn=cmd_impact)
+
+    pcal = sub.add_parser("calibrate", help="fit impact coefficients from a realised-fill replay")
+    pcal.add_argument("--input", required=True, help="calibration replay (.ndjson/.jsonl/.parquet)")
+    pcal.add_argument("--product", default="BTC-USD")
+    pcal.set_defaults(fn=cmd_calibrate)
+
+    psc = sub.add_parser(
+        "synth-calibration", help="write a deterministic synthetic realised-fill replay"
+    )
+    psc.add_argument("--out", required=True)
+    psc.add_argument("--n", type=int, default=200, help="number of samples")
+    psc.add_argument("--coef-bps", type=float, default=10.0, help="true temporary coefficient")
+    psc.add_argument("--perm-coef-bps", type=float, default=20.0, help="true permanent coefficient")
+    psc.add_argument(
+        "--noise-bps", type=float, default=0.0, help="Gaussian noise stddev in bps (0 = exact fit)"
+    )
+    psc.add_argument("--seed", type=int, default=7)
+    psc.add_argument("--product", default="BTC-USD")
+    psc.set_defaults(fn=cmd_synth_calibration)
 
     pib = sub.add_parser(
         "ingest-book", help="reconstruct the live Coinbase L2 book (auto-reconnect backfill)"

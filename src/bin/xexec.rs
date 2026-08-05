@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
+use xexec::calibrate::calibrate_impact;
 use xexec::depth::depth_metrics;
 use xexec::execution::{bars, session_twap, session_vwap, summary};
 use xexec::impact::impact_curve;
 use xexec::quote::quote_metrics;
-use xexec::replay::{read_book, read_impact, read_quotes, read_ticks};
+use xexec::replay::{read_book, read_calibration, read_impact, read_quotes, read_ticks};
 
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
@@ -13,7 +14,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|impact> --input <ndjson> [--bucket-ms N] [--coef-bps N] [--perm-coef-bps N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|impact|calibrate> --input <ndjson> [--bucket-ms N] [--coef-bps N] [--perm-coef-bps N]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -71,6 +72,20 @@ fn main() -> Result<()> {
         println!(
             "{}",
             serde_json::to_string(&impact_curve(&slices, &product, coef_bps, perm_coef_bps)?)?
+        );
+        return Ok(());
+    }
+
+    // `calibrate` reads realised-fill samples and fits the impact coefficients.
+    if cmd == "calibrate" {
+        let samples = read_calibration(&input)?;
+        if samples.is_empty() {
+            return Err(anyhow!("no calibration samples in {input}"));
+        }
+        let product = samples[0].product.clone();
+        println!(
+            "{}",
+            serde_json::to_string(&calibrate_impact(&samples, &product)?)?
         );
         return Ok(());
     }
