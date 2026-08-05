@@ -72,3 +72,21 @@ pub struct ImpactSlice {
     /// Fraction of the available volume this slice takes, in `(0, 1]`.
     pub participation: f64,
 }
+
+/// One realised-fill observation used to calibrate the impact model: the
+/// fraction of available volume a child order took and the cost it actually
+/// paid, in basis points versus the pre-trade benchmark. This is the on-the-wire
+/// schema of a calibration replay file (one JSON object per line): the input to
+/// `calibrate_impact`, which regresses these observations back onto the
+/// two-term Almgren-Chriss basis to recover the coefficients.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CalibrationSample {
+    /// Fill time as nanoseconds since the Unix epoch (UTC).
+    pub ts_ns: i64,
+    /// Product / symbol, e.g. "BTC-USD".
+    pub product: String,
+    /// Fraction of the available volume the child took, in `(0, 1]`.
+    pub participation: f64,
+    /// Realised cost of the fill, in basis points vs the pre-trade benchmark.
+    pub realised_bps: f64,
+}

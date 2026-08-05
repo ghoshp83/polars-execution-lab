@@ -17,6 +17,7 @@ TICK_COLUMNS = ("ts_ns", "product", "price", "size", "side", "trade_id")
 QUOTE_COLUMNS = ("ts_ns", "product", "bid", "bid_size", "ask", "ask_size")
 BOOK_LEVEL_COLUMNS = ("ts_ns", "product", "side", "level", "price", "size")
 IMPACT_SLICE_COLUMNS = ("ts_ns", "product", "participation")
+CALIBRATION_SAMPLE_COLUMNS = ("ts_ns", "product", "participation", "realised_bps")
 
 
 def _r8(x: float) -> float:
@@ -54,6 +55,13 @@ def read_book(path: str | Path) -> pl.DataFrame:
 
 def read_impact(path: str | Path) -> pl.DataFrame:
     """Read canonical execution-schedule slices from an NDJSON impact replay."""
+    p = str(path)
+    df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
+    return df.sort("ts_ns")
+
+
+def read_calibration(path: str | Path) -> pl.DataFrame:
+    """Read canonical realised-fill calibration samples from an NDJSON replay."""
     p = str(path)
     df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
     return df.sort("ts_ns")
@@ -261,6 +269,78 @@ def impact_curve(
         "avg_perm_impact_bps": _r8(row["avg_perm_impact_bps"][0]),
         "total_perm_impact_bps": _r8(total_perm),
         "total_cost_bps": _r8(total_impact + total_perm),
+    }
+
+
+def calibrate_impact(df: pl.DataFrame, product: str) -> dict:
+    """Fit the two-term Almgren-Chriss coefficients from realised fills.
+
+    ``impact_curve`` takes the two coefficients as inputs; this is where they
+    come from. Each row is a realised fill: the fraction of volume it took and
+    the cost it actually paid (bps vs the pre-trade benchmark). The model says
+    that cost is ``coef_bps * sqrt(participation) + perm_coef_bps *
+    participation``, so treating ``sqrt(participation)`` and ``participation`` as
+    two regressors, the coefficients are the ordinary-least-squares fit through
+    the origin (a zero-size fill costs nothing, so there is no intercept). Every
+    quantity the normal equations need is a sum, so the fit is a Polars
+    aggregation followed by a 2x2 solve. Mirrors the Rust ``calibrate_impact``
+    sum for sum and operation for operation -- the ``.sort("ts_ns")`` fixes the
+    summation order -- so both engines recover bit-identical coefficients. See
+    the Rust ``CalibrationSummary`` doc for the field meanings.
+    """
+    if df.height == 0:
+        raise ValueError("no calibration samples")
+    sums = (
+        df.sort("ts_ns")
+        .with_columns(pl.col("participation").sqrt().alias("x1"))
+        .select(
+            pl.col("participation").sum().alias("s11"),
+            (pl.col("x1") * pl.col("participation")).sum().alias("s12"),
+            (pl.col("participation") * pl.col("participation")).sum().alias("s22"),
+            (pl.col("x1") * pl.col("realised_bps")).sum().alias("b1"),
+            (pl.col("participation") * pl.col("realised_bps")).sum().alias("b2"),
+            (pl.col("realised_bps") * pl.col("realised_bps")).sum().alias("syy"),
+            pl.col("realised_bps").sum().alias("sy"),
+        )
+    )
+    s11 = sums["s11"][0]
+    s12 = sums["s12"][0]
+    s22 = sums["s22"][0]
+    b1 = sums["b1"][0]
+    b2 = sums["b2"][0]
+    syy = sums["syy"][0]
+    sy = sums["sy"][0]
+    n = float(df.height)
+
+    scale = s11 * s22
+    det = scale - s12 * s12
+    if abs(det) <= 1e-12 * scale:
+        raise ValueError(
+            "singular design: need at least two distinct participation levels to fit both terms"
+        )
+    coef = (s22 * b1 - s12 * b2) / det
+    perm = (s11 * b2 - s12 * b1) / det
+
+    ss_res_raw = (
+        syy
+        - 2.0 * coef * b1
+        - 2.0 * perm * b2
+        + coef * coef * s11
+        + 2.0 * coef * perm * s12
+        + perm * perm * s22
+    )
+    ss_res = ss_res_raw if ss_res_raw > 0.0 else 0.0
+    ybar = sy / n
+    ss_tot = syy - n * ybar * ybar
+    rmse = math.sqrt(ss_res / n)
+    r_squared = 0.0 if ss_tot == 0.0 else 1.0 - ss_res / ss_tot
+    return {
+        "product": product,
+        "samples": df.height,
+        "coef_bps": _r8(coef),
+        "perm_coef_bps": _r8(perm),
+        "rmse_bps": _r8(rmse),
+        "r_squared": _r8(r_squared),
     }
 
 
