@@ -34,9 +34,11 @@ flowchart LR
     CB -->|normalize| QRP[(NDJSON replay<br/>top-of-book quotes)]
     CB -->|reconstruct L2| BRP[(NDJSON replay<br/>order-book levels)]
     SCHED[Execution schedule<br/>participation slices] --> IRP[(NDJSON replay<br/>impact slices)]
+    FILLS_IN[Realised fills<br/>participation + realised cost] --> CRP[(NDJSON replay<br/>calibration samples)]
     SYN --> RP
     SYN --> QRP
     SYN --> BRP
+    SYN --> CRP
 
     subgraph engine[Shared Polars engine - defined once]
         direction TB
@@ -52,6 +54,8 @@ flowchart LR
     BRP --> PY
     IRP --> RUST
     IRP --> PY
+    CRP --> RUST
+    CRP --> PY
 
     RUST --> BENCH[VWAP / TWAP / OHLCV bars<br/>order-flow imbalance]
     PY --> BENCH
@@ -61,12 +65,15 @@ flowchart LR
     PY --> DEPTH
     RUST --> IMPACT[Market-impact curve<br/>Almgren-Chriss temporary + permanent]
     PY --> IMPACT
+    RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef by OLS]
+    PY --> CALIB
     PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
 
     BENCH -.->|assert identical| EQ{{Cross-language<br/>equivalence test}}
     BOOK -.->|assert identical| EQ
     DEPTH -.->|assert identical| EQ
     IMPACT -.->|assert identical| EQ
+    CALIB -.->|assert identical| EQ
 
     style engine fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
     style EQ fill:#134e4a,stroke:#2dd4bf,color:#e2e8f0
@@ -99,6 +106,12 @@ uv run xexeclab depth   --input data/sample_book.ndjson
 
 # two-term Almgren-Chriss market-impact cost curve (temporary sqrt + permanent linear)
 uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10 --perm-coef-bps 5
+
+# fit the impact coefficients from realised fills (participation + realised cost per child)
+uv run xexeclab calibrate --input data/sample_calibration.ndjson
+# ...or generate a synthetic realised-fill replay from known coefficients and recover them
+uv run xexeclab synth-calibration --out out/fills.ndjson --coef-bps 10 --perm-coef-bps 20 --noise-bps 0.5
+uv run xexeclab calibrate --input out/fills.ndjson
 
 # execution sim with temporary (linear|sqrt) and permanent market-impact terms
 uv run xexeclab eval    --input data/sample_ticks.ndjson --algo pov --side buy --qty 1.0 --participation 0.2 --impact-bps 50 --impact-model sqrt --perm-impact-bps 10
@@ -153,6 +166,11 @@ against the replay and scores each on **slippage versus the session VWAP
 benchmark** and **implementation shortfall versus the arrival price**, both in
 basis points — the same transaction-cost lens a desk uses to grade an algo.
 
+`xexeclab calibrate` is a second quantitative check on the model itself: it fits
+the two Almgren-Chriss impact coefficients to realised fills by least squares and
+reports `r_squared` and `rmse_bps`, so how well the two-term model explains
+observed costs is a measured number, not an assumption.
+
 ## Testing
 
 ```bash
@@ -174,9 +192,13 @@ This is a **market-data and execution-analytics** project, not a trading system.
   **permanent** drift (`--perm-impact-bps`) that accumulates as the schedule walks
   the mid away for good. There is still **no order routing** to any venue. It
   measures *schedule quality*, not live execution, and must not be used to trade.
-  Both impact terms are single free coefficients — there is **no fit to a desk's
-  own fills** (a calibration harness is future work), so the coefficients must be
-  set externally before the numbers mean anything absolute.
+  Both impact terms are single coefficients; **`xexeclab calibrate` fits them from
+  a desk's own realised fills** (participation and realised cost per child) by
+  ordinary least squares, reporting the fit's `r_squared` and `rmse_bps`. The fit
+  is only as trustworthy as the realised costs fed in, and it calibrates the
+  two-coefficient Almgren-Chriss model rather than discovering the model — so the
+  coefficients still need sensible fills behind them before the numbers mean
+  anything absolute.
 - **Market making and smart order routing** — parts of what a real execution
   firm does — are out of scope here; only the market-data and post-trade
   analytics slice is built.

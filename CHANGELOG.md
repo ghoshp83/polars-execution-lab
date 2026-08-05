@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-08-05
+
+### Added
+- **Calibration harness — fit the impact coefficients from realised fills.**
+  `impact_curve` consumes the two Almgren-Chriss coefficients; `calibrate_impact`
+  is the other half that recovers them. Given realised fills, each tagged with the
+  fraction of volume it took (`participation`) and the cost it actually paid
+  (`realised_bps`), it fits `realised_bps ~ coef_bps * sqrt(participation) +
+  perm_coef_bps * participation` as an ordinary-least-squares regression through
+  the origin, and reports the fitted `coef_bps` and `perm_coef_bps` plus
+  `rmse_bps` and `r_squared` diagnostics. Every quantity the normal equations need
+  is a sum, so the fit is a shared Polars aggregation plus a 2x2 solve, computed
+  with the same expressions in the Rust crate (`src/calibrate.rs`) and Python
+  (`engine.py`) and held identical by a **fifth** cross-language equivalence test
+  — the recovered coefficients *and* the diagnostics match bit-for-bit. New
+  `CalibrationSample` schema and a checked-in `data/sample_calibration.ndjson`
+  (costs are exactly `10*sqrt(p) + 20*p`, so the fit recovers 10 and 20). A
+  near-singular design (a single participation level, which cannot separate the
+  two terms) is refused rather than returning a blown-up coefficient.
+- **`calibrate`** subcommand on both CLIs (`xexec calibrate` / `xexeclab
+  calibrate`): read a realised-fill replay, print the fitted `CalibrationSummary`.
+- **`synth-calibration`** CLI + `synthetic_calibration` generator: write a
+  deterministic realised-fill replay from known coefficients (plus optional
+  Gaussian noise), so the harness runs end to end — with zero noise the fit
+  recovers the generating coefficients to floating-point precision.
+
+### Changed
+- Test suite grows to 66 (20 Rust + 46 Python): a fifth cross-language
+  equivalence test plus calibration unit and round-trip tests.
+- **Honest disclaimer** updated: the impact coefficients are **no longer
+  external-only** — `calibrate` fits them from a desk's own realised fills. The
+  remaining limitation is that the fit is only as good as the realised costs fed
+  in, and it calibrates the two-coefficient Almgren-Chriss model rather than
+  discovering the model.
+
 ## [0.6.0] - 2026-08-04
 
 ### Added
