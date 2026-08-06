@@ -65,7 +65,7 @@ flowchart LR
     PY --> DEPTH
     RUST --> IMPACT[Market-impact curve<br/>Almgren-Chriss temporary + permanent]
     PY --> IMPACT
-    RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef by OLS]
+    RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
     PY --> CALIB
     PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
 
@@ -109,9 +109,16 @@ uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10 --perm-c
 
 # fit the impact coefficients from realised fills (participation + realised cost per child)
 uv run xexeclab calibrate --input data/sample_calibration.ndjson
+# robust fit: Huber down-weights outlier fills; ridge stabilises a thin design
+uv run xexeclab calibrate --input data/sample_calibration_noisy.ndjson --huber-delta 3
+uv run xexeclab calibrate --input data/sample_calibration.ndjson --ridge-lambda 0.01
 # ...or generate a synthetic realised-fill replay from known coefficients and recover them
 uv run xexeclab synth-calibration --out out/fills.ndjson --coef-bps 10 --perm-coef-bps 20 --noise-bps 0.5
 uv run xexeclab calibrate --input out/fills.ndjson
+# ...inject outlier fills, then watch OLS blow out while the robust fit holds
+uv run xexeclab synth-calibration --out out/noisy.ndjson --outlier-frac 0.1 --outlier-bps 80
+uv run xexeclab calibrate --input out/noisy.ndjson                 # OLS: dragged off
+uv run xexeclab calibrate --input out/noisy.ndjson --huber-delta 3 # robust: holds
 
 # execution sim with temporary (linear|sqrt) and permanent market-impact terms
 uv run xexeclab eval    --input data/sample_ticks.ndjson --algo pov --side buy --qty 1.0 --participation 0.2 --impact-bps 50 --impact-model sqrt --perm-impact-bps 10
@@ -169,7 +176,14 @@ basis points — the same transaction-cost lens a desk uses to grade an algo.
 `xexeclab calibrate` is a second quantitative check on the model itself: it fits
 the two Almgren-Chriss impact coefficients to realised fills by least squares and
 reports `r_squared` and `rmse_bps`, so how well the two-term model explains
-observed costs is a measured number, not an assumption.
+observed costs is a measured number, not an assumption. Real fill logs carry the
+occasional bad print, so `--huber-delta` switches the fit to **robust**
+(iteratively reweighted least squares): a single fat-finger fill that sends the
+plain fit to nonsense — on the checked-in noisy replay OLS blows out to
+`coef≈80 / perm≈-24` (a *negative* permanent impact) — is bounded by the Huber
+weights, keeping the robust fit near the true `10 / 20`. `--ridge-lambda` adds an
+L2 penalty that stabilises a thin, single-participation-level design that plain
+least squares refuses.
 
 ## Testing
 
@@ -194,11 +208,15 @@ This is a **market-data and execution-analytics** project, not a trading system.
   measures *schedule quality*, not live execution, and must not be used to trade.
   Both impact terms are single coefficients; **`xexeclab calibrate` fits them from
   a desk's own realised fills** (participation and realised cost per child) by
-  ordinary least squares, reporting the fit's `r_squared` and `rmse_bps`. The fit
-  is only as trustworthy as the realised costs fed in, and it calibrates the
-  two-coefficient Almgren-Chriss model rather than discovering the model — so the
-  coefficients still need sensible fills behind them before the numbers mean
-  anything absolute.
+  ordinary least squares, reporting the fit's `r_squared` and `rmse_bps`. A
+  **robust** variant (`--huber-delta` for Huber down-weighting, `--ridge-lambda`
+  for L2 regularisation) defends against outlier fills and thin designs — note
+  Huber *bounds* a bad print's influence, it does not reject it, so under
+  one-sided contamination the robust fit is much closer to the truth than OLS but
+  not exactly on it. The fit is only as trustworthy as the realised costs fed in,
+  and it calibrates the two-coefficient Almgren-Chriss model rather than
+  discovering the model — so the coefficients still need sensible fills behind
+  them before the numbers mean anything absolute.
 - **Market making and smart order routing** — parts of what a real execution
   firm does — are out of scope here; only the market-data and post-trade
   analytics slice is built.

@@ -506,6 +506,7 @@ dependencies = [
  "polars-core",
  "polars-error",
  "polars-lazy",
+ "polars-ops",
  "polars-parquet",
  "polars-utils",
  "version_check",
@@ -1293,7 +1294,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xexec"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "polars",

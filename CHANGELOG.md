@@ -4,6 +4,44 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-08-06
+
+### Added
+- **Robust / regularised calibration — `calibrate_impact_robust`.** The v0.7 fit
+  is plain least squares, so a single bad print (a fat-finger fill, a mis-tagged
+  participation) drags both coefficients toward itself, and a design clustered at
+  one participation level barely separates the two basis functions. This variant
+  adds the two standard defences: **Huber** (`huber_delta`) runs iteratively
+  reweighted least squares, re-weighting every sample by `min(1, delta/|residual|)`
+  so a gross outlier's pull decays as `1/|residual|`; **ridge** (`ridge_lambda`)
+  adds an L2 penalty to the normal-matrix diagonal, shrinking toward zero and
+  making a single-participation-level design solvable rather than rejected. With
+  `huber_delta=None` and `ridge_lambda=0` it reproduces `calibrate_impact`
+  bit-for-bit. Both defences are the same weighted Polars sums plus 2x2 solve in
+  the Rust crate (`src/calibrate.rs`) and Python (`engine.py`), held identical by
+  a **sixth** cross-language equivalence test — the iteratively reweighted fit,
+  every reweight and every scalar step, matches to the bit. New checked-in
+  `data/sample_calibration_noisy.ndjson` (the clean design plus one gross outlier)
+  on which plain OLS blows out to `coef≈80 / perm≈-24` while the Huber fit holds
+  near the true `10 / 20`.
+- **`--huber-delta` / `--ridge-lambda` / `--max-iters`** on both `calibrate` CLIs
+  (`xexec` / `xexeclab`): either robustness flag switches to the robust fit.
+- **Outlier injection in `synthetic_calibration`** (`--outlier-frac` /
+  `--outlier-bps`): corrupt a share of generated fills with a shock, so the
+  synthetic replay exercises the robust fit end to end. `outlier_frac=0` leaves the
+  draw sequence unchanged (back-compat).
+
+### Changed
+- Test suite grows to 77 (24 Rust + 53 Python): a sixth cross-language
+  equivalence test plus robust-calibration unit tests (Huber recovers the sign OLS
+  flips, ridge makes a thin design solvable, and the no-option path reproduces OLS
+  exactly) and the outlier-generator round trips.
+- **Honest disclaimer** updated: the robust fit **bounds** an outlier's influence
+  rather than rejecting it, so under one-sided contamination it lands much closer
+  to the truth than OLS but not exactly on it — stated plainly.
+- Rust `polars` dependency gains the `abs` feature (used by the Huber residual
+  weighting); no new crates.
+
 ## [0.7.0] - 2026-08-05
 
 ### Added
