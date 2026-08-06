@@ -322,6 +322,8 @@ def synthetic_calibration(
     coef_bps: float = 10.0,
     perm_coef_bps: float = 20.0,
     noise_bps: float = 0.0,
+    outlier_frac: float = 0.0,
+    outlier_bps: float = 0.0,
     seed: int = 7,
     product: str = "BTC-USD",
     start_ns: int = 1_719_792_000_000_000_000,
@@ -334,8 +336,15 @@ def synthetic_calibration(
     `coef_bps * sqrt(p) + perm_coef_bps * p`, plus optional Gaussian `noise_bps`.
     With `noise_bps == 0` the samples lie exactly on the model, so
     `calibrate_impact` recovers `(coef_bps, perm_coef_bps)` to floating-point
-    precision; with noise they are a realistic, imperfect fit target. Returns the
-    number of samples written.
+    precision; with noise they are a realistic, imperfect fit target.
+
+    Real fill logs also carry the occasional bad print -- a mis-tagged
+    participation, a fat-finger, a venue glitch. `outlier_frac` (the share of
+    samples corrupted) and `outlier_bps` (the shock added to a corrupted sample's
+    cost) inject those, so the replay exercises `calibrate_impact_robust`: plain
+    least squares is dragged off by the shocks while the Huber fit shrugs them
+    off. With `outlier_frac == 0` no samples are corrupted and the draw sequence
+    is unchanged. Returns the number of samples written.
     """
     rng = random.Random(seed)
     ts = start_ns
@@ -346,6 +355,8 @@ def synthetic_calibration(
             cost = coef_bps * math.sqrt(participation) + perm_coef_bps * participation
             if noise_bps > 0:
                 cost += rng.gauss(0.0, noise_bps)
+            if outlier_frac > 0 and rng.random() < outlier_frac:
+                cost += outlier_bps
             sample = {
                 "ts_ns": ts,
                 "product": product,
