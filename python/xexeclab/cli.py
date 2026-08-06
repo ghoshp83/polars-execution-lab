@@ -10,6 +10,7 @@ from . import __version__
 from .engine import (
     bars,
     calibrate_impact,
+    calibrate_impact_robust,
     depth_metrics,
     impact_curve,
     quote_metrics,
@@ -104,7 +105,17 @@ def cmd_impact(a: argparse.Namespace) -> None:
 def cmd_calibrate(a: argparse.Namespace) -> None:
     df = read_calibration(a.input)
     product = df["product"][0] if df.height else a.product
-    print(json.dumps(calibrate_impact(df, product)))
+    if a.huber_delta is not None or a.ridge_lambda != 0.0:
+        fit = calibrate_impact_robust(
+            df,
+            product,
+            huber_delta=a.huber_delta,
+            ridge_lambda=a.ridge_lambda,
+            max_iters=a.max_iters,
+        )
+    else:
+        fit = calibrate_impact(df, product)
+    print(json.dumps(fit))
 
 
 def cmd_synth_calibration(a: argparse.Namespace) -> None:
@@ -116,6 +127,8 @@ def cmd_synth_calibration(a: argparse.Namespace) -> None:
         coef_bps=a.coef_bps,
         perm_coef_bps=a.perm_coef_bps,
         noise_bps=a.noise_bps,
+        outlier_frac=a.outlier_frac,
+        outlier_bps=a.outlier_bps,
         seed=a.seed,
         product=a.product,
     )
@@ -317,6 +330,21 @@ def main(argv: list[str] | None = None) -> None:
     pcal = sub.add_parser("calibrate", help="fit impact coefficients from a realised-fill replay")
     pcal.add_argument("--input", required=True, help="calibration replay (.ndjson/.jsonl/.parquet)")
     pcal.add_argument("--product", default="BTC-USD")
+    pcal.add_argument(
+        "--huber-delta",
+        type=float,
+        default=None,
+        help="robust IRLS: down-weight fills whose residual exceeds this many bps",
+    )
+    pcal.add_argument(
+        "--ridge-lambda",
+        type=float,
+        default=0.0,
+        help="ridge penalty added to the normal-matrix diagonal (0 = off)",
+    )
+    pcal.add_argument(
+        "--max-iters", type=int, default=8, help="max IRLS passes when --huber-delta is set"
+    )
     pcal.set_defaults(fn=cmd_calibrate)
 
     psc = sub.add_parser(
@@ -328,6 +356,15 @@ def main(argv: list[str] | None = None) -> None:
     psc.add_argument("--perm-coef-bps", type=float, default=20.0, help="true permanent coefficient")
     psc.add_argument(
         "--noise-bps", type=float, default=0.0, help="Gaussian noise stddev in bps (0 = exact fit)"
+    )
+    psc.add_argument(
+        "--outlier-frac",
+        type=float,
+        default=0.0,
+        help="fraction of samples corrupted by a shock (0 = none)",
+    )
+    psc.add_argument(
+        "--outlier-bps", type=float, default=0.0, help="bps shock added to each corrupted sample"
     )
     psc.add_argument("--seed", type=int, default=7)
     psc.add_argument("--product", default="BTC-USD")

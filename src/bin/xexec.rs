@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use xexec::calibrate::calibrate_impact;
+use xexec::calibrate::{calibrate_impact, calibrate_impact_robust};
 use xexec::depth::depth_metrics;
 use xexec::execution::{bars, session_twap, session_vwap, summary};
 use xexec::impact::impact_curve;
@@ -14,7 +14,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|impact|calibrate> --input <ndjson> [--bucket-ms N] [--coef-bps N] [--perm-coef-bps N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|impact|calibrate> --input <ndjson> [--bucket-ms N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -77,16 +77,30 @@ fn main() -> Result<()> {
     }
 
     // `calibrate` reads realised-fill samples and fits the impact coefficients.
+    // `--huber-delta` and/or `--ridge-lambda` switch to the robust fit.
     if cmd == "calibrate" {
         let samples = read_calibration(&input)?;
         if samples.is_empty() {
             return Err(anyhow!("no calibration samples in {input}"));
         }
         let product = samples[0].product.clone();
-        println!(
-            "{}",
-            serde_json::to_string(&calibrate_impact(&samples, &product)?)?
-        );
+        let huber_delta: Option<f64> = arg_value(&args, "--huber-delta")
+            .map(|s| s.parse())
+            .transpose()?;
+        let ridge_lambda: f64 = arg_value(&args, "--ridge-lambda")
+            .map(|s| s.parse())
+            .transpose()?
+            .unwrap_or(0.0);
+        let max_iters: usize = arg_value(&args, "--max-iters")
+            .map(|s| s.parse())
+            .transpose()?
+            .unwrap_or(8);
+        let summary = if huber_delta.is_some() || ridge_lambda != 0.0 {
+            calibrate_impact_robust(&samples, &product, huber_delta, ridge_lambda, max_iters)?
+        } else {
+            calibrate_impact(&samples, &product)?
+        };
+        println!("{}", serde_json::to_string(&summary)?);
         return Ok(());
     }
 
