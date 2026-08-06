@@ -1,6 +1,6 @@
 [package]
 name = "xexec"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 description = "Execution-analytics engine over crypto tick data, powered by Polars."
 license = "MIT"
@@ -15,7 +15,7 @@ name = "xexec"
 path = "src/bin/xexec.rs"
 
 [dependencies]
-polars = { version = "0.44", default-features = false, features = ["lazy"] }
+polars = { version = "0.44", default-features = false, features = ["lazy", "abs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

@@ -344,6 +344,123 @@ def calibrate_impact(df: pl.DataFrame, product: str) -> dict:
     }
 
 
+def calibrate_impact_robust(
+    df: pl.DataFrame,
+    product: str,
+    huber_delta: float | None = None,
+    ridge_lambda: float = 0.0,
+    max_iters: int = 8,
+) -> dict:
+    """Fit the coefficients robustly, down-weighting outliers and/or shrinking.
+
+    ``calibrate_impact`` is plain least squares: one bad print pulls both
+    coefficients toward itself, and a design clustered at one participation level
+    barely separates the two basis functions. This variant adds the two standard
+    defences, both as the same Polars sums so the fit stays bit-identical to the
+    Rust ``calibrate_impact_robust``:
+
+    - ``huber_delta`` -- iteratively reweighted least squares. Each pass solves
+      the weighted normal equations, then re-weights every sample by
+      ``min(1, delta / |residual|)`` (``delta`` in bps). ``None`` leaves every
+      weight at 1 (ordinary least squares).
+    - ``ridge_lambda`` -- adds ``ridge_lambda`` to the diagonal of the normal
+      matrix, shrinking toward zero and making a single-participation-level
+      design solvable. ``0.0`` leaves the fit unregularised.
+
+    With ``huber_delta=None`` and ``ridge_lambda=0.0`` this reproduces
+    ``calibrate_impact`` exactly. The reported ``rmse_bps`` / ``r_squared`` are
+    always the unweighted fit quality against every sample.
+    """
+    if df.height == 0:
+        raise ValueError("no calibration samples")
+    work = df.sort("ts_ns").with_columns(
+        pl.col("participation").sqrt().alias("x1"),
+        pl.lit(1.0).alias("w"),
+    )
+
+    # Unweighted sufficient statistics, computed once (reported fit quality is
+    # always against every sample, not the reweighted ones).
+    udf = work.select(
+        pl.col("participation").sum().alias("s11"),
+        (pl.col("x1") * pl.col("participation")).sum().alias("s12"),
+        (pl.col("participation") * pl.col("participation")).sum().alias("s22"),
+        (pl.col("x1") * pl.col("realised_bps")).sum().alias("b1"),
+        (pl.col("participation") * pl.col("realised_bps")).sum().alias("b2"),
+        (pl.col("realised_bps") * pl.col("realised_bps")).sum().alias("syy"),
+        pl.col("realised_bps").sum().alias("sy"),
+    )
+    s11u = udf["s11"][0]
+    s12u = udf["s12"][0]
+    s22u = udf["s22"][0]
+    b1u = udf["b1"][0]
+    b2u = udf["b2"][0]
+    syy = udf["syy"][0]
+    sy = udf["sy"][0]
+    n = float(df.height)
+
+    passes = max_iters if huber_delta is not None else 1
+    coef = 0.0
+    perm = 0.0
+    for _ in range(passes):
+        wsums = work.select(
+            (pl.col("w") * pl.col("participation")).sum().alias("s11"),
+            (pl.col("w") * pl.col("x1") * pl.col("participation")).sum().alias("s12"),
+            (pl.col("w") * pl.col("participation") * pl.col("participation")).sum().alias("s22"),
+            (pl.col("w") * pl.col("x1") * pl.col("realised_bps")).sum().alias("b1"),
+            (pl.col("w") * pl.col("participation") * pl.col("realised_bps")).sum().alias("b2"),
+        )
+        s11 = wsums["s11"][0] + ridge_lambda
+        s12 = wsums["s12"][0]
+        s22 = wsums["s22"][0] + ridge_lambda
+        b1 = wsums["b1"][0]
+        b2 = wsums["b2"][0]
+
+        scale = s11 * s22
+        det = scale - s12 * s12
+        if abs(det) <= 1e-12 * scale:
+            raise ValueError(
+                "singular design: need at least two distinct participation levels, "
+                "or a non-zero ridge_lambda, to fit both terms"
+            )
+        coef = (s22 * b1 - s12 * b2) / det
+        perm = (s11 * b2 - s12 * b1) / det
+
+        if huber_delta is None:
+            break
+        resid = (
+            pl.col("realised_bps")
+            - (pl.lit(coef) * pl.col("x1") + pl.lit(perm) * pl.col("participation"))
+        ).abs()
+        work = work.with_columns(
+            pl.when(resid <= pl.lit(huber_delta))
+            .then(pl.lit(1.0))
+            .otherwise(pl.lit(huber_delta) / resid)
+            .alias("w")
+        )
+
+    ss_res_raw = (
+        syy
+        - 2.0 * coef * b1u
+        - 2.0 * perm * b2u
+        + coef * coef * s11u
+        + 2.0 * coef * perm * s12u
+        + perm * perm * s22u
+    )
+    ss_res = ss_res_raw if ss_res_raw > 0.0 else 0.0
+    ybar = sy / n
+    ss_tot = syy - n * ybar * ybar
+    rmse = math.sqrt(ss_res / n)
+    r_squared = 0.0 if ss_tot == 0.0 else 1.0 - ss_res / ss_tot
+    return {
+        "product": product,
+        "samples": df.height,
+        "coef_bps": _r8(coef),
+        "perm_coef_bps": _r8(perm),
+        "rmse_bps": _r8(rmse),
+        "r_squared": _r8(r_squared),
+    }
+
+
 def summary(df: pl.DataFrame, product: str, bucket_ns: int) -> dict:
     """Full summary: session VWAP + TWAP + order-flow imbalance + per-bucket
     bars, rounded to match Rust."""

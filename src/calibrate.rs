@@ -136,3 +136,177 @@ pub fn calibrate_impact(
         r_squared: r8(r_squared),
     })
 }
+
+/// Fit the coefficients robustly, down-weighting outlier fills and/or shrinking
+/// the estimate to stabilise a thin design.
+///
+/// `calibrate_impact` is plain least squares: a single bad print -- a fat-finger
+/// fill, a mis-tagged participation -- pulls both coefficients toward itself, and
+/// a design with participation clustered at one level barely separates the two
+/// basis functions. This variant adds the two standard defences, both expressed
+/// as the same Polars sums so the fit stays bit-identical to
+/// `calibrate_impact_robust` in `python/xexeclab/engine.py`:
+///
+/// - **Huber (`huber_delta`)** -- iteratively reweighted least squares. Each pass
+///   solves the weighted normal equations, then re-weights every sample by
+///   `min(1, delta / |residual|)`, so fills the model already explains keep full
+///   weight while a gross outlier's pull decays as `1/|residual|`. `delta` is the
+///   residual (in bps) beyond which a fill is treated as an outlier. `None`
+///   leaves every weight at 1 (ordinary least squares).
+/// - **Ridge (`ridge_lambda`)** -- adds `ridge_lambda` to the diagonal of the
+///   normal matrix, shrinking the coefficients toward zero and making a
+///   single-participation-level design solvable rather than rejected. `0.0`
+///   leaves the fit unregularised.
+///
+/// With `huber_delta = None` and `ridge_lambda = 0.0` this reproduces
+/// `calibrate_impact` exactly. The reported `rmse_bps` / `r_squared` are always
+/// the *unweighted* fit quality against every sample, so they stay comparable
+/// across the plain and robust fits.
+pub fn calibrate_impact_robust(
+    samples: &[CalibrationSample],
+    product: &str,
+    huber_delta: Option<f64>,
+    ridge_lambda: f64,
+    max_iters: usize,
+) -> Result<CalibrationSummary> {
+    if samples.is_empty() {
+        return Err(anyhow!("no calibration samples"));
+    }
+    let ts_ns: Vec<i64> = samples.iter().map(|s| s.ts_ns).collect();
+    let participation: Vec<f64> = samples.iter().map(|s| s.participation).collect();
+    let realised_bps: Vec<f64> = samples.iter().map(|s| s.realised_bps).collect();
+
+    // Sort once and carry the square-root regressor plus a weight column (all
+    // weights 1 to start = ordinary least squares). The `.sort("ts_ns")` fixes
+    // the summation order that makes the two engines bit-identical.
+    let work = df!(
+        "ts_ns" => ts_ns,
+        "participation" => participation,
+        "realised_bps" => realised_bps,
+    )?
+    .lazy()
+    .sort_by_exprs([col("ts_ns")], SortMultipleOptions::default())
+    .with_columns([col("participation").sqrt().alias("x1"), lit(1.0).alias("w")])
+    .collect()?;
+
+    let scalar = |frame: &DataFrame, name: &str| -> Result<f64> {
+        frame
+            .column(name)?
+            .f64()?
+            .get(0)
+            .ok_or_else(|| anyhow!("null {name}"))
+    };
+
+    // Unweighted sufficient statistics, computed once: the reported fit quality
+    // is always measured against every sample, not the reweighted ones.
+    let udf = work
+        .clone()
+        .lazy()
+        .select([
+            col("participation").sum().alias("s11"),
+            (col("x1") * col("participation")).sum().alias("s12"),
+            (col("participation") * col("participation"))
+                .sum()
+                .alias("s22"),
+            (col("x1") * col("realised_bps")).sum().alias("b1"),
+            (col("participation") * col("realised_bps"))
+                .sum()
+                .alias("b2"),
+            (col("realised_bps") * col("realised_bps"))
+                .sum()
+                .alias("syy"),
+            col("realised_bps").sum().alias("sy"),
+        ])
+        .collect()?;
+    let s11u = scalar(&udf, "s11")?;
+    let s12u = scalar(&udf, "s12")?;
+    let s22u = scalar(&udf, "s22")?;
+    let b1u = scalar(&udf, "b1")?;
+    let b2u = scalar(&udf, "b2")?;
+    let syy = scalar(&udf, "syy")?;
+    let sy = scalar(&udf, "sy")?;
+    let n = samples.len() as f64;
+
+    let passes = if huber_delta.is_some() { max_iters } else { 1 };
+    let mut work = work;
+    let mut coef = 0.0;
+    let mut perm = 0.0;
+    for _ in 0..passes {
+        // Weighted normal equations for the current weights.
+        let wsums = work
+            .clone()
+            .lazy()
+            .select([
+                (col("w") * col("participation")).sum().alias("s11"),
+                (col("w") * col("x1") * col("participation"))
+                    .sum()
+                    .alias("s12"),
+                (col("w") * col("participation") * col("participation"))
+                    .sum()
+                    .alias("s22"),
+                (col("w") * col("x1") * col("realised_bps"))
+                    .sum()
+                    .alias("b1"),
+                (col("w") * col("participation") * col("realised_bps"))
+                    .sum()
+                    .alias("b2"),
+            ])
+            .collect()?;
+        let s11 = scalar(&wsums, "s11")? + ridge_lambda;
+        let s12 = scalar(&wsums, "s12")?;
+        let s22 = scalar(&wsums, "s22")? + ridge_lambda;
+        let b1 = scalar(&wsums, "b1")?;
+        let b2 = scalar(&wsums, "b2")?;
+
+        let scale = s11 * s22;
+        let det = scale - s12 * s12;
+        if det.abs() <= 1e-12 * scale {
+            return Err(anyhow!(
+                "singular design: need at least two distinct participation levels, or a non-zero ridge_lambda, to fit both terms"
+            ));
+        }
+        coef = (s22 * b1 - s12 * b2) / det;
+        perm = (s11 * b2 - s12 * b1) / det;
+
+        // Re-weight by the Huber rule for the next pass; ordinary least squares
+        // (no delta) keeps every weight at 1 and stops after one solve.
+        let delta = match huber_delta {
+            Some(d) => d,
+            None => break,
+        };
+        let resid = (col("realised_bps")
+            - (lit(coef) * col("x1") + lit(perm) * col("participation")))
+        .abs();
+        work = work
+            .lazy()
+            .with_columns([when(resid.clone().lt_eq(lit(delta)))
+                .then(lit(1.0))
+                .otherwise(lit(delta) / resid)
+                .alias("w")])
+            .collect()?;
+    }
+
+    // Unweighted residual and explained variance against the final coefficients.
+    let ss_res_raw = syy - 2.0 * coef * b1u - 2.0 * perm * b2u
+        + coef * coef * s11u
+        + 2.0 * coef * perm * s12u
+        + perm * perm * s22u;
+    let ss_res = if ss_res_raw > 0.0 { ss_res_raw } else { 0.0 };
+    let ybar = sy / n;
+    let ss_tot = syy - n * ybar * ybar;
+    let rmse = (ss_res / n).sqrt();
+    let r_squared = if ss_tot == 0.0 {
+        0.0
+    } else {
+        1.0 - ss_res / ss_tot
+    };
+
+    Ok(CalibrationSummary {
+        product: product.to_string(),
+        samples: samples.len(),
+        coef_bps: r8(coef),
+        perm_coef_bps: r8(perm),
+        rmse_bps: r8(rmse),
+        r_squared: r8(r_squared),
+    })
+}
