@@ -13,6 +13,7 @@ import pytest
 
 from xexeclab.engine import (
     calibrate_impact,
+    calibrate_impact_robust,
     depth_metrics,
     impact_curve,
     quote_metrics,
@@ -31,6 +32,8 @@ QUOTE_SAMPLE = "data/sample_quotes.ndjson"
 BOOK_SAMPLE = "data/sample_book.ndjson"
 IMPACT_SAMPLE = "data/sample_impact.ndjson"
 CALIBRATION_SAMPLE = "data/sample_calibration.ndjson"
+NOISY_CALIBRATION_SAMPLE = "data/sample_calibration_noisy.ndjson"
+HUBER_DELTA = 3.0
 BUCKET_MS = 1000
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -181,3 +184,50 @@ def test_rust_and_python_calibration_fits_are_identical():
     assert rust["perm_coef_bps"] == py["perm_coef_bps"]
     assert rust["rmse_bps"] == py["rmse_bps"]
     assert rust["r_squared"] == py["r_squared"]
+
+
+def test_rust_and_python_robust_calibration_fits_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The robust fit is iteratively reweighted least squares: several weighted
+    # Polars aggregations, each feeding a 2x2 solve whose coefficients drive the
+    # next round of Huber weights. Every sum, every scalar step, and every
+    # reweight has to be bit-identical across the two engines for the recovered
+    # coefficients to match -- a much tighter test of the shared engine than the
+    # single-pass OLS fit. Run it on the noisy replay (one gross outlier) so the
+    # weights actually move.
+    proc = subprocess.run(
+        [
+            binary,
+            "calibrate",
+            "--input",
+            NOISY_CALIBRATION_SAMPLE,
+            "--huber-delta",
+            str(HUBER_DELTA),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    df = read_calibration(NOISY_CALIBRATION_SAMPLE)
+    py = calibrate_impact_robust(df, df["product"][0], huber_delta=HUBER_DELTA)
+
+    assert rust["samples"] == py["samples"]
+    assert rust["coef_bps"] == py["coef_bps"]
+    assert rust["perm_coef_bps"] == py["perm_coef_bps"]
+    assert rust["rmse_bps"] == py["rmse_bps"]
+    assert rust["r_squared"] == py["r_squared"]
+
+    # And the robust fit must actually differ from the plain OLS fit on the same
+    # replay -- otherwise the flag did nothing and the identity above is vacuous.
+    ols = subprocess.run(
+        [binary, "calibrate", "--input", NOISY_CALIBRATION_SAMPLE],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(ols.stdout)["coef_bps"] != rust["coef_bps"]
