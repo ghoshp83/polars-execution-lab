@@ -226,6 +226,49 @@ def depth_metrics(df: pl.DataFrame, product: str) -> dict:
     }
 
 
+def queue_metrics(df: pl.DataFrame, product: str) -> dict:
+    """Session top-of-book queue-position metrics, rounded to match Rust.
+
+    Reduces each snapshot to the resting size at the touch (``level == 0``) per
+    side -- the queue a new passive order joins, which governs its fill priority
+    -- then averages over the window. Deliberately distinct from
+    :func:`depth_metrics`, which sums across *all* levels; this is the best level
+    alone. Mirrors the Rust ``queue_metrics`` expression for expression -- the
+    ``.sort("ts_ns")`` fixes the summation order so the means are bit-identical.
+    See the Rust ``QueueSummary`` doc for the field meanings.
+    """
+    if df.height == 0:
+        raise ValueError("no book levels")
+    per_snap = (
+        df.group_by("ts_ns")
+        .agg(
+            pl.col("size")
+            .filter((pl.col("side") == "bid") & (pl.col("level") == 0))
+            .first()
+            .alias("bid_queue"),
+            pl.col("size")
+            .filter((pl.col("side") == "ask") & (pl.col("level") == 0))
+            .first()
+            .alias("ask_queue"),
+        )
+        .sort("ts_ns")
+    )
+    bid_queue = pl.col("bid_queue")
+    ask_queue = pl.col("ask_queue")
+    row = per_snap.select(
+        bid_queue.mean().alias("avg_bid_queue"),
+        ask_queue.mean().alias("avg_ask_queue"),
+        ((bid_queue - ask_queue) / (bid_queue + ask_queue)).mean().alias("avg_queue_imbalance"),
+    )
+    return {
+        "product": product,
+        "snapshots": per_snap.height,
+        "avg_bid_queue": _r8(row["avg_bid_queue"][0]),
+        "avg_ask_queue": _r8(row["avg_ask_queue"][0]),
+        "avg_queue_imbalance": _r8(row["avg_queue_imbalance"][0]),
+    }
+
+
 def impact_curve(
     df: pl.DataFrame, product: str, coef_bps: float, perm_coef_bps: float = 0.0
 ) -> dict:

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use xexec::calibrate::{calibrate_impact, calibrate_impact_robust};
-use xexec::depth::depth_metrics;
+use xexec::depth::{depth_metrics, queue_metrics};
 use xexec::execution::{bars, session_twap, session_vwap, summary};
 use xexec::impact::impact_curve;
 use xexec::quote::quote_metrics;
@@ -14,7 +14,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|impact|calibrate> --input <ndjson> [--bucket-ms N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|impact|calibrate> --input <ndjson> [--bucket-ms N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -50,6 +50,20 @@ fn main() -> Result<()> {
         println!(
             "{}",
             serde_json::to_string(&depth_metrics(&levels, &product)?)?
+        );
+        return Ok(());
+    }
+
+    // `queue` reads the L2 book-level schema and reports top-of-book queue size.
+    if cmd == "queue" {
+        let levels = read_book(&input)?;
+        if levels.is_empty() {
+            return Err(anyhow!("no book levels in {input}"));
+        }
+        let product = levels[0].product.clone();
+        println!(
+            "{}",
+            serde_json::to_string(&queue_metrics(&levels, &product)?)?
         );
         return Ok(());
     }

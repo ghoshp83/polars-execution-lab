@@ -5,7 +5,7 @@
 Crypto trading desks measure execution the same way equities desks do: against
 **VWAP** and **TWAP** benchmarks, by **order-flow imbalance** (which side of the
 book drove the trades), by **top-of-book and L2 depth microstructure** (spread,
-microprice, resting depth, depth imbalance), by the **market impact** a schedule
+microprice, resting depth, depth imbalance, top-of-book queue size), by the **market impact** a schedule
 pays for the size it takes, and by **implementation shortfall** versus the price
 when the order arrived. This project builds that measurement
 engine over live crypto tick, quote, and order-book data — the aggregations and
@@ -63,6 +63,8 @@ flowchart LR
     PY --> BOOK
     RUST --> DEPTH[L2 depth microstructure<br/>resting depth / depth imbalance / spread]
     PY --> DEPTH
+    RUST --> QUEUE[Queue position<br/>touch size / fill-priority imbalance]
+    PY --> QUEUE
     RUST --> IMPACT[Market-impact curve<br/>Almgren-Chriss temporary + permanent]
     PY --> IMPACT
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
@@ -103,6 +105,9 @@ uv run xexeclab book    --input data/sample_quotes.ndjson
 
 # L2 depth microstructure (resting depth / depth imbalance / spread)
 uv run xexeclab depth   --input data/sample_book.ndjson
+
+# top-of-book queue position (touch size / fill-priority imbalance)
+uv run xexeclab queue   --input data/sample_book.ndjson
 
 # two-term Almgren-Chriss market-impact cost curve (temporary sqrt + permanent linear)
 uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10 --perm-coef-bps 5
@@ -226,8 +231,11 @@ This is a **market-data and execution-analytics** project, not a trading system.
   and test run with no network.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
-  enough for resting-depth, depth-imbalance, and spread analytics. It is not a
-  microsecond, full-precision book and carries no queue-position modelling.
+  enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
+  analytics. The `queue` metrics report the size resting at the touch, the
+  quantity that governs passive fill priority — but as a session average of that
+  size, **not** an order-by-order queue-position simulation (tracking one order's
+  place in the queue as it decays). It is not a microsecond, full-precision book.
 
 ## License
 

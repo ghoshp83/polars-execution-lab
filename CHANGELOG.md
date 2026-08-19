@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-08-19
+
+### Added
+- **Top-of-book queue-position metrics — `queue` / `queue_metrics`.** The `depth`
+  command sums resting size across *all* captured levels, which answers "how much
+  liquidity is standing" but not "how long is the line I'd join." Passive fill
+  priority is governed by the size at the **touch** alone: a maker joins the back
+  of the best-level queue and only fills once the size ahead of it trades through.
+  This release adds a distinct session summary — `avg_bid_queue` / `avg_ask_queue`
+  (mean resting size at the best bid / ask) and `avg_queue_imbalance`
+  (`(bid_queue - ask_queue) / (bid_queue + ask_queue)` in `[-1, 1]`, the
+  fill-priority signal: positive means a longer queue on the bid, so a passive bid
+  waits behind more size than a passive ask). Same two-stage Polars reduction as
+  `depth` — collapse each snapshot to its level-0 size per side, then average over
+  the window — in the Rust crate (`src/depth.rs`) and Python (`engine.py`), held
+  identical by a **seventh** cross-language equivalence test. A dedicated test in
+  both languages asserts the intent that separates queue from depth: a large
+  level-1 order that would dominate `depth` must leave the queue metrics
+  untouched. New `xexec queue` / `xexeclab queue` subcommands over the existing
+  `data/sample_book.ndjson` fixture.
+
+### Changed
+- Honest disclaimer updated: the reconstructed book now backs **top-of-book
+  queue-size** analytics, framed as a session average of touch size — explicitly
+  **not** an order-by-order queue-position simulation.
+
 ## [0.8.0] - 2026-08-06
 
 ### Added

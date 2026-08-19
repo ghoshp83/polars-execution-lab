@@ -1,4 +1,4 @@
-use xexec::depth::depth_metrics;
+use xexec::depth::{depth_metrics, queue_metrics};
 use xexec::model::BookLevel;
 use xexec::replay::read_book;
 
@@ -51,4 +51,42 @@ fn depth_imbalance_is_positive_when_the_bid_rests_heavier() {
 #[test]
 fn empty_book_is_rejected() {
     assert!(depth_metrics(&[], "BTC-USD").is_err());
+}
+
+#[test]
+fn queue_reports_the_touch_size_averaged_over_the_window() {
+    let levels = load();
+    let m = queue_metrics(&levels, "BTC-USD").unwrap();
+    // The five snapshots' best-bid sizes are 1.20/0.60/2.00/0.90/1.50 (mean 1.24)
+    // and best-ask 0.80/1.40/0.50/1.10/1.50 (mean 1.06); hand-checked.
+    assert_eq!(m.snapshots, 5);
+    assert!((m.avg_bid_queue - 1.24).abs() < 1e-9);
+    assert!((m.avg_ask_queue - 1.06).abs() < 1e-9);
+    // Per-snapshot imbalances 0.2/-0.4/0.6/-0.1/0.0 average to 0.06.
+    assert!((m.avg_queue_imbalance - 0.06).abs() < 1e-9);
+}
+
+#[test]
+fn queue_ignores_depth_below_the_touch() {
+    // Queue position is the size at level 0 ALONE: a huge level-1 bid that would
+    // dominate `depth_metrics` must not move the queue. Best bid 2.0 vs best ask
+    // 0.5 -> imbalance (2-0.5)/(2+0.5) = 0.6, regardless of the level-1 size.
+    let levels = vec![
+        bl(0, "bid", 0, 100.0, 2.0),
+        bl(0, "bid", 1, 99.5, 50.0),
+        bl(0, "ask", 0, 101.0, 0.5),
+    ];
+    let m = queue_metrics(&levels, "BTC-USD").unwrap();
+    assert_eq!(m.snapshots, 1);
+    assert!(
+        (m.avg_bid_queue - 2.0).abs() < 1e-9,
+        "touch size, not depth"
+    );
+    assert!((m.avg_ask_queue - 0.5).abs() < 1e-9);
+    assert!((m.avg_queue_imbalance - 0.6).abs() < 1e-9);
+}
+
+#[test]
+fn empty_book_is_rejected_by_queue() {
+    assert!(queue_metrics(&[], "BTC-USD").is_err());
 }

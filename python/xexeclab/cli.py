@@ -13,6 +13,7 @@ from .engine import (
     calibrate_impact_robust,
     depth_metrics,
     impact_curve,
+    queue_metrics,
     quote_metrics,
     read_book,
     read_calibration,
@@ -94,6 +95,12 @@ def cmd_depth(a: argparse.Namespace) -> None:
     df = read_book(a.input)
     product = df["product"][0] if df.height else a.product
     print(json.dumps(depth_metrics(df, product)))
+
+
+def cmd_queue(a: argparse.Namespace) -> None:
+    df = read_book(a.input)
+    product = df["product"][0] if df.height else a.product
+    print(json.dumps(queue_metrics(df, product)))
 
 
 def cmd_impact(a: argparse.Namespace) -> None:
@@ -310,6 +317,14 @@ def main(argv: list[str] | None = None) -> None:
     pd.add_argument("--input", required=True, help="book replay (.ndjson/.jsonl/.parquet)")
     pd.add_argument("--product", default="BTC-USD")
     pd.set_defaults(fn=cmd_depth)
+
+    pq = sub.add_parser(
+        "queue",
+        help="top-of-book queue-position (passive fill-priority) metrics over a book replay",
+    )
+    pq.add_argument("--input", required=True, help="book replay (.ndjson/.jsonl/.parquet)")
+    pq.add_argument("--product", default="BTC-USD")
+    pq.set_defaults(fn=cmd_queue)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"

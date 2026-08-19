@@ -16,6 +16,7 @@ from xexeclab.engine import (
     calibrate_impact_robust,
     depth_metrics,
     impact_curve,
+    queue_metrics,
     quote_metrics,
     read_book,
     read_calibration,
@@ -118,6 +119,28 @@ def test_rust_and_python_depth_metrics_are_identical():
     assert rust["avg_ask_depth"] == py["avg_ask_depth"]
     assert rust["avg_depth_imbalance"] == py["avg_depth_imbalance"]
     assert rust["avg_spread"] == py["avg_spread"]
+
+
+def test_rust_and_python_queue_metrics_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    proc = subprocess.run(
+        [binary, "queue", "--input", BOOK_SAMPLE],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    df = read_book(BOOK_SAMPLE)
+    py = queue_metrics(df, df["product"][0])
+
+    assert rust["snapshots"] == py["snapshots"]
+    assert rust["avg_bid_queue"] == py["avg_bid_queue"]
+    assert rust["avg_ask_queue"] == py["avg_ask_queue"]
+    assert rust["avg_queue_imbalance"] == py["avg_queue_imbalance"]
 
 
 def test_rust_and_python_impact_curves_are_identical():
