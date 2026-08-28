@@ -5,7 +5,8 @@
 Crypto trading desks measure execution the same way equities desks do: against
 **VWAP** and **TWAP** benchmarks, by **order-flow imbalance** (which side of the
 book drove the trades), by **top-of-book and L2 depth microstructure** (spread,
-microprice, resting depth, depth imbalance, top-of-book queue size), by the **market impact** a schedule
+microprice, resting depth, depth imbalance, top-of-book queue size, the cost of
+**sweeping** the book), by the **market impact** a schedule
 pays for the size it takes, and by **implementation shortfall** versus the price
 when the order arrived. This project builds that measurement
 engine over live crypto tick, quote, and order-book data — the aggregations and
@@ -108,6 +109,9 @@ uv run xexeclab depth   --input data/sample_book.ndjson
 
 # top-of-book queue position (touch size / fill-priority imbalance)
 uv run xexeclab queue   --input data/sample_book.ndjson
+
+# cost of sweeping a marketable order through the L2 book (realised VWAP / slippage)
+uv run xexeclab sweep   --input data/sample_book.ndjson --side buy --size 2.0
 
 # two-term Almgren-Chriss market-impact cost curve (temporary sqrt + permanent linear)
 uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10 --perm-coef-bps 5
@@ -235,7 +239,11 @@ This is a **market-data and execution-analytics** project, not a trading system.
   analytics. The `queue` metrics report the size resting at the touch, the
   quantity that governs passive fill priority — but as a session average of that
   size, **not** an order-by-order queue-position simulation (tracking one order's
-  place in the queue as it decays). It is not a microsecond, full-precision book.
+  place in the queue as it decays). The `sweep` cost walks the levels captured in
+  each snapshot and prices the fill against a **static** book: it does not model
+  the book replenishing, or other participants reacting, while the order executes,
+  so it is the cost of taking the visible liquidity, not a full execution
+  simulation. It is not a microsecond, full-precision book.
 
 ## License
 

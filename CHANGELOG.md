@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-08-28
+
+### Added
+- **Book-sweep cost -- `sweep` / `sweep_cost`.** `depth` answers "how much size is
+  standing" and `queue` answers "how long is the passive line"; neither prices a
+  **taker**. An order larger than the touch eats level 0, then level 1, then level
+  2, and its realised price is the size-weighted average of the levels it
+  consumed. That consumption cost is exactly what the Almgren-Chriss impact model
+  parameterises -- this release measures it **directly off the book** instead of
+  modelling it, so the two can be compared. `sweep_cost` walks each snapshot in
+  the order the taker meets it (asks cheapest first for a `buy`, bids dearest
+  first for a `sell`) using a Polars `cum_sum` window over `ts_ns` for the size
+  resting ahead of each level, allocates the order across levels, then prices the
+  fill against the touch it started from: `avg_sweep_vwap`, `avg_slippage_bps`
+  (signed so a larger number is always worse on either side), `avg_levels_consumed`,
+  `avg_fill_ratio`, and `filled_snapshots`. A book too thin to complete the order
+  reports the **short fill**, never a silent full one. Implemented in the Rust
+  crate (`src/sweep.rs`) and Python (`engine.py`), held identical by an **eighth**
+  cross-language equivalence test -- the first over a metric that depends on a
+  *within-snapshot* order, so a divergence in sort order or in the running total
+  would change the allocation itself. New `xexec sweep` / `xexeclab sweep`
+  subcommands (`--side`, `--size`) over the existing `data/sample_book.ndjson`
+  fixture.
+
+### Changed
+- Honest disclaimer updated: the sweep prices a **static** book -- it does not
+  model replenishment or other participants reacting while the order executes, so
+  it is the cost of taking the visible liquidity, not a full execution simulation.
+
 ## [0.9.0] - 2026-08-19
 
 ### Added
