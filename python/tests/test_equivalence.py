@@ -24,6 +24,7 @@ from xexeclab.engine import (
     read_quotes,
     read_ticks,
     summary,
+    sweep_cost,
 )
 
 pytestmark = pytest.mark.equivalence
@@ -35,6 +36,7 @@ IMPACT_SAMPLE = "data/sample_impact.ndjson"
 CALIBRATION_SAMPLE = "data/sample_calibration.ndjson"
 NOISY_CALIBRATION_SAMPLE = "data/sample_calibration_noisy.ndjson"
 HUBER_DELTA = 3.0
+SWEEP_SIZE = 2.0
 BUCKET_MS = 1000
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -141,6 +143,49 @@ def test_rust_and_python_queue_metrics_are_identical():
     assert rust["avg_bid_queue"] == py["avg_bid_queue"]
     assert rust["avg_ask_queue"] == py["avg_ask_queue"]
     assert rust["avg_queue_imbalance"] == py["avg_queue_imbalance"]
+
+
+def test_rust_and_python_sweep_costs_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The sweep is the first metric that depends on a *within-snapshot* order:
+    # a cumulative sum walking the levels the taker meets, so a divergence in
+    # sort order or in the running total would change the allocation and the
+    # realised price. Run a size that eats past the touch in every snapshot,
+    # so the walk is actually exercised rather than stopping at level 0.
+    proc = subprocess.run(
+        [binary, "sweep", "--input", BOOK_SAMPLE, "--side", "buy", "--size", str(SWEEP_SIZE)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    df = read_book(BOOK_SAMPLE)
+    py = sweep_cost(df, df["product"][0], "buy", SWEEP_SIZE)
+
+    assert rust["snapshots"] == py["snapshots"]
+    assert rust["filled_snapshots"] == py["filled_snapshots"]
+    assert rust["avg_sweep_vwap"] == py["avg_sweep_vwap"]
+    assert rust["avg_slippage_bps"] == py["avg_slippage_bps"]
+    assert rust["avg_levels_consumed"] == py["avg_levels_consumed"]
+    assert rust["avg_fill_ratio"] == py["avg_fill_ratio"]
+
+    # And the sell side too: it sorts the book the other way, so agreeing on a
+    # buy alone would leave half the walk unverified.
+    sell = json.loads(
+        subprocess.run(
+            [binary, "sweep", "--input", BOOK_SAMPLE, "--side", "sell", "--size", str(SWEEP_SIZE)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    py_sell = sweep_cost(df, df["product"][0], "sell", SWEEP_SIZE)
+    assert sell["avg_sweep_vwap"] == py_sell["avg_sweep_vwap"]
+    assert sell["avg_slippage_bps"] == py_sell["avg_slippage_bps"]
 
 
 def test_rust_and_python_impact_curves_are_identical():
