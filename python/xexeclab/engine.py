@@ -282,8 +282,9 @@ def sweep_cost(df: pl.DataFrame, product: str, side: str, order_size: float) -> 
     """
     if df.height == 0:
         raise ValueError("no book levels")
-    if not order_size > 0:
-        raise ValueError("order_size must be positive")
+    # NaN and infinity are rejected explicitly; the Rust side rejects the same set.
+    if not math.isfinite(order_size) or order_size <= 0:
+        raise ValueError("order_size must be a positive finite number")
     # The taker crosses the opposite side of the book.
     book_side = {"buy": "ask", "sell": "bid"}.get(side)
     if book_side is None:

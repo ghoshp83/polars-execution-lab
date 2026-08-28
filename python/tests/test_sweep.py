@@ -91,5 +91,10 @@ def test_bad_inputs_raise():
         sweep_cost(_book([]), "BTC-USD", "buy", 1.0)
     with pytest.raises(ValueError):
         sweep_cost(df, "BTC-USD", "buy", 0.0)
+    # A NaN or infinite size would otherwise poison every average silently.
+    with pytest.raises(ValueError):
+        sweep_cost(df, "BTC-USD", "buy", float("nan"))
+    with pytest.raises(ValueError):
+        sweep_cost(df, "BTC-USD", "buy", float("inf"))
     with pytest.raises(ValueError):
         sweep_cost(df, "BTC-USD", "sideways", 1.0)

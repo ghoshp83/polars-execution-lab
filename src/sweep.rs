@@ -60,8 +60,10 @@ pub fn sweep_cost(
     if levels.is_empty() {
         return Err(anyhow!("no book levels"));
     }
-    if !(order_size > 0.0) {
-        return Err(anyhow!("order_size must be positive"));
+    // Spelled out rather than negating `> 0.0`: NaN and infinity are rejected
+    // explicitly, and the Python side rejects exactly the same set.
+    if !order_size.is_finite() || order_size <= 0.0 {
+        return Err(anyhow!("order_size must be a positive finite number"));
     }
     // The taker crosses the opposite side of the book.
     let book_side = match side {

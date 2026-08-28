@@ -99,5 +99,8 @@ fn bad_inputs_are_rejected() {
     let levels = load();
     assert!(sweep_cost(&[], "BTC-USD", "buy", 1.0).is_err());
     assert!(sweep_cost(&levels, "BTC-USD", "buy", 0.0).is_err());
+    // A NaN or infinite size would otherwise poison every average silently.
+    assert!(sweep_cost(&levels, "BTC-USD", "buy", f64::NAN).is_err());
+    assert!(sweep_cost(&levels, "BTC-USD", "buy", f64::INFINITY).is_err());
     assert!(sweep_cost(&levels, "BTC-USD", "sideways", 1.0).is_err());
 }
