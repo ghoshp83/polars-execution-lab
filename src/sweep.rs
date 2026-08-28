@@ -132,7 +132,9 @@ pub fn sweep_cost(
             vwap.mean().alias("avg_sweep_vwap"),
             slippage_bps.mean().alias("avg_slippage_bps"),
             col("levels_consumed").mean().alias("avg_levels_consumed"),
-            (col("filled") / lit(order_size)).mean().alias("avg_fill_ratio"),
+            (col("filled") / lit(order_size))
+                .mean()
+                .alias("avg_fill_ratio"),
             // 1e-9 absorbs float-sum noise: a book that exactly covers the
             // order must count as filled, not miss by an ulp.
             col("filled")

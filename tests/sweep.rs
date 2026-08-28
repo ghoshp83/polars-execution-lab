@@ -49,7 +49,11 @@ fn slippage_grows_with_order_size() {
     let levels = load();
     let costs: Vec<f64> = [0.4, 1.0, 2.0, 3.0]
         .iter()
-        .map(|q| sweep_cost(&levels, "BTC-USD", "buy", *q).unwrap().avg_slippage_bps)
+        .map(|q| {
+            sweep_cost(&levels, "BTC-USD", "buy", *q)
+                .unwrap()
+                .avg_slippage_bps
+        })
         .collect();
     assert!(costs.windows(2).all(|w| w[0] <= w[1]), "{costs:?}");
     assert!(costs[3] > costs[0]);
