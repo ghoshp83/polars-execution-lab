@@ -269,6 +269,75 @@ def queue_metrics(df: pl.DataFrame, product: str) -> dict:
     }
 
 
+def sweep_cost(df: pl.DataFrame, product: str, side: str, order_size: float) -> dict:
+    """Session book-sweep cost for a marketable order, rounded to match Rust.
+
+    Stage 1 walks each snapshot's book in the order a taker meets it -- asks
+    cheapest first for a ``buy``, bids dearest first for a ``sell`` -- allocating
+    the order across levels via a running total of the size ahead of each level;
+    stage 2 prices each sweep against the touch it started from and averages over
+    the window. Mirrors the Rust ``sweep_cost`` expression for expression -- the
+    sorts fix the consumption order so the means are bit-identical. See the Rust
+    ``SweepSummary`` doc for the field meanings.
+    """
+    if df.height == 0:
+        raise ValueError("no book levels")
+    if not order_size > 0:
+        raise ValueError("order_size must be positive")
+    # The taker crosses the opposite side of the book.
+    book_side = {"buy": "ask", "sell": "bid"}.get(side)
+    if book_side is None:
+        raise ValueError(f"side must be buy or sell, got {side}")
+
+    cum_before = pl.col("size").cum_sum().over("ts_ns") - pl.col("size")
+    remaining = order_size - cum_before
+    alloc = (
+        pl.when(remaining <= 0)
+        .then(0.0)
+        .otherwise(pl.when(remaining < pl.col("size")).then(remaining).otherwise(pl.col("size")))
+        .alias("alloc")
+    )
+    per_snap = (
+        df.filter(pl.col("side") == book_side)
+        .sort(["ts_ns", "price"], descending=[False, side == "sell"])
+        .with_columns(alloc)
+        .group_by("ts_ns")
+        .agg(
+            (pl.col("alloc") * pl.col("price")).sum().alias("notional"),
+            pl.col("alloc").sum().alias("filled"),
+            (pl.col("alloc") > 0).sum().cast(pl.Float64).alias("levels_consumed"),
+            pl.col("price").first().alias("touch"),
+        )
+        .sort("ts_ns")
+    )
+    vwap = pl.col("notional") / pl.col("filled")
+    touch = pl.col("touch")
+    # Signed so a larger number is always worse for the taker on either side.
+    slippage_bps = (
+        (vwap - touch) / touch * 10_000.0 if side == "buy" else (touch - vwap) / touch * 10_000.0
+    )
+    row = per_snap.select(
+        vwap.mean().alias("avg_sweep_vwap"),
+        slippage_bps.mean().alias("avg_slippage_bps"),
+        pl.col("levels_consumed").mean().alias("avg_levels_consumed"),
+        (pl.col("filled") / order_size).mean().alias("avg_fill_ratio"),
+        # 1e-9 absorbs float-sum noise: a book that exactly covers the order
+        # must count as filled, not miss by an ulp.
+        (pl.col("filled") >= order_size - 1e-9).sum().alias("filled_snapshots"),
+    )
+    return {
+        "product": product,
+        "side": side,
+        "order_size": order_size,
+        "snapshots": per_snap.height,
+        "filled_snapshots": int(row["filled_snapshots"][0]),
+        "avg_sweep_vwap": _r8(row["avg_sweep_vwap"][0]),
+        "avg_slippage_bps": _r8(row["avg_slippage_bps"][0]),
+        "avg_levels_consumed": _r8(row["avg_levels_consumed"][0]),
+        "avg_fill_ratio": _r8(row["avg_fill_ratio"][0]),
+    }
+
+
 def impact_curve(
     df: pl.DataFrame, product: str, coef_bps: float, perm_coef_bps: float = 0.0
 ) -> dict:
