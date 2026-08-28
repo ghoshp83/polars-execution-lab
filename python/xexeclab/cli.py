@@ -23,6 +23,7 @@ from .engine import (
     session_twap,
     session_vwap,
     summary,
+    sweep_cost,
     write_ticks,
 )
 from .events import EventLog
@@ -101,6 +102,12 @@ def cmd_queue(a: argparse.Namespace) -> None:
     df = read_book(a.input)
     product = df["product"][0] if df.height else a.product
     print(json.dumps(queue_metrics(df, product)))
+
+
+def cmd_sweep(a: argparse.Namespace) -> None:
+    df = read_book(a.input)
+    product = df["product"][0] if df.height else a.product
+    print(json.dumps(sweep_cost(df, product, a.side, a.size)))
 
 
 def cmd_impact(a: argparse.Namespace) -> None:
@@ -325,6 +332,18 @@ def main(argv: list[str] | None = None) -> None:
     pq.add_argument("--input", required=True, help="book replay (.ndjson/.jsonl/.parquet)")
     pq.add_argument("--product", default="BTC-USD")
     pq.set_defaults(fn=cmd_queue)
+
+    psw = sub.add_parser(
+        "sweep",
+        help="cost of sweeping a marketable order through the L2 book",
+    )
+    psw.add_argument("--input", required=True, help="book replay (.ndjson/.jsonl/.parquet)")
+    psw.add_argument(
+        "--side", choices=("buy", "sell"), default="buy", help="taker side: buy sweeps the asks"
+    )
+    psw.add_argument("--size", type=float, default=1.0, help="order size in base units")
+    psw.add_argument("--product", default="BTC-USD")
+    psw.set_defaults(fn=cmd_sweep)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"

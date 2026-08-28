@@ -5,6 +5,7 @@ use xexec::execution::{bars, session_twap, session_vwap, summary};
 use xexec::impact::impact_curve;
 use xexec::quote::quote_metrics;
 use xexec::replay::{read_book, read_calibration, read_impact, read_quotes, read_ticks};
+use xexec::sweep::sweep_cost;
 
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
@@ -14,7 +15,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|impact|calibrate> --input <ndjson> [--bucket-ms N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|impact|calibrate> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -64,6 +65,26 @@ fn main() -> Result<()> {
         println!(
             "{}",
             serde_json::to_string(&queue_metrics(&levels, &product)?)?
+        );
+        return Ok(());
+    }
+
+    // `sweep` reads the L2 book-level schema and prices a marketable order
+    // against the resting levels it would have to consume.
+    if cmd == "sweep" {
+        let side = arg_value(&args, "--side").unwrap_or_else(|| "buy".to_string());
+        let size: f64 = arg_value(&args, "--size")
+            .map(|s| s.parse())
+            .transpose()?
+            .unwrap_or(1.0);
+        let levels = read_book(&input)?;
+        if levels.is_empty() {
+            return Err(anyhow!("no book levels in {input}"));
+        }
+        let product = levels[0].product.clone();
+        println!(
+            "{}",
+            serde_json::to_string(&sweep_cost(&levels, &product, &side, size)?)?
         );
         return Ok(());
     }
