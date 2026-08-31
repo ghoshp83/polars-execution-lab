@@ -25,6 +25,7 @@ from xexeclab.engine import (
     read_ticks,
     summary,
     sweep_cost,
+    sweep_curve,
 )
 
 pytestmark = pytest.mark.equivalence
@@ -37,6 +38,7 @@ CALIBRATION_SAMPLE = "data/sample_calibration.ndjson"
 NOISY_CALIBRATION_SAMPLE = "data/sample_calibration_noisy.ndjson"
 HUBER_DELTA = 3.0
 SWEEP_SIZE = 2.0
+CURVE_SIZES = [0.5, 1.0, 2.0, 3.0, 10.0]
 BUCKET_MS = 1000
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -186,6 +188,52 @@ def test_rust_and_python_sweep_costs_are_identical():
     py_sell = sweep_cost(df, df["product"][0], "sell", SWEEP_SIZE)
     assert sell["avg_sweep_vwap"] == py_sell["avg_sweep_vwap"]
     assert sell["avg_slippage_bps"] == py_sell["avg_slippage_bps"]
+
+
+def test_rust_and_python_sweep_curves_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The deepest test of the shared engine so far: a ladder of sweeps (each a
+    # full book walk), a participation denominator from a separate aggregation,
+    # a filter that drops the short fills, and a least-squares solve on top. A
+    # divergence anywhere in that chain -- one differently-ordered sum, one
+    # point admitted to or dropped from the fit -- moves the coefficient. The
+    # ladder deliberately includes sizes the fixture book cannot fill, so the
+    # exclusion rule itself is compared, not just the arithmetic.
+    proc = subprocess.run(
+        [
+            binary,
+            "curve",
+            "--input",
+            BOOK_SAMPLE,
+            "--side",
+            "buy",
+            "--sizes",
+            ",".join(str(q) for q in CURVE_SIZES),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    df = read_book(BOOK_SAMPLE)
+    py = sweep_curve(df, df["product"][0], "buy", CURVE_SIZES)
+
+    assert rust["snapshots"] == py["snapshots"]
+    assert rust["avg_depth"] == py["avg_depth"]
+    assert rust["points"] == py["points"]
+    assert rust["fitted_points"] == py["fitted_points"]
+    assert rust["coef_bps"] == py["coef_bps"]
+    assert rust["rmse_bps"] == py["rmse_bps"]
+    assert rust["r_squared"] == py["r_squared"]
+    assert rust["curve"] == py["curve"]
+
+    # Some point in the ladder must have been excluded, or the exclusion rule
+    # agreed only vacuously.
+    assert rust["fitted_points"] < rust["points"]
 
 
 def test_rust_and_python_impact_curves_are_identical():
