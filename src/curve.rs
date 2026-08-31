@@ -100,7 +100,9 @@ pub fn sweep_curve(
     // Validate before sorting: a NaN has no order, so it must be rejected here
     // rather than corrupting the ladder. `sweep_cost` rejects the same set.
     if let Some(bad) = sizes.iter().find(|q| !q.is_finite() || **q <= 0.0) {
-        return Err(anyhow!("order sizes must be positive finite numbers, got {bad}"));
+        return Err(anyhow!(
+            "order sizes must be positive finite numbers, got {bad}"
+        ));
     }
     let mut ladder = sizes.to_vec();
     ladder.sort_by(|a, b| a.partial_cmp(b).expect("sizes are validated finite above"));
@@ -125,7 +127,10 @@ pub fn sweep_curve(
     .group_by([col("ts_ns")])
     .agg([col("size").sum().alias("depth")])
     .sort_by_exprs([col("ts_ns")], SortMultipleOptions::default())
-    .select([col("depth").mean().alias("avg_depth"), col("depth").count().alias("snapshots")])
+    .select([
+        col("depth").mean().alias("avg_depth"),
+        col("depth").count().alias("snapshots"),
+    ])
     .collect()?;
     let avg_depth = depth
         .column("avg_depth")?
@@ -165,7 +170,9 @@ pub fn sweep_curve(
     .select([
         (col("x") * col("x")).sum().alias("sxx"),
         (col("x") * col("measured_bps")).sum().alias("sxy"),
-        (col("measured_bps") * col("measured_bps")).sum().alias("syy"),
+        (col("measured_bps") * col("measured_bps"))
+            .sum()
+            .alias("syy"),
         col("measured_bps").sum().alias("sy"),
         col("measured_bps").count().alias("n"),
     ])
@@ -189,7 +196,9 @@ pub fn sweep_curve(
     let sy = g("sy")?;
     let n = fitted_points as f64;
     if sxx <= 0.0 {
-        return Err(anyhow!("degenerate ladder: every participation rate is zero"));
+        return Err(anyhow!(
+            "degenerate ladder: every participation rate is zero"
+        ));
     }
     let coef = sxy / sxx;
 
