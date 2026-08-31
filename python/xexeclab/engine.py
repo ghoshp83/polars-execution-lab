@@ -339,6 +339,138 @@ def sweep_cost(df: pl.DataFrame, product: str, side: str, order_size: float) -> 
     }
 
 
+def sweep_curve(df: pl.DataFrame, product: str, side: str, sizes: list[float]) -> dict:
+    """Fit the square-root impact law to the book's own sweep costs.
+
+    ``calibrate_impact`` recovers the impact coefficients from a desk's realised
+    fills; this recovers the temporary coefficient from an L2 capture alone, for
+    the venue or product where no fills exist yet. Each size in the ladder is
+    swept through the book by :func:`sweep_cost`, expressed against the mean
+    resting depth as a participation rate, and the concave law
+    ``measured_bps = coef_bps * sqrt(participation)`` is fitted through the
+    origin over the fully-filled points. A size the book cannot fill has an
+    understated cost, so it is reported with its short ``fill_ratio`` but
+    excluded from the fit. Mirrors the Rust ``sweep_curve`` operation for
+    operation -- the sort fixes the summation order so the recovered
+    coefficients are bit-identical. See the Rust ``SweepCurveSummary`` doc for
+    the field meanings.
+    """
+    if df.height == 0:
+        raise ValueError("no book levels")
+    if len(sizes) < 2:
+        raise ValueError("need at least two order sizes to fit a curve")
+    # The taker crosses the opposite side of the book; sweep_cost validates the
+    # side too, but the depth denominator below needs it up front.
+    book_side = {"buy": "ask", "sell": "bid"}.get(side)
+    if book_side is None:
+        raise ValueError(f"side must be buy or sell, got {side}")
+    # Validate before sorting: a NaN has no order, so it must be rejected here
+    # rather than corrupting the ladder. sweep_cost rejects the same set.
+    for q in sizes:
+        if not math.isfinite(q) or q <= 0:
+            raise ValueError(f"order sizes must be positive finite numbers, got {q}")
+    ladder = sorted(float(q) for q in sizes)
+    for a, b in zip(ladder, ladder[1:], strict=False):
+        if a == b:
+            raise ValueError(f"duplicate order size {a}")
+
+    # Mean resting size per snapshot on the swept side: the denominator that
+    # turns an absolute order size into a participation rate.
+    depth = (
+        df.filter(pl.col("side") == book_side)
+        .group_by("ts_ns")
+        .agg(pl.col("size").sum().alias("depth"))
+        .sort("ts_ns")
+        .select(
+            pl.col("depth").mean().alias("avg_depth"),
+            pl.col("depth").count().alias("snapshots"),
+        )
+    )
+    avg_depth = depth["avg_depth"][0]
+    if avg_depth is None:
+        raise ValueError(f"no levels on the {book_side} side")
+    snapshots = int(depth["snapshots"][0])
+
+    # Sweep the book once per ladder rung. Each rung is a full walk of every
+    # snapshot, so the measured cost is the book's own answer, not a model's.
+    swept = [sweep_cost(df, product, side, q) for q in ladder]
+    participation = [q / avg_depth for q in ladder]
+    measured_bps = [m["avg_slippage_bps"] for m in swept]
+    fill_ratio = [m["avg_fill_ratio"] for m in swept]
+
+    # Sufficient statistics for the origin-through fit of y on the single
+    # regressor x = sqrt(participation), over the fully-filled points only. The
+    # 1e-9 matches the fill tolerance sweep_cost uses.
+    stats = (
+        pl.DataFrame(
+            {
+                "order_size": ladder,
+                "participation": participation,
+                "measured_bps": measured_bps,
+                "fill_ratio": fill_ratio,
+            }
+        )
+        .sort("order_size")
+        .filter(pl.col("fill_ratio") >= 1.0 - 1e-9)
+        .with_columns(pl.col("participation").sqrt().alias("x"))
+        .select(
+            (pl.col("x") * pl.col("x")).sum().alias("sxx"),
+            (pl.col("x") * pl.col("measured_bps")).sum().alias("sxy"),
+            (pl.col("measured_bps") * pl.col("measured_bps")).sum().alias("syy"),
+            pl.col("measured_bps").sum().alias("sy"),
+            pl.col("measured_bps").count().alias("n"),
+        )
+    )
+    fitted_points = int(stats["n"][0])
+    if fitted_points < 2:
+        raise ValueError(
+            "need at least two fully-filled order sizes to fit the curve; "
+            "the book is too thin for this ladder"
+        )
+    sxx = stats["sxx"][0]
+    sxy = stats["sxy"][0]
+    syy = stats["syy"][0]
+    sy = stats["sy"][0]
+    n = float(fitted_points)
+    if sxx <= 0:
+        raise ValueError("degenerate ladder: every participation rate is zero")
+    coef = sxy / sxx
+
+    ss_res_raw = syy - 2.0 * coef * sxy + coef * coef * sxx
+    ss_res = ss_res_raw if ss_res_raw > 0 else 0.0
+    ybar = sy / n
+    ss_tot = syy - n * ybar * ybar
+    rmse = math.sqrt(ss_res / n)
+    r_squared = 0.0 if ss_tot == 0 else 1.0 - ss_res / ss_tot
+
+    curve = []
+    for q, part, meas, fill in zip(ladder, participation, measured_bps, fill_ratio, strict=True):
+        modelled = coef * math.sqrt(part)
+        curve.append(
+            {
+                "order_size": q,
+                "participation": _r8(part),
+                "measured_bps": _r8(meas),
+                "modelled_bps": _r8(modelled),
+                "residual_bps": _r8(meas - modelled),
+                "fill_ratio": _r8(fill),
+                "fitted": fill >= 1.0 - 1e-9,
+            }
+        )
+    return {
+        "product": product,
+        "side": side,
+        "snapshots": snapshots,
+        "avg_depth": _r8(avg_depth),
+        "points": len(ladder),
+        "fitted_points": fitted_points,
+        "coef_bps": _r8(coef),
+        "rmse_bps": _r8(rmse),
+        "r_squared": _r8(r_squared),
+        "curve": curve,
+    }
+
+
 def impact_curve(
     df: pl.DataFrame, product: str, coef_bps: float, perm_coef_bps: float = 0.0
 ) -> dict:
