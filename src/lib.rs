@@ -7,6 +7,7 @@
 //! two languages" claim is verified, not asserted.
 
 pub mod calibrate;
+pub mod curve;
 pub mod depth;
 pub mod execution;
 pub mod impact;
