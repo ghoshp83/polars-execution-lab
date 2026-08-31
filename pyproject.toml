@@ -1,6 +1,6 @@
 [project]
 name = "polars-execution-lab"
-version = "0.10.0"
+version = "0.11.0"
 description = "Execution-analytics engine over crypto tick data: the same Polars engine in Rust and Python."
 readme = "README.md"
 requires-python = ">=3.11"

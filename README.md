@@ -6,9 +6,9 @@ Crypto trading desks measure execution the same way equities desks do: against
 **VWAP** and **TWAP** benchmarks, by **order-flow imbalance** (which side of the
 book drove the trades), by **top-of-book and L2 depth microstructure** (spread,
 microprice, resting depth, depth imbalance, top-of-book queue size, the cost of
-**sweeping** the book), by the **market impact** a schedule
-pays for the size it takes, and by **implementation shortfall** versus the price
-when the order arrived. This project builds that measurement
+**sweeping** the book, and the impact coefficient the book's own sweep costs
+imply), by the **market impact** a schedule pays for the size it takes, and by
+**implementation shortfall** versus the price when the order arrived. This project builds that measurement
 engine over live crypto tick, quote, and order-book data — the aggregations and
 benchmarks are expressed **once** with
 the [Polars](https://pola.rs) query engine and executed **natively in Rust** (the
@@ -66,6 +66,10 @@ flowchart LR
     PY --> DEPTH
     RUST --> QUEUE[Queue position<br/>touch size / fill-priority imbalance]
     PY --> QUEUE
+    RUST --> SWEEP[Book sweep<br/>taker VWAP / slippage / fill ratio]
+    PY --> SWEEP
+    RUST --> CURVE[Sweep cost curve<br/>impact coefficient fitted from the book]
+    PY --> CURVE
     RUST --> IMPACT[Market-impact curve<br/>Almgren-Chriss temporary + permanent]
     PY --> IMPACT
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
@@ -75,6 +79,8 @@ flowchart LR
     BENCH -.->|assert identical| EQ{{Cross-language<br/>equivalence test}}
     BOOK -.->|assert identical| EQ
     DEPTH -.->|assert identical| EQ
+    SWEEP -.->|assert identical| EQ
+    CURVE -.->|assert identical| EQ
     IMPACT -.->|assert identical| EQ
     CALIB -.->|assert identical| EQ
 
@@ -112,6 +118,9 @@ uv run xexeclab queue   --input data/sample_book.ndjson
 
 # cost of sweeping a marketable order through the L2 book (realised VWAP / slippage)
 uv run xexeclab sweep   --input data/sample_book.ndjson --side buy --size 2.0
+
+# fit the impact coefficient to the book's own sweep costs across a size ladder
+uv run xexeclab curve   --input data/sample_book.ndjson --side buy --sizes 0.5,1.0,2.0,3.0
 
 # two-term Almgren-Chriss market-impact cost curve (temporary sqrt + permanent linear)
 uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10 --perm-coef-bps 5
@@ -244,6 +253,16 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the book replenishing, or other participants reacting, while the order executes,
   so it is the cost of taking the visible liquidity, not a full execution
   simulation. It is not a microsecond, full-precision book.
+- **`xexeclab curve` fits the impact coefficient from the book alone** — the
+  ladder of sweep costs regressed onto `sqrt(participation)` — which is what you
+  reach for when a venue or product has no realised fills to calibrate against.
+  It inherits every limitation of the sweep above: it is the *visible, static*
+  book's cost, so it measures what liquidity is showing, not what would actually
+  refill during a real execution. Sizes the capture cannot fill are reported with
+  their short `fill_ratio` and **excluded from the fit** rather than dragging the
+  coefficient down, and `r_squared` with the per-point `residual_bps` says
+  plainly how well the square-root law describes that book — a low `r_squared`
+  means the coefficient is a poor summary of it, not that the book is wrong.
 
 ## License
 

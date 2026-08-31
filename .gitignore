@@ -27,3 +27,9 @@ build/
 docs/decisions.md
 docs/progress.md
 docs/USER_GUIDE.md
+
+# workspace-only session state and tooling config (never published)
+.claude/
+
+# uv resolution lock: not published; the pinned deps live in pyproject.toml
+uv.lock

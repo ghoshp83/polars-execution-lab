@@ -4,6 +4,40 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] - 2026-08-31
+
+### Added
+- **Impact calibration from the book alone -- `curve` / `sweep_curve`.**
+  `calibrate` fits the Almgren-Chriss coefficients from a desk's own realised
+  fills. A new venue, a new product, or a pre-trade "what would this cost us
+  here?" question has no fills to fit. This release recovers the temporary
+  coefficient from an L2 capture alone: a ladder of order sizes is swept through
+  the book by `sweep_cost`, each cost is expressed against the mean resting depth
+  on the swept side as a participation rate, and the concave law
+  `measured_bps = coef_bps * sqrt(participation)` is fitted through the origin
+  over those points. The summary reports `coef_bps`, `rmse_bps`, `r_squared`,
+  `avg_depth`, and the whole `curve` -- every rung with its `participation`,
+  `measured_bps`, the fitted `modelled_bps`, and the `residual_bps` between them.
+  So the fit **tests** the square-root law rather than assuming it: a book that
+  charges a different shape shows up as a low `r_squared` and a visible residual
+  pattern instead of being averaged away. A size the captured book cannot fill
+  paid only for the liquidity that was there, so it is reported with its short
+  `fill_ratio` and **excluded from the fit**, never quietly regressed. Implemented
+  in the Rust crate (`src/curve.rs`) and Python (`engine.py`), held identical by a
+  **ninth** cross-language equivalence test -- the deepest yet: a ladder of full
+  book walks, a separate depth aggregation, a filter that drops the short fills,
+  and a least-squares solve on top, any of which would move the coefficient if the
+  two engines diverged. New `xexec curve` / `xexeclab curve` subcommands
+  (`--side`, `--sizes`) over the existing `data/sample_book.ndjson` fixture.
+
+### Changed
+- README architecture diagram now shows the `sweep` and `curve` stages, which the
+  book-sweep release left out.
+- Honest disclaimer updated: the fitted coefficient inherits the sweep's static
+  book -- it measures what liquidity is *showing*, not what would refill during a
+  real execution -- and a low `r_squared` means the single coefficient is a poor
+  summary of that book, not that the book is wrong.
+
 ## [0.10.0] - 2026-08-28
 
 ### Added
