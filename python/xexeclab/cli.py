@@ -24,6 +24,7 @@ from .engine import (
     session_vwap,
     summary,
     sweep_cost,
+    sweep_curve,
     write_ticks,
 )
 from .events import EventLog
@@ -108,6 +109,13 @@ def cmd_sweep(a: argparse.Namespace) -> None:
     df = read_book(a.input)
     product = df["product"][0] if df.height else a.product
     print(json.dumps(sweep_cost(df, product, a.side, a.size)))
+
+
+def cmd_curve(a: argparse.Namespace) -> None:
+    df = read_book(a.input)
+    product = df["product"][0] if df.height else a.product
+    sizes = [float(s) for s in a.sizes.split(",")]
+    print(json.dumps(sweep_curve(df, product, a.side, sizes)))
 
 
 def cmd_impact(a: argparse.Namespace) -> None:
@@ -344,6 +352,20 @@ def main(argv: list[str] | None = None) -> None:
     psw.add_argument("--size", type=float, default=1.0, help="order size in base units")
     psw.add_argument("--product", default="BTC-USD")
     psw.set_defaults(fn=cmd_sweep)
+
+    pcv = sub.add_parser(
+        "curve",
+        help="fit the impact coefficient to the book's own sweep costs across a size ladder",
+    )
+    pcv.add_argument("--input", required=True, help="book replay (.ndjson/.jsonl/.parquet)")
+    pcv.add_argument(
+        "--side", choices=("buy", "sell"), default="buy", help="taker side: buy sweeps the asks"
+    )
+    pcv.add_argument(
+        "--sizes", default="0.5,1.0,2.0", help="comma-separated order-size ladder in base units"
+    )
+    pcv.add_argument("--product", default="BTC-USD")
+    pcv.set_defaults(fn=cmd_curve)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"

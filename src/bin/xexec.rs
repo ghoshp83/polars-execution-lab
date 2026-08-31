@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use xexec::calibrate::{calibrate_impact, calibrate_impact_robust};
+use xexec::curve::sweep_curve;
 use xexec::depth::{depth_metrics, queue_metrics};
 use xexec::execution::{bars, session_twap, session_vwap, summary};
 use xexec::impact::impact_curve;
@@ -15,7 +16,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|impact|calibrate> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -85,6 +86,27 @@ fn main() -> Result<()> {
         println!(
             "{}",
             serde_json::to_string(&sweep_cost(&levels, &product, &side, size)?)?
+        );
+        return Ok(());
+    }
+
+    // `curve` sweeps the book at a ladder of sizes and fits the impact
+    // coefficient to the costs the book itself charges.
+    if cmd == "curve" {
+        let side = arg_value(&args, "--side").unwrap_or_else(|| "buy".to_string());
+        let sizes: Vec<f64> = arg_value(&args, "--sizes")
+            .unwrap_or_else(|| "0.5,1.0,2.0".to_string())
+            .split(',')
+            .map(|s| s.trim().parse::<f64>())
+            .collect::<Result<_, _>>()?;
+        let levels = read_book(&input)?;
+        if levels.is_empty() {
+            return Err(anyhow!("no book levels in {input}"));
+        }
+        let product = levels[0].product.clone();
+        println!(
+            "{}",
+            serde_json::to_string(&sweep_curve(&levels, &product, &side, &sizes)?)?
         );
         return Ok(());
     }
