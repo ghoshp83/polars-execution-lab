@@ -471,6 +471,158 @@ def sweep_curve(df: pl.DataFrame, product: str, side: str, sizes: list[float]) -
     }
 
 
+# The urgency grid the optimiser searches: 0.0 to 4.0 in steps of 0.1, so index
+# 0 is exactly a TWAP. Fixed rather than adaptive because the chosen point must
+# be identical in both engines.
+_URGENCY_STEPS = 41
+
+
+def _plan_schedule(
+    slices: int,
+    total_size: float,
+    per_slice_volume: float,
+    coef_bps: float,
+    perm_coef_bps: float,
+    sigma_bps: float,
+    urgency: float,
+) -> dict:
+    """Build and price the exponential-front-load trajectory for one urgency.
+
+    Mirrors the Rust ``plan`` in ``src/schedule.rs`` operation for operation,
+    including the sort that fixes the summation order.
+    """
+    n = float(slices)
+    frame = (
+        pl.DataFrame({"slice": list(range(slices))}, schema={"slice": pl.Int64})
+        .sort("slice")
+        .with_columns((-urgency * pl.col("slice").cast(pl.Float64) / n).exp().alias("raw"))
+        .with_columns((pl.col("raw") / pl.col("raw").sum()).alias("weight"))
+        .with_columns((pl.col("weight") * total_size).alias("size"))
+        .with_columns((pl.col("size") / per_slice_volume).alias("participation"))
+        .with_columns(
+            (pl.col("participation").sqrt() * coef_bps * pl.col("weight")).alias("temp_bps"),
+            (pl.col("participation") * perm_coef_bps * pl.col("weight")).alias("perm_bps"),
+            (1.0 - pl.col("weight").cum_sum()).alias("remaining"),
+        )
+    )
+    totals = frame.select(
+        pl.col("temp_bps").sum().alias("temp"),
+        pl.col("perm_bps").sum().alias("perm"),
+        (pl.col("remaining") * pl.col("remaining")).sum().alias("var"),
+        pl.col("participation").max().alias("max_participation"),
+    )
+    impact_bps = totals["temp"][0] + totals["perm"][0]
+    risk_bps = sigma_bps * math.sqrt(totals["var"][0] / n)
+    return {
+        "weight": frame["weight"].to_list(),
+        "size": frame["size"].to_list(),
+        "participation": frame["participation"].to_list(),
+        "temp_bps": frame["temp_bps"].to_list(),
+        "perm_bps": frame["perm_bps"].to_list(),
+        "remaining": frame["remaining"].to_list(),
+        "impact_bps": impact_bps,
+        "risk_bps": risk_bps,
+        "total_bps": impact_bps + risk_bps,
+        "max_participation": totals["max_participation"][0],
+    }
+
+
+def optimal_schedule(
+    product: str,
+    slices: int,
+    total_size: float,
+    per_slice_volume: float,
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+    sigma_bps: float = 0.0,
+) -> dict:
+    """Search the urgency grid for the cheapest execution trajectory.
+
+    The rest of the engine measures, calibrates and prices a schedule someone
+    else chose; this one chooses it. A candidate is an exponential front-load
+    with urgency ``k`` -- slice ``i`` of ``n`` weighted by ``exp(-k * i / n)``,
+    normalised to sum to one, so ``k = 0`` is exactly a TWAP. Each is priced
+    with the same two-term impact model the rest of the repo uses plus the
+    Almgren-Chriss timing-risk term ``sigma_bps * sqrt(mean(remaining^2))``, and
+    the urgency minimising the sum wins. Mirrors the Rust ``optimal_schedule``
+    operation for operation, including the rounding of the objective and the
+    first-wins tie-break. See the Rust ``ScheduleSummary`` doc for the field
+    meanings.
+    """
+    if slices < 1:
+        raise ValueError("need at least one slice")
+    for name, v in (("total_size", total_size), ("per_slice_volume", per_slice_volume)):
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError(f"{name} must be a positive finite number, got {v}")
+    for name, v in (
+        ("coef_bps", coef_bps),
+        ("perm_coef_bps", perm_coef_bps),
+        ("sigma_bps", sigma_bps),
+    ):
+        if not math.isfinite(v) or v < 0:
+            raise ValueError(f"{name} must be a non-negative finite number, got {v}")
+
+    args = (slices, total_size, per_slice_volume, coef_bps, perm_coef_bps, sigma_bps)
+    twap = _plan_schedule(*args, 0.0)
+    # A schedule that cannot be traded is not a cheap schedule. The TWAP is the
+    # flattest candidate on the grid, so if even it overruns the interval's
+    # volume no urgency can fit and the caller must reslice.
+    if twap["max_participation"] > 1.0:
+        raise ValueError(
+            f"a uniform schedule takes {twap['max_participation']:.4f} of the volume "
+            "available per slice; use more slices or a smaller order"
+        )
+
+    # First-wins on a tie over an ascending grid, so the least urgent schedule
+    # is preferred when two are priced the same to 8dp.
+    best = twap
+    best_urgency = 0.0
+    best_score = _r8(best["total_bps"])
+    for step in range(1, _URGENCY_STEPS):
+        urgency = step / 10.0
+        cand = _plan_schedule(*args, urgency)
+        # Front-loading past what the interval can absorb is infeasible, not
+        # free: such candidates are skipped rather than silently clipped.
+        if cand["max_participation"] > 1.0:
+            continue
+        score = _r8(cand["total_bps"])
+        if score < best_score:
+            best_score = score
+            best_urgency = urgency
+            best = cand
+
+    schedule = [
+        {
+            "slice": i,
+            "weight": _r8(best["weight"][i]),
+            "size": _r8(best["size"][i]),
+            "participation": _r8(best["participation"][i]),
+            "temp_bps": _r8(best["temp_bps"][i]),
+            "perm_bps": _r8(best["perm_bps"][i]),
+            "remaining": _r8(best["remaining"][i]),
+        }
+        for i in range(slices)
+    ]
+    return {
+        "product": product,
+        "slices": slices,
+        "total_size": _r8(total_size),
+        "per_slice_volume": _r8(per_slice_volume),
+        "coef_bps": _r8(coef_bps),
+        "perm_coef_bps": _r8(perm_coef_bps),
+        "sigma_bps": _r8(sigma_bps),
+        "urgency": _r8(best_urgency),
+        "impact_bps": _r8(best["impact_bps"]),
+        "risk_bps": _r8(best["risk_bps"]),
+        "total_bps": _r8(best["total_bps"]),
+        "twap_impact_bps": _r8(twap["impact_bps"]),
+        "twap_risk_bps": _r8(twap["risk_bps"]),
+        "twap_total_bps": _r8(twap["total_bps"]),
+        "saving_bps": _r8(twap["total_bps"] - best["total_bps"]),
+        "schedule": schedule,
+    }
+
+
 def impact_curve(
     df: pl.DataFrame, product: str, coef_bps: float, perm_coef_bps: float = 0.0
 ) -> dict:
