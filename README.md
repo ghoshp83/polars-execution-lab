@@ -7,7 +7,8 @@ Crypto trading desks measure execution the same way equities desks do: against
 book drove the trades), by **top-of-book and L2 depth microstructure** (spread,
 microprice, resting depth, depth imbalance, top-of-book queue size, the cost of
 **sweeping** the book, and the impact coefficient the book's own sweep costs
-imply), by the **market impact** a schedule pays for the size it takes, and by
+imply), by the **market impact** a schedule pays for the size it takes, by the
+**execution schedule** that impact and timing risk together imply, and by
 **implementation shortfall** versus the price when the order arrived. This project builds that measurement
 engine over live crypto tick, quote, and order-book data — the aggregations and
 benchmarks are expressed **once** with
@@ -72,6 +73,8 @@ flowchart LR
     PY --> CURVE
     RUST --> IMPACT[Market-impact curve<br/>Almgren-Chriss temporary + permanent]
     PY --> IMPACT
+    RUST --> SCHED[Execution schedule<br/>impact vs timing risk — urgency search]
+    PY --> SCHED
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
     PY --> CALIB
     PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
@@ -82,6 +85,7 @@ flowchart LR
     SWEEP -.->|assert identical| EQ
     CURVE -.->|assert identical| EQ
     IMPACT -.->|assert identical| EQ
+    SCHED -.->|assert identical| EQ
     CALIB -.->|assert identical| EQ
 
     style engine fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
@@ -124,6 +128,10 @@ uv run xexeclab curve   --input data/sample_book.ndjson --side buy --sizes 0.5,1
 
 # two-term Almgren-Chriss market-impact cost curve (temporary sqrt + permanent linear)
 uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10 --perm-coef-bps 5
+
+# choose the cheapest execution trajectory: impact against timing risk
+uv run xexeclab schedule --slices 6 --total-size 3 --slice-volume 2 \
+                         --coef-bps 25 --perm-coef-bps 5 --sigma-bps 8
 
 # fit the impact coefficients from realised fills (participation + realised cost per child)
 uv run xexeclab calibrate --input data/sample_calibration.ndjson
@@ -263,6 +271,18 @@ This is a **market-data and execution-analytics** project, not a trading system.
   coefficient down, and `r_squared` with the per-point `residual_bps` says
   plainly how well the square-root law describes that book — a low `r_squared`
   means the coefficient is a poor summary of it, not that the book is wrong.
+- **`xexeclab schedule` chooses a trajectory, it does not simulate one.** It
+  searches an exponential front-load over a fixed urgency grid (0.0 to 4.0 in
+  steps of 0.1) and returns the cheapest candidate under this repo's own cost
+  model — the two-term impact law plus the Almgren-Chriss timing-risk term. It is
+  a grid search, not a closed form: the classic Almgren-Chriss solution assumes
+  *linear* temporary impact, which the measured cost curve above contradicts, so
+  importing it would price the schedule under an assumption the book does not
+  honour. The answer is therefore only as good as the three inputs you feed it —
+  `coef_bps`, `perm_coef_bps` and `sigma_bps` — and the volume available per
+  interval is taken as a constant you supply, not forecast from the replay. A
+  reported urgency of 4.0 means the optimum is at the edge of the grid, not that
+  4.0 is optimal.
 
 ## License
 

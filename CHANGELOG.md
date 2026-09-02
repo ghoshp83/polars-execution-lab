@@ -4,6 +4,58 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] - 2026-09-02
+
+### Added
+- **The execution schedule itself -- `schedule` / `optimal_schedule`.** Every
+  release so far *measured* an execution: `sweep` prices the book, `calibrate`
+  and `curve` recover the impact coefficients, `impact` prices a participation
+  schedule someone else chose. None of them chose one. This release closes the
+  loop. Trading a parent order quickly concentrates size into few intervals and
+  pays more impact; trading it slowly leaves inventory exposed to the mid
+  wandering away. Almgren-Chriss is the statement that those two costs trade off
+  and the total has a minimum, and `optimal_schedule` finds it: a candidate
+  trajectory is an exponential front-load with urgency `k` -- slice `i` of `n`
+  weighted by `exp(-k * i / n)`, normalised, so `k = 0` is exactly a TWAP -- and
+  each candidate on a fixed grid is priced with the *same* two-term law the rest
+  of the repo uses (`coef_bps * sqrt(participation)` temporary,
+  `perm_coef_bps * participation` permanent, each weighted by the fraction of the
+  parent that slice trades so the totals are in bps of the parent) plus the
+  timing-risk term `sigma_bps * sqrt(mean(remaining^2))`. The summary reports the
+  chosen `urgency`, the `impact_bps` / `risk_bps` split, the TWAP it was measured
+  against and the `saving_bps` between them, and the whole per-slice trajectory:
+  `weight`, `size`, `participation`, `temp_bps`, `perm_bps`, and the `remaining`
+  inventory the risk term prices.
+
+  The **grid search is deliberate**, not a shortcut. The classic closed form is
+  derived under *linear* temporary impact -- an assumption this repo's own
+  measured cost curve contradicts -- so the trajectory is searched under the
+  concave law the book actually charges rather than inherited from a solution
+  that does not apply. A candidate that overruns the volume available in an
+  interval is infeasible, not free: it is skipped, and if even the uniform
+  schedule overruns, the call is **refused** rather than reporting a cheap
+  schedule that cannot be traded. With `sigma_bps = 0` the concave law makes
+  uniform trading strictly cheapest and the optimiser returns the TWAP, so a
+  spurious front-load is impossible.
+
+  Implemented in the Rust crate (`src/schedule.rs`) and Python (`engine.py`),
+  held identical by a **tenth** cross-language equivalence test -- the first over
+  a *decision* rather than a measurement: both engines price 41 candidates and
+  pick one, so agreeing means agreeing on every candidate to 8dp and on the
+  tie-break, since a single candidate off in the last place returns a wholly
+  different schedule. New `xexec schedule` / `xexeclab schedule` subcommands
+  (`--slices`, `--total-size`, `--slice-volume`, `--coef-bps`,
+  `--perm-coef-bps`, `--sigma-bps`) -- the first command that plans rather than
+  measures, and so the only one that reads no replay file.
+
+### Changed
+- README architecture diagram and value prop now carry the schedule stage.
+- Honest disclaimer records what the optimiser is not: a grid search over a fixed
+  urgency ladder under this repo's own cost model, only as good as the three
+  coefficients fed to it, with the per-interval volume taken as a constant rather
+  than forecast -- and a reported urgency of 4.0 means the optimum sits at the
+  edge of the grid.
+
 ## [0.11.0] - 2026-08-31
 
 ### Added
