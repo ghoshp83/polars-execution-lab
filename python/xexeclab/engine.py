@@ -492,10 +492,15 @@ def _plan_schedule(
     including the sort that fixes the summation order.
     """
     n = float(slices)
+    idx = list(range(slices))
+    # Polars gates the Rust-side `exp` behind a feature the crate does not pull
+    # in, so the decay itself is evaluated in the host and handed to the engine
+    # as a column. Both languages call the platform ``exp``, so the weights stay
+    # bit-identical.
+    raw = [math.exp(-urgency * i / n) for i in idx]
     frame = (
-        pl.DataFrame({"slice": list(range(slices))}, schema={"slice": pl.Int64})
+        pl.DataFrame({"slice": idx, "raw": raw}, schema={"slice": pl.Int64, "raw": pl.Float64})
         .sort("slice")
-        .with_columns((-urgency * pl.col("slice").cast(pl.Float64) / n).exp().alias("raw"))
         .with_columns((pl.col("raw") / pl.col("raw").sum()).alias("weight"))
         .with_columns((pl.col("weight") * total_size).alias("size"))
         .with_columns((pl.col("size") / per_slice_volume).alias("participation"))

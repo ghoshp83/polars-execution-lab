@@ -114,14 +114,17 @@ fn plan(
 ) -> Result<Plan> {
     let n = slices as f64;
     let idx: Vec<i64> = (0..slices as i64).collect();
-    let frame = df!("slice" => idx)?
+    // Polars gates `Expr::exp` behind a feature this crate does not pull in, so
+    // the decay itself is evaluated in the host and handed to the engine as a
+    // column. The Python mirror does exactly the same, and both call the
+    // platform `exp`, so the weights stay bit-identical.
+    let raw: Vec<f64> = idx
+        .iter()
+        .map(|i| (-urgency * *i as f64 / n).exp())
+        .collect();
+    let frame = df!("slice" => idx, "raw" => raw)?
         .lazy()
         .sort_by_exprs([col("slice")], SortMultipleOptions::default())
-        .with_column(
-            (lit(-urgency) * col("slice").cast(DataType::Float64) / lit(n))
-                .exp()
-                .alias("raw"),
-        )
         .with_column((col("raw") / col("raw").sum()).alias("weight"))
         .with_column((col("weight") * lit(total_size)).alias("size"))
         .with_column((col("size") / lit(per_slice_volume)).alias("participation"))
