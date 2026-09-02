@@ -6,6 +6,7 @@ use xexec::execution::{bars, session_twap, session_vwap, summary};
 use xexec::impact::impact_curve;
 use xexec::quote::quote_metrics;
 use xexec::replay::{read_book, read_calibration, read_impact, read_quotes, read_ticks};
+use xexec::schedule::optimal_schedule;
 use xexec::sweep::sweep_cost;
 
 fn arg_value(args: &[String], key: &str) -> Option<String> {
@@ -16,11 +17,42 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N]";
+
+/// Parse a `--key value` float, falling back to `default` when absent.
+fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
+    Ok(arg_value(args, key)
+        .map(|s| s.parse())
+        .transpose()?
+        .unwrap_or(default))
+}
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("");
+
+    // `schedule` plans an execution rather than measuring one, so it is the
+    // only command with no replay to read: it runs before `--input` is
+    // required.
+    if cmd == "schedule" {
+        let product = arg_value(&args, "--product").unwrap_or_else(|| "BTC-USD".to_string());
+        let slices: usize = arg_value(&args, "--slices")
+            .map(|s| s.parse())
+            .transpose()?
+            .unwrap_or(6);
+        let plan = optimal_schedule(
+            &product,
+            slices,
+            arg_f64(&args, "--total-size", 3.0)?,
+            arg_f64(&args, "--slice-volume", 2.0)?,
+            arg_f64(&args, "--coef-bps", 10.0)?,
+            arg_f64(&args, "--perm-coef-bps", 0.0)?,
+            arg_f64(&args, "--sigma-bps", 0.0)?,
+        )?;
+        println!("{}", serde_json::to_string(&plan)?);
+        return Ok(());
+    }
+
     let input = arg_value(&args, "--input").ok_or_else(|| anyhow!("--input required\n{USAGE}"))?;
     let bucket_ms: i64 = arg_value(&args, "--bucket-ms")
         .map(|s| s.parse())

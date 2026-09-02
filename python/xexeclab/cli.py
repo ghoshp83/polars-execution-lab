@@ -13,6 +13,7 @@ from .engine import (
     calibrate_impact_robust,
     depth_metrics,
     impact_curve,
+    optimal_schedule,
     queue_metrics,
     quote_metrics,
     read_book,
@@ -116,6 +117,22 @@ def cmd_curve(a: argparse.Namespace) -> None:
     product = df["product"][0] if df.height else a.product
     sizes = [float(s) for s in a.sizes.split(",")]
     print(json.dumps(sweep_curve(df, product, a.side, sizes)))
+
+
+def cmd_schedule(a: argparse.Namespace) -> None:
+    print(
+        json.dumps(
+            optimal_schedule(
+                a.product,
+                a.slices,
+                a.total_size,
+                a.slice_volume,
+                a.coef_bps,
+                a.perm_coef_bps,
+                a.sigma_bps,
+            )
+        )
+    )
 
 
 def cmd_impact(a: argparse.Namespace) -> None:
@@ -366,6 +383,38 @@ def main(argv: list[str] | None = None) -> None:
     )
     pcv.add_argument("--product", default="BTC-USD")
     pcv.set_defaults(fn=cmd_curve)
+
+    psc = sub.add_parser(
+        "schedule",
+        help="choose the cheapest execution trajectory: impact against timing risk",
+    )
+    psc.add_argument("--slices", type=int, default=6, help="number of intervals to trade over")
+    psc.add_argument(
+        "--total-size", type=float, default=3.0, help="parent order size in base units"
+    )
+    psc.add_argument(
+        "--slice-volume",
+        type=float,
+        default=2.0,
+        help="volume available to trade against in one interval",
+    )
+    psc.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    psc.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation",
+    )
+    psc.add_argument(
+        "--sigma-bps",
+        type=float,
+        default=0.0,
+        help="mid-price volatility over one interval, in bps (0 = a TWAP is optimal)",
+    )
+    psc.add_argument("--product", default="BTC-USD")
+    psc.set_defaults(fn=cmd_schedule)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"
