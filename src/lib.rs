@@ -14,4 +14,5 @@ pub mod impact;
 pub mod model;
 pub mod quote;
 pub mod replay;
+pub mod schedule;
 pub mod sweep;
