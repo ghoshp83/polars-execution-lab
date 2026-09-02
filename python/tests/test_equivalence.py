@@ -16,6 +16,7 @@ from xexeclab.engine import (
     calibrate_impact_robust,
     depth_metrics,
     impact_curve,
+    optimal_schedule,
     queue_metrics,
     quote_metrics,
     read_book,
@@ -39,6 +40,9 @@ NOISY_CALIBRATION_SAMPLE = "data/sample_calibration_noisy.ndjson"
 HUBER_DELTA = 3.0
 SWEEP_SIZE = 2.0
 CURVE_SIZES = [0.5, 1.0, 2.0, 3.0, 10.0]
+SCHEDULE = dict(
+    slices=6, total_size=3.0, per_slice_volume=2.0, coef_bps=25.0, perm_coef_bps=5.0, sigma_bps=8.0
+)
 BUCKET_MS = 1000
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -234,6 +238,56 @@ def test_rust_and_python_sweep_curves_are_identical():
     # Some point in the ladder must have been excluded, or the exclusion rule
     # agreed only vacuously.
     assert rust["fitted_points"] < rust["points"]
+
+
+def test_rust_and_python_schedules_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The first equivalence test over a *decision*, not a measurement. Both
+    # engines price 41 candidate trajectories and pick one; agreeing means they
+    # agree on every candidate's cost to 8dp and on the tie-break, because a
+    # single candidate mispriced in the last place would hand back a different
+    # urgency and a wholly different schedule.
+    proc = subprocess.run(
+        [
+            binary,
+            "schedule",
+            "--slices",
+            str(SCHEDULE["slices"]),
+            "--total-size",
+            str(SCHEDULE["total_size"]),
+            "--slice-volume",
+            str(SCHEDULE["per_slice_volume"]),
+            "--coef-bps",
+            str(SCHEDULE["coef_bps"]),
+            "--perm-coef-bps",
+            str(SCHEDULE["perm_coef_bps"]),
+            "--sigma-bps",
+            str(SCHEDULE["sigma_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = optimal_schedule("BTC-USD", **SCHEDULE)
+
+    assert rust["urgency"] == py["urgency"]
+    assert rust["impact_bps"] == py["impact_bps"]
+    assert rust["risk_bps"] == py["risk_bps"]
+    assert rust["total_bps"] == py["total_bps"]
+    assert rust["twap_impact_bps"] == py["twap_impact_bps"]
+    assert rust["twap_risk_bps"] == py["twap_risk_bps"]
+    assert rust["twap_total_bps"] == py["twap_total_bps"]
+    assert rust["saving_bps"] == py["saving_bps"]
+    assert rust["schedule"] == py["schedule"]
+
+    # The optimiser must have moved off the TWAP, or the two engines agreed
+    # only on the trivial candidate and the search was never compared.
+    assert rust["urgency"] > 0.0
 
 
 def test_rust_and_python_impact_curves_are_identical():
