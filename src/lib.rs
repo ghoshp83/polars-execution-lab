@@ -15,4 +15,5 @@ pub mod model;
 pub mod quote;
 pub mod replay;
 pub mod schedule;
+pub mod shortfall;
 pub mod sweep;

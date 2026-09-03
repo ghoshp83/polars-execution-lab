@@ -90,3 +90,25 @@ pub struct CalibrationSample {
     /// Realised cost of the fill, in basis points vs the pre-trade benchmark.
     pub realised_bps: f64,
 }
+
+/// One realised child fill of a parent order, tagged with the volume that was
+/// available in its interval. This is the on-the-wire schema of a fill replay
+/// file (one JSON object per line): the input to `shortfall`, which attributes
+/// what the execution actually paid against the arrival price and against the
+/// impact model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Fill {
+    /// Fill time as nanoseconds since the Unix epoch (UTC).
+    pub ts_ns: i64,
+    /// Product / symbol, e.g. "BTC-USD".
+    pub product: String,
+    /// Parent side: "buy" or "sell". Every fill of one parent shares it.
+    pub side: String,
+    /// Base-asset quantity this child filled.
+    pub qty: f64,
+    /// Price this child filled at.
+    pub price: f64,
+    /// Volume available in this child's interval, the denominator of its
+    /// participation rate.
+    pub interval_volume: f64,
+}

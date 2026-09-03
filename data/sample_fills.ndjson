@@ -1,0 +1,4 @@
+{"ts_ns": 1719792000000000000, "product": "BTC-USD", "side": "buy", "qty": 0.5, "price": 30003.0, "interval_volume": 20.0}
+{"ts_ns": 1719792001000000000, "product": "BTC-USD", "side": "buy", "qty": 1.0, "price": 30009.0, "interval_volume": 25.0}
+{"ts_ns": 1719792002000000000, "product": "BTC-USD", "side": "buy", "qty": 0.75, "price": 30012.0, "interval_volume": 15.0}
+{"ts_ns": 1719792003000000000, "product": "BTC-USD", "side": "buy", "qty": 0.75, "price": 30018.0, "interval_volume": 10.0}

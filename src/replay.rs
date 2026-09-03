@@ -1,4 +1,4 @@
-use crate::model::{BookLevel, CalibrationSample, ImpactSlice, Quote, Tick};
+use crate::model::{BookLevel, CalibrationSample, Fill, ImpactSlice, Quote, Tick};
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use std::fs::File;
@@ -50,5 +50,10 @@ pub fn read_impact<P: AsRef<Path>>(path: P) -> Result<Vec<ImpactSlice>> {
 
 /// Read canonical realised-fill calibration samples from an NDJSON replay file.
 pub fn read_calibration<P: AsRef<Path>>(path: P) -> Result<Vec<CalibrationSample>> {
+    read_ndjson(path)
+}
+
+/// Read canonical realised child fills from an NDJSON fill replay file.
+pub fn read_fills<P: AsRef<Path>>(path: P) -> Result<Vec<Fill>> {
     read_ndjson(path)
 }
