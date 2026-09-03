@@ -8,8 +8,9 @@ book drove the trades), by **top-of-book and L2 depth microstructure** (spread,
 microprice, resting depth, depth imbalance, top-of-book queue size, the cost of
 **sweeping** the book, and the impact coefficient the book's own sweep costs
 imply), by the **market impact** a schedule pays for the size it takes, by the
-**execution schedule** that impact and timing risk together imply, and by
-**implementation shortfall** versus the price when the order arrived. This project builds that measurement
+**execution schedule** that impact and timing risk together imply, by
+**implementation shortfall** versus the price when the order arrived, and by
+how much of that shortfall the impact model was always going to charge. This project builds that measurement
 engine over live crypto tick, quote, and order-book data — the aggregations and
 benchmarks are expressed **once** with
 the [Polars](https://pola.rs) query engine and executed **natively in Rust** (the
@@ -75,6 +76,8 @@ flowchart LR
     PY --> IMPACT
     RUST --> SCHED[Execution schedule<br/>impact vs timing risk — urgency search]
     PY --> SCHED
+    RUST --> SF[Post-trade attribution<br/>realised vs modelled vs residual]
+    PY --> SF
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
     PY --> CALIB
     PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
@@ -86,6 +89,7 @@ flowchart LR
     CURVE -.->|assert identical| EQ
     IMPACT -.->|assert identical| EQ
     SCHED -.->|assert identical| EQ
+    SF -.->|assert identical| EQ
     CALIB -.->|assert identical| EQ
 
     style engine fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
@@ -132,6 +136,10 @@ uv run xexeclab impact  --input data/sample_impact.ndjson --coef-bps 10 --perm-c
 # choose the cheapest execution trajectory: impact against timing risk
 uv run xexeclab schedule --slices 6 --total-size 3 --slice-volume 2 \
                          --coef-bps 25 --perm-coef-bps 5 --sigma-bps 8
+
+# attribute what an execution actually paid: realised vs the cost its size implied
+uv run xexeclab shortfall --input data/sample_fills.ndjson --parent-qty 3.5 \
+                          --arrival 30000 --coef-bps 25 --perm-coef-bps 5
 
 # fit the impact coefficients from realised fills (participation + realised cost per child)
 uv run xexeclab calibrate --input data/sample_calibration.ndjson
@@ -283,6 +291,16 @@ This is a **market-data and execution-analytics** project, not a trading system.
   interval is taken as a constant you supply, not forecast from the replay. A
   reported urgency of 4.0 means the optimum is at the edge of the grid, not that
   4.0 is optimal.
+- **`xexeclab shortfall` attributes cost, it does not audit fills.** It takes the
+  parent quantity and the arrival price as inputs, because a fill file records
+  what was done, not what was asked for or when the decision was made — feed it a
+  benchmark price of your own choosing and the attribution moves with it. The
+  split into `modelled_bps` and `residual_bps` is only as meaningful as the
+  `coef_bps` / `perm_coef_bps` you supply (`calibrate` or `curve` is where those
+  come from), and the residual is a bucket, not a diagnosis: timing, venue
+  selection, spread capture, adverse selection and luck all land in it together.
+  `opportunity_bps` charges the unfilled remainder the drift to the *last fill's*
+  price, which is the last price this file can see, not a live mark.
 
 ## License
 

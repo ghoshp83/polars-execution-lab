@@ -4,6 +4,50 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-09-03
+
+### Added
+- **Post-trade attribution -- `shortfall` / `shortfall`.** v0.12.0 chose an
+  execution trajectory; this release scores one after the fills come back, and
+  closes the loop the repo has been building: measure the book, fit the
+  coefficients, price a schedule, choose a schedule, then judge what actually
+  happened against the model that chose it. `shortfall` reads realised child
+  fills (`ts_ns`, `side`, `qty`, `price`, `interval_volume`), measures the
+  implementation shortfall of the filled quantity against the arrival (decision)
+  price, then prices those same fills again through the *same* two-term law the
+  rest of the repo uses -- `coef_bps * sqrt(participation)` temporary plus
+  `perm_coef_bps * participation` permanent -- and differences the two.
+
+  The difference is the point. `realised_bps` on its own is not a measure of
+  execution quality: it rewards whoever happened to be handed the small orders.
+  `modelled_bps` is the cost the parent's size was always going to pay and that
+  no algorithm avoids; `residual_bps` is what is left over -- timing, venue
+  selection, spread capture, adverse selection, luck -- and it is the only part
+  of the number a desk can be held to. The per-fill `slices` carry the same three
+  columns, so a single bad child is visible rather than averaged away.
+
+  Quantity that never filled is charged, not dropped. `opportunity_bps` prices
+  the unfilled remainder at the drift from arrival to the last fill, weighted by
+  its share of the parent, so an algorithm cannot improve its average price by
+  simply not finishing. `realised_bps` is quoted on the filled notional and
+  `total_bps` on the parent; `total_bps` is the honest headline.
+
+  Reconciliation errors are refused rather than reported: fills that mix sides in
+  one parent, a child that took more than its interval held, and fills totalling
+  more than the parent all raise, because a participation or a fill rate above 1
+  is a data problem that a summary statistic would bury.
+- `read_fills` on both engines and a `Fill` record type, plus the
+  `data/sample_fills.ndjson` replay the tests and the README run against.
+- `xexec shortfall` and `xexeclab shortfall` on both CLIs, each requiring
+  `--parent-qty` and `--arrival` explicitly.
+
+### Changed
+- The cross-language equivalence suite gains its **eleventh** test, and the most
+  numerically fragile one: an attribution is a difference of two numbers of
+  similar size, so a last-place disagreement in either leg surfaces whole in
+  `residual_bps`. Both legs are asserted non-zero so the two engines cannot pass
+  by agreeing on a trivial attribution.
+
 ## [0.12.0] - 2026-09-02
 
 ### Added
