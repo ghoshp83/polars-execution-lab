@@ -21,9 +21,11 @@ from xexeclab.engine import (
     quote_metrics,
     read_book,
     read_calibration,
+    read_fills,
     read_impact,
     read_quotes,
     read_ticks,
+    shortfall,
     summary,
     sweep_cost,
     sweep_curve,
@@ -36,6 +38,7 @@ QUOTE_SAMPLE = "data/sample_quotes.ndjson"
 BOOK_SAMPLE = "data/sample_book.ndjson"
 IMPACT_SAMPLE = "data/sample_impact.ndjson"
 CALIBRATION_SAMPLE = "data/sample_calibration.ndjson"
+FILL_SAMPLE = "data/sample_fills.ndjson"
 NOISY_CALIBRATION_SAMPLE = "data/sample_calibration_noisy.ndjson"
 HUBER_DELTA = 3.0
 SWEEP_SIZE = 2.0
@@ -43,6 +46,7 @@ CURVE_SIZES = [0.5, 1.0, 2.0, 3.0, 10.0]
 SCHEDULE = dict(
     slices=6, total_size=3.0, per_slice_volume=2.0, coef_bps=25.0, perm_coef_bps=5.0, sigma_bps=8.0
 )
+SHORTFALL = dict(parent_qty=3.5, arrival_price=30000.0, coef_bps=25.0, perm_coef_bps=5.0)
 BUCKET_MS = 1000
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -288,6 +292,59 @@ def test_rust_and_python_schedules_are_identical():
     # The optimiser must have moved off the TWAP, or the two engines agreed
     # only on the trivial candidate and the search was never compared.
     assert rust["urgency"] > 0.0
+
+
+def test_rust_and_python_shortfall_attributions_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The attribution is a difference of two numbers of similar size, so it is
+    # the most fragile equivalence in the repo: a last-place disagreement in
+    # either the realised or the modelled leg shows up whole in residual_bps.
+    proc = subprocess.run(
+        [
+            binary,
+            "shortfall",
+            "--input",
+            FILL_SAMPLE,
+            "--parent-qty",
+            str(SHORTFALL["parent_qty"]),
+            "--arrival",
+            str(SHORTFALL["arrival_price"]),
+            "--coef-bps",
+            str(SHORTFALL["coef_bps"]),
+            "--perm-coef-bps",
+            str(SHORTFALL["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = shortfall(read_fills(FILL_SAMPLE), "BTC-USD", **SHORTFALL)
+
+    for field in (
+        "side",
+        "fills",
+        "filled_qty",
+        "unfilled_qty",
+        "fill_rate",
+        "avg_price",
+        "final_price",
+        "realised_bps",
+        "modelled_bps",
+        "residual_bps",
+        "opportunity_bps",
+        "total_bps",
+    ):
+        assert rust[field] == py[field], field
+    assert rust["slices"] == py["slices"]
+
+    # Both legs must be non-trivial, or the engines agreed only on zero.
+    assert rust["modelled_bps"] != 0.0
+    assert rust["opportunity_bps"] != 0.0
 
 
 def test_rust_and_python_impact_curves_are_identical():
