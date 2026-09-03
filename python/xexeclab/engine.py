@@ -67,6 +67,13 @@ def read_calibration(path: str | Path) -> pl.DataFrame:
     return df.sort("ts_ns")
 
 
+def read_fills(path: str | Path) -> pl.DataFrame:
+    """Read canonical realised child fills from an NDJSON fill replay."""
+    p = str(path)
+    df = pl.read_parquet(p) if p.endswith(".parquet") else pl.read_ndjson(p)
+    return df.sort("ts_ns")
+
+
 def write_ticks(df: pl.DataFrame, path: str | Path) -> int:
     """Persist canonical ticks as Parquet (`.parquet`) or NDJSON by extension.
 
@@ -625,6 +632,151 @@ def optimal_schedule(
         "twap_total_bps": _r8(twap["total_bps"]),
         "saving_bps": _r8(twap["total_bps"] - best["total_bps"]),
         "schedule": schedule,
+    }
+
+
+def shortfall(
+    df: pl.DataFrame,
+    product: str,
+    parent_qty: float,
+    arrival_price: float,
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """Post-trade attribution: what the execution paid, and what the model expected.
+
+    ``optimal_schedule`` chooses a trajectory before the order goes out; this is
+    the other half of that loop, run after the fills come back. The realised
+    implementation shortfall of the filled quantity is measured against the
+    arrival (decision) price, then each fill is priced *again* through the same
+    two-term law the rest of this engine uses --
+    ``coef_bps * sqrt(participation)`` temporary plus
+    ``perm_coef_bps * participation`` permanent -- and the two are differenced.
+
+    The difference is the number worth reading. ``modelled_bps`` is the cost the
+    order was always going to pay for its size; ``residual_bps`` is what is left
+    -- venue selection, timing, spread capture, adverse selection, luck. Judging
+    an execution on ``realised_bps`` alone rewards whoever was given the small
+    orders.
+
+    Quantity that never filled is charged as ``opportunity_bps``, so an
+    algorithm that improves its average price by simply not finishing does not
+    come out ahead. ``realised_bps`` is quoted on the filled notional;
+    ``total_bps`` is quoted on the parent, and is the honest headline.
+
+    Mirrors ``shortfall`` in ``src/shortfall.rs`` operation for operation.
+    """
+    if df.height == 0:
+        raise ValueError("no fills")
+    for name, v in (("parent_qty", parent_qty), ("arrival_price", arrival_price)):
+        if not math.isfinite(v) or v <= 0.0:
+            raise ValueError(f"{name} must be a positive finite number, got {v}")
+    for name, v in (("coef_bps", coef_bps), ("perm_coef_bps", perm_coef_bps)):
+        if not math.isfinite(v) or v < 0.0:
+            raise ValueError(f"{name} must be a non-negative finite number, got {v}")
+
+    # A parent order has one side. Mixed sides in one file is a data error, not
+    # a netting instruction -- signing the shortfall would be meaningless.
+    side = str(df["side"][0])
+    if side not in ("buy", "sell"):
+        raise ValueError(f"side must be buy or sell, got {side}")
+    for row in df.iter_rows(named=True):
+        if row["side"] != side:
+            raise ValueError(
+                f"fills mix sides ({side} and {row['side']}); one parent order has one side"
+            )
+        if not math.isfinite(row["qty"]) or row["qty"] <= 0.0:
+            raise ValueError(f"fill qty must be positive and finite, got {row['qty']}")
+        if not math.isfinite(row["price"]) or row["price"] <= 0.0:
+            raise ValueError(f"fill price must be positive and finite, got {row['price']}")
+        if not math.isfinite(row["interval_volume"]) or row["interval_volume"] <= 0.0:
+            raise ValueError(
+                f"interval_volume must be positive and finite, got {row['interval_volume']}"
+            )
+        if row["qty"] > row["interval_volume"]:
+            raise ValueError(
+                f"a fill of {row['qty']} took more than the {row['interval_volume']} "
+                "available in its interval"
+            )
+
+    sign = 1.0 if side == "buy" else -1.0
+    frame = df.select("ts_ns", "qty", "price", "interval_volume").sort("ts_ns")
+    filled_qty = float(frame.select(pl.col("qty").sum()).item())
+    # Filling more than the parent is a reconciliation error upstream; reporting
+    # a fill rate above 1 would hide it.
+    if filled_qty > parent_qty:
+        raise ValueError(f"fills total {filled_qty} against a parent of {parent_qty}")
+
+    priced = (
+        frame.with_columns(
+            (pl.col("qty") / pl.col("interval_volume")).alias("participation"),
+            (pl.col("qty") / pl.lit(filled_qty)).alias("weight"),
+            (
+                (pl.col("price") - pl.lit(arrival_price))
+                / pl.lit(arrival_price)
+                * pl.lit(1e4)
+                * pl.lit(sign)
+            ).alias("realised_bps"),
+        )
+        .with_columns(
+            (
+                pl.col("participation").sqrt() * pl.lit(coef_bps)
+                + pl.col("participation") * pl.lit(perm_coef_bps)
+            ).alias("modelled_bps")
+        )
+        .with_columns((pl.col("realised_bps") - pl.col("modelled_bps")).alias("residual_bps"))
+    )
+
+    totals = priced.select(
+        (pl.col("weight") * pl.col("realised_bps")).sum().alias("realised"),
+        (pl.col("weight") * pl.col("modelled_bps")).sum().alias("modelled"),
+        (pl.col("weight") * pl.col("price")).sum().alias("avg_price"),
+        pl.col("price").last().alias("final_price"),
+    )
+    realised_bps = float(totals["realised"][0])
+    modelled_bps = float(totals["modelled"][0])
+    avg_price = float(totals["avg_price"][0])
+    final_price = float(totals["final_price"][0])
+
+    unfilled_qty = parent_qty - filled_qty
+    fill_rate = filled_qty / parent_qty
+    # The remainder is charged the drift it walked away from, weighted by how
+    # much of the parent it was. A fully-filled parent pays nothing here.
+    opportunity_bps = (
+        (unfilled_qty / parent_qty) * sign * (final_price - arrival_price) / arrival_price * 1e4
+    )
+    total_bps = fill_rate * realised_bps + opportunity_bps
+
+    slices = [
+        {
+            "ts_ns": row["ts_ns"],
+            "qty": _r8(row["qty"]),
+            "price": _r8(row["price"]),
+            "participation": _r8(row["participation"]),
+            "weight": _r8(row["weight"]),
+            "realised_bps": _r8(row["realised_bps"]),
+            "modelled_bps": _r8(row["modelled_bps"]),
+            "residual_bps": _r8(row["residual_bps"]),
+        }
+        for row in priced.iter_rows(named=True)
+    ]
+    return {
+        "product": product,
+        "side": side,
+        "fills": df.height,
+        "parent_qty": _r8(parent_qty),
+        "filled_qty": _r8(filled_qty),
+        "unfilled_qty": _r8(unfilled_qty),
+        "fill_rate": _r8(fill_rate),
+        "arrival_price": _r8(arrival_price),
+        "avg_price": _r8(avg_price),
+        "final_price": _r8(final_price),
+        "realised_bps": _r8(realised_bps),
+        "modelled_bps": _r8(modelled_bps),
+        "residual_bps": _r8(realised_bps - modelled_bps),
+        "opportunity_bps": _r8(opportunity_bps),
+        "total_bps": _r8(total_bps),
+        "slices": slices,
     }
 
 
