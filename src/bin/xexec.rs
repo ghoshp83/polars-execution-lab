@@ -5,8 +5,11 @@ use xexec::depth::{depth_metrics, queue_metrics};
 use xexec::execution::{bars, session_twap, session_vwap, summary};
 use xexec::impact::impact_curve;
 use xexec::quote::quote_metrics;
-use xexec::replay::{read_book, read_calibration, read_impact, read_quotes, read_ticks};
+use xexec::replay::{
+    read_book, read_calibration, read_fills, read_impact, read_quotes, read_ticks,
+};
 use xexec::schedule::optimal_schedule;
+use xexec::shortfall::shortfall;
 use xexec::sweep::sweep_cost;
 
 fn arg_value(args: &[String], key: &str) -> Option<String> {
@@ -17,7 +20,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|shortfall> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--arrival N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -162,6 +165,32 @@ fn main() -> Result<()> {
             "{}",
             serde_json::to_string(&impact_curve(&slices, &product, coef_bps, perm_coef_bps)?)?
         );
+        return Ok(());
+    }
+
+    // `shortfall` reads the realised-fill schema and attributes what the
+    // execution actually paid against the arrival price and the impact model.
+    if cmd == "shortfall" {
+        let fills = read_fills(&input)?;
+        if fills.is_empty() {
+            return Err(anyhow!("no fills in {input}"));
+        }
+        let product = fills[0].product.clone();
+        let parent_qty = arg_value(&args, "--parent-qty")
+            .ok_or_else(|| anyhow!("--parent-qty required\n{USAGE}"))?
+            .parse()?;
+        let arrival = arg_value(&args, "--arrival")
+            .ok_or_else(|| anyhow!("--arrival required\n{USAGE}"))?
+            .parse()?;
+        let summary = shortfall(
+            &fills,
+            &product,
+            parent_qty,
+            arrival,
+            arg_f64(&args, "--coef-bps", 10.0)?,
+            arg_f64(&args, "--perm-coef-bps", 0.0)?,
+        )?;
+        println!("{}", serde_json::to_string(&summary)?);
         return Ok(());
     }
 
