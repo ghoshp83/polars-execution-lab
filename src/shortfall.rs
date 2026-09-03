@@ -122,7 +122,10 @@ pub fn shortfall(
             ));
         }
         if !f.qty.is_finite() || f.qty <= 0.0 {
-            return Err(anyhow!("fill qty must be positive and finite, got {}", f.qty));
+            return Err(anyhow!(
+                "fill qty must be positive and finite, got {}",
+                f.qty
+            ));
         }
         if !f.price.is_finite() || f.price <= 0.0 {
             return Err(anyhow!(
@@ -199,8 +202,12 @@ pub fn shortfall(
         .clone()
         .lazy()
         .select([
-            (col("weight") * col("realised_bps")).sum().alias("realised"),
-            (col("weight") * col("modelled_bps")).sum().alias("modelled"),
+            (col("weight") * col("realised_bps"))
+                .sum()
+                .alias("realised"),
+            (col("weight") * col("modelled_bps"))
+                .sum()
+                .alias("modelled"),
             (col("weight") * col("price")).sum().alias("avg_price"),
             col("price").last().alias("final_price"),
         ])
