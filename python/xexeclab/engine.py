@@ -780,6 +780,160 @@ def shortfall(
     }
 
 
+def counterfactual(
+    df: pl.DataFrame,
+    product: str,
+    arrival_price: float,
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """Counterfactual scheduling: was the realised schedule itself worth anything?
+
+    ``shortfall`` splits a realised execution into the cost its size always
+    implied and the cost it did not. That residual is a bucket, and the obvious
+    next question is how much of it the *schedule* earned: would a plain TWAP, or
+    a volume-following participation, have paid more or less over the very same
+    intervals?
+
+    Each benchmark is handed the quantity that actually filled and spread across
+    the same intervals, priced on the same prices and the same traded volumes,
+    through the same two-term law. Holding quantity fixed is what makes the
+    comparison fair: the unfilled remainder is identical under every strategy, so
+    its opportunity cost cancels and is deliberately not reported here.
+
+    ``edge_bps`` is the headline -- ``best_alternative - realised``, so a
+    positive number means the realised schedule beat the best simple benchmark.
+
+    Mirrors ``counterfactual`` in ``src/counterfactual.rs`` operation for
+    operation.
+    """
+    if df.height == 0:
+        raise ValueError("no fills")
+    if not math.isfinite(arrival_price) or arrival_price <= 0.0:
+        raise ValueError(f"arrival_price must be a positive finite number, got {arrival_price}")
+    for name, v in (("coef_bps", coef_bps), ("perm_coef_bps", perm_coef_bps)):
+        if not math.isfinite(v) or v < 0.0:
+            raise ValueError(f"{name} must be a non-negative finite number, got {v}")
+
+    # Same rule as post-trade attribution: one parent order has one side.
+    side = str(df["side"][0])
+    if side not in ("buy", "sell"):
+        raise ValueError(f"side must be buy or sell, got {side}")
+    for row in df.iter_rows(named=True):
+        if row["side"] != side:
+            raise ValueError(
+                f"fills mix sides ({side} and {row['side']}); one parent order has one side"
+            )
+        if not math.isfinite(row["qty"]) or row["qty"] <= 0.0:
+            raise ValueError(f"fill qty must be positive and finite, got {row['qty']}")
+        if not math.isfinite(row["price"]) or row["price"] <= 0.0:
+            raise ValueError(f"fill price must be positive and finite, got {row['price']}")
+        if not math.isfinite(row["interval_volume"]) or row["interval_volume"] <= 0.0:
+            raise ValueError(
+                f"interval_volume must be positive and finite, got {row['interval_volume']}"
+            )
+        if row["qty"] > row["interval_volume"]:
+            raise ValueError(
+                f"a fill of {row['qty']} took more than the {row['interval_volume']} "
+                "available in its interval"
+            )
+
+    sign = 1.0 if side == "buy" else -1.0
+    base = df.select("ts_ns", "qty", "price", "interval_volume").sort("ts_ns")
+    agg = base.select(
+        pl.col("qty").sum().alias("filled_qty"),
+        pl.col("interval_volume").sum().alias("total_volume"),
+    )
+    filled_qty = float(agg["filled_qty"][0])
+    total_volume = float(agg["total_volume"][0])
+    n = float(base.height)
+
+    # Every strategy trades the same quantity over the same intervals. The
+    # unfilled remainder is identical under all of them, so it cancels.
+    frame = base.with_columns(
+        pl.lit(filled_qty / n).alias("twap_qty"),
+        (pl.col("interval_volume") / pl.lit(total_volume) * pl.lit(filled_qty)).alias("volume_qty"),
+    )
+
+    def price_strategy(qty_col: str, name: str) -> dict:
+        priced = (
+            frame.select(
+                "ts_ns",
+                pl.col(qty_col).alias("qty"),
+                "price",
+                "interval_volume",
+            )
+            .with_columns(
+                (pl.col("qty") / pl.col("interval_volume")).alias("participation"),
+                (pl.col("qty") / pl.lit(filled_qty)).alias("weight"),
+                (
+                    (pl.col("price") - pl.lit(arrival_price))
+                    / pl.lit(arrival_price)
+                    * pl.lit(1e4)
+                    * pl.lit(sign)
+                ).alias("drift_bps"),
+            )
+            .with_columns(
+                (
+                    pl.col("participation").sqrt() * pl.lit(coef_bps)
+                    + pl.col("participation") * pl.lit(perm_coef_bps)
+                ).alias("impact_bps")
+            )
+            .with_columns((pl.col("drift_bps") + pl.col("impact_bps")).alias("cost_bps"))
+        )
+        # Pricing a counterfactual that takes more than the interval ever traded
+        # would be fiction: the impact law is not defined above full participation.
+        max_participation = float(priced.select(pl.col("participation").max()).item())
+        if max_participation > 1.0:
+            raise ValueError(
+                f"the {name} allocation would take {max_participation} of an interval's "
+                "volume; refusing to price a counterfactual the market could not have filled"
+            )
+        totals = priced.select(
+            (pl.col("weight") * pl.col("drift_bps")).sum().alias("drift"),
+            (pl.col("weight") * pl.col("impact_bps")).sum().alias("impact"),
+            pl.col("qty").sum().alias("qty"),
+        )
+        drift_bps = float(totals["drift"][0])
+        impact_bps = float(totals["impact"][0])
+        return {
+            "name": name,
+            "qty": _r8(float(totals["qty"][0])),
+            "drift_bps": _r8(drift_bps),
+            "impact_bps": _r8(impact_bps),
+            "cost_bps": _r8(drift_bps + impact_bps),
+            "legs": [
+                {
+                    "ts_ns": row["ts_ns"],
+                    "qty": _r8(row["qty"]),
+                    "price": _r8(row["price"]),
+                    "interval_volume": _r8(row["interval_volume"]),
+                    "participation": _r8(row["participation"]),
+                    "weight": _r8(row["weight"]),
+                    "drift_bps": _r8(row["drift_bps"]),
+                    "impact_bps": _r8(row["impact_bps"]),
+                    "cost_bps": _r8(row["cost_bps"]),
+                }
+                for row in priced.iter_rows(named=True)
+            ],
+        }
+
+    realised = price_strategy("qty", "realised")
+    alternatives = [price_strategy("twap_qty", "twap"), price_strategy("volume_qty", "volume")]
+    best = min(alternatives, key=lambda a: a["cost_bps"])
+    return {
+        "product": product,
+        "side": side,
+        "intervals": df.height,
+        "filled_qty": _r8(filled_qty),
+        "arrival_price": _r8(arrival_price),
+        "realised": realised,
+        "alternatives": alternatives,
+        "best_alternative": best["name"],
+        "edge_bps": _r8(best["cost_bps"] - realised["cost_bps"]),
+    }
+
+
 def impact_curve(
     df: pl.DataFrame, product: str, coef_bps: float, perm_coef_bps: float = 0.0
 ) -> dict:
