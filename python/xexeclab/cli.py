@@ -11,6 +11,7 @@ from .engine import (
     bars,
     calibrate_impact,
     calibrate_impact_robust,
+    counterfactual,
     depth_metrics,
     impact_curve,
     optimal_schedule,
@@ -147,6 +148,12 @@ def cmd_shortfall(a: argparse.Namespace) -> None:
     df = read_fills(a.input)
     product = df["product"][0] if df.height else a.product
     print(json.dumps(shortfall(df, product, a.parent_qty, a.arrival, a.coef_bps, a.perm_coef_bps)))
+
+
+def cmd_counterfactual(a: argparse.Namespace) -> None:
+    df = read_fills(a.input)
+    product = df["product"][0] if df.height else a.product
+    print(json.dumps(counterfactual(df, product, a.arrival, a.coef_bps, a.perm_coef_bps)))
 
 
 def cmd_calibrate(a: argparse.Namespace) -> None:
@@ -461,6 +468,25 @@ def main(argv: list[str] | None = None) -> None:
     )
     psf.add_argument("--product", default="BTC-USD")
     psf.set_defaults(fn=cmd_shortfall)
+
+    pcf = sub.add_parser(
+        "counterfactual", help="score the realised schedule against TWAP and volume benchmarks"
+    )
+    pcf.add_argument("--input", required=True, help="fill replay (.ndjson/.jsonl/.parquet)")
+    pcf.add_argument(
+        "--arrival", type=float, required=True, help="arrival (decision) price of the parent"
+    )
+    pcf.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    pcf.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    pcf.add_argument("--product", default="BTC-USD")
+    pcf.set_defaults(fn=cmd_counterfactual)
 
     pcal = sub.add_parser("calibrate", help="fit impact coefficients from a realised-fill replay")
     pcal.add_argument("--input", required=True, help="calibration replay (.ndjson/.jsonl/.parquet)")

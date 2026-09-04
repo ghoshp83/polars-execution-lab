@@ -9,6 +9,7 @@ use xexec::replay::{
     read_book, read_calibration, read_fills, read_impact, read_quotes, read_ticks,
 };
 use xexec::schedule::optimal_schedule;
+use xexec::counterfactual::counterfactual;
 use xexec::shortfall::shortfall;
 use xexec::sweep::sweep_cost;
 
@@ -20,7 +21,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|shortfall> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--arrival N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|shortfall|counterfactual> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--arrival N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -191,6 +192,28 @@ fn main() -> Result<()> {
             arg_f64(&args, "--perm-coef-bps", 0.0)?,
         )?;
         println!("{}", serde_json::to_string(&summary)?);
+        return Ok(());
+    }
+
+    // `counterfactual` reads the same realised-fill schema and re-prices simple
+    // benchmark allocations of the same quantity over the same intervals.
+    if cmd == "counterfactual" {
+        let fills = read_fills(&input)?;
+        if fills.is_empty() {
+            return Err(anyhow!("no fills in {input}"));
+        }
+        let product = fills[0].product.clone();
+        let arrival = arg_value(&args, "--arrival")
+            .ok_or_else(|| anyhow!("--arrival required\n{USAGE}"))?
+            .parse()?;
+        let report = counterfactual(
+            &fills,
+            &product,
+            arrival,
+            arg_f64(&args, "--coef-bps", 10.0)?,
+            arg_f64(&args, "--perm-coef-bps", 0.0)?,
+        )?;
+        println!("{}", serde_json::to_string(&report)?);
         return Ok(());
     }
 
