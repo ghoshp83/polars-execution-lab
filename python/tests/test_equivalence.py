@@ -14,6 +14,7 @@ import pytest
 from xexeclab.engine import (
     calibrate_impact,
     calibrate_impact_robust,
+    counterfactual,
     depth_metrics,
     impact_curve,
     optimal_schedule,
@@ -345,6 +346,52 @@ def test_rust_and_python_shortfall_attributions_are_identical():
     # Both legs must be non-trivial, or the engines agreed only on zero.
     assert rust["modelled_bps"] != 0.0
     assert rust["opportunity_bps"] != 0.0
+
+
+def test_rust_and_python_counterfactual_comparisons_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # Three strategies priced and then ranked against each other. A last-place
+    # disagreement in any one of them can flip best_alternative outright, so
+    # this test pins the ordering as well as the numbers.
+    proc = subprocess.run(
+        [
+            binary,
+            "counterfactual",
+            "--input",
+            FILL_SAMPLE,
+            "--arrival",
+            str(SHORTFALL["arrival_price"]),
+            "--coef-bps",
+            str(SHORTFALL["coef_bps"]),
+            "--perm-coef-bps",
+            str(SHORTFALL["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = counterfactual(
+        read_fills(FILL_SAMPLE),
+        "BTC-USD",
+        SHORTFALL["arrival_price"],
+        SHORTFALL["coef_bps"],
+        SHORTFALL["perm_coef_bps"],
+    )
+
+    for field in ("side", "intervals", "filled_qty", "best_alternative", "edge_bps"):
+        assert rust[field] == py[field], field
+    assert rust["realised"] == py["realised"]
+    assert rust["alternatives"] == py["alternatives"]
+
+    # The benchmarks must actually differ from the realised schedule, or the
+    # engines agreed only that everything cost the same.
+    assert rust["edge_bps"] != 0.0
+    assert rust["realised"]["impact_bps"] != 0.0
 
 
 def test_rust_and_python_impact_curves_are_identical():
