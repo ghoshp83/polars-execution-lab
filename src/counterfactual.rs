@@ -107,10 +107,8 @@ fn price_strategy(
         .with_columns([
             (col("qty") / col("interval_volume")).alias("participation"),
             (col("qty") / lit(p.filled_qty)).alias("weight"),
-            ((col("price") - lit(p.arrival_price)) / lit(p.arrival_price)
-                * lit(1e4)
-                * lit(p.sign))
-            .alias("drift_bps"),
+            ((col("price") - lit(p.arrival_price)) / lit(p.arrival_price) * lit(1e4) * lit(p.sign))
+                .alias("drift_bps"),
         ])
         .with_column(
             (col("participation").sqrt() * lit(p.coef_bps)
