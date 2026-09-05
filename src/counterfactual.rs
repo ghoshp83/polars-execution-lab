@@ -77,17 +77,23 @@ pub struct CounterfactualReport {
     pub edge_bps: f64,
 }
 
+/// The terms every strategy is priced on. They are identical across strategies
+/// by construction -- that is what makes the comparison a comparison.
+struct Pricing {
+    filled_qty: f64,
+    arrival_price: f64,
+    sign: f64,
+    coef_bps: f64,
+    perm_coef_bps: f64,
+}
+
 /// Price one allocation. `qty_col` is the column holding that strategy's
 /// quantity per interval.
 fn price_strategy(
     frame: &DataFrame,
     qty_col: &str,
     name: &str,
-    filled_qty: f64,
-    arrival_price: f64,
-    sign: f64,
-    coef_bps: f64,
-    perm_coef_bps: f64,
+    p: &Pricing,
 ) -> Result<StrategyCost> {
     let priced = frame
         .clone()
@@ -100,13 +106,15 @@ fn price_strategy(
         ])
         .with_columns([
             (col("qty") / col("interval_volume")).alias("participation"),
-            (col("qty") / lit(filled_qty)).alias("weight"),
-            ((col("price") - lit(arrival_price)) / lit(arrival_price) * lit(1e4) * lit(sign))
-                .alias("drift_bps"),
+            (col("qty") / lit(p.filled_qty)).alias("weight"),
+            ((col("price") - lit(p.arrival_price)) / lit(p.arrival_price)
+                * lit(1e4)
+                * lit(p.sign))
+            .alias("drift_bps"),
         ])
         .with_column(
-            (col("participation").sqrt() * lit(coef_bps)
-                + col("participation") * lit(perm_coef_bps))
+            (col("participation").sqrt() * lit(p.coef_bps)
+                + col("participation") * lit(p.perm_coef_bps))
             .alias("impact_bps"),
         )
         .with_column((col("drift_bps") + col("impact_bps")).alias("cost_bps"))
@@ -303,28 +311,17 @@ pub fn counterfactual(
         ])
         .collect()?;
 
-    let realised = price_strategy(
-        &frame,
-        "qty",
-        "realised",
+    let pricing = Pricing {
         filled_qty,
         arrival_price,
         sign,
         coef_bps,
         perm_coef_bps,
-    )?;
+    };
+    let realised = price_strategy(&frame, "qty", "realised", &pricing)?;
     let mut alternatives = Vec::new();
     for (col_name, label) in [("twap_qty", "twap"), ("volume_qty", "volume")] {
-        alternatives.push(price_strategy(
-            &frame,
-            col_name,
-            label,
-            filled_qty,
-            arrival_price,
-            sign,
-            coef_bps,
-            perm_coef_bps,
-        )?);
+        alternatives.push(price_strategy(&frame, col_name, label, &pricing)?);
     }
 
     let best = alternatives
