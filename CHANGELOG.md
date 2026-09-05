@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] - 2026-09-05
+
+### Added
+- **Counterfactual scheduling -- `counterfactual` / `counterfactual`.** v0.13.0
+  split a realised execution into the cost its size always implied and the cost
+  it did not, but that residual is a bucket. This release asks how much of it the
+  *schedule* earned. The quantity that actually filled is re-allocated across the
+  same intervals as a plain TWAP and as a volume-following participation, priced
+  on the same prices, the same traded volumes and the same two-term impact law,
+  and the three are ranked. `edge_bps` is the headline -- the gap to the best
+  benchmark, so a positive number means the realised schedule was the better one.
+
+  Holding quantity fixed is what makes the comparison fair: the unfilled
+  remainder is identical under every strategy, so its opportunity cost cancels
+  and is deliberately not reported here (`shortfall` is where that lives). Each
+  strategy reports `drift_bps` and `impact_bps` separately, so a desk can see
+  whether it lost on *when* it traded or on *how much* it took at once, with the
+  per-interval `legs` carrying the same split.
+
+  An allocation that would take more than an interval ever traded is refused, not
+  priced: the impact law is undefined above full participation, and a benchmark
+  the market could not have filled is fiction, not a comparison.
+- `counterfactual` on both CLIs, reading the same realised-fill replay as
+  `shortfall` and needing only the arrival price and the impact coefficients --
+  the benchmark quantity comes from what actually filled.
+
+### Changed
+- The cross-language equivalence suite gains its twelfth test. Three strategies
+  are priced and then *ranked*, so a last-place disagreement in any one of them
+  can flip `best_alternative` outright; the test pins the ordering as well as the
+  numbers.
+
 ## [0.13.0] - 2026-09-03
 
 ### Added

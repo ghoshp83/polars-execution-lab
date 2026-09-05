@@ -10,7 +10,9 @@ microprice, resting depth, depth imbalance, top-of-book queue size, the cost of
 imply), by the **market impact** a schedule pays for the size it takes, by the
 **execution schedule** that impact and timing risk together imply, by
 **implementation shortfall** versus the price when the order arrived, and by
-how much of that shortfall the impact model was always going to charge. This project builds that measurement
+how much of that shortfall the impact model was always going to charge, and by
+whether the schedule that was actually run beat the simple benchmarks it could
+have been. This project builds that measurement
 engine over live crypto tick, quote, and order-book data — the aggregations and
 benchmarks are expressed **once** with
 the [Polars](https://pola.rs) query engine and executed **natively in Rust** (the
@@ -78,6 +80,8 @@ flowchart LR
     PY --> SCHED
     RUST --> SF[Post-trade attribution<br/>realised vs modelled vs residual]
     PY --> SF
+    RUST --> CF[Counterfactual scheduling<br/>realised vs TWAP vs volume]
+    PY --> CF
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
     PY --> CALIB
     PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
@@ -90,6 +94,7 @@ flowchart LR
     IMPACT -.->|assert identical| EQ
     SCHED -.->|assert identical| EQ
     SF -.->|assert identical| EQ
+    CF -.->|assert identical| EQ
     CALIB -.->|assert identical| EQ
 
     style engine fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
@@ -140,6 +145,10 @@ uv run xexeclab schedule --slices 6 --total-size 3 --slice-volume 2 \
 # attribute what an execution actually paid: realised vs the cost its size implied
 uv run xexeclab shortfall --input data/sample_fills.ndjson --parent-qty 3.5 \
                           --arrival 30000 --coef-bps 25 --perm-coef-bps 5
+
+# and ask whether that schedule was worth anything: realised vs TWAP vs volume
+uv run xexeclab counterfactual --input data/sample_fills.ndjson --arrival 30000 \
+                               --coef-bps 25 --perm-coef-bps 5
 
 # fit the impact coefficients from realised fills (participation + realised cost per child)
 uv run xexeclab calibrate --input data/sample_calibration.ndjson
@@ -301,6 +310,15 @@ This is a **market-data and execution-analytics** project, not a trading system.
   selection, spread capture, adverse selection and luck all land in it together.
   `opportunity_bps` charges the unfilled remainder the drift to the *last fill's*
   price, which is the last price this file can see, not a live mark.
+- **`xexeclab counterfactual` holds the price path fixed.** The benchmarks are
+  re-priced on the prices and traded volumes that actually happened, so they are
+  answering "what would this allocation have paid into *that* tape" — not "what
+  would the tape have looked like if a different schedule had run". A real TWAP
+  would have moved the market itself, and no replay can show you that. The
+  comparison also fixes the quantity at what actually filled, so it says nothing
+  about whether finishing the parent was the right call — that is what
+  `shortfall`'s `opportunity_bps` is for. Only TWAP and volume-following are
+  offered; they are reference points, not the best schedule available.
 
 ## License
 
