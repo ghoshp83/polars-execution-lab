@@ -57,7 +57,12 @@ fn every_strategy_trades_the_same_quantity() {
     let c = counterfactual(&load(), "BTC-USD", ARRIVAL, 25.0, 5.0).unwrap();
     assert!((c.realised.qty - c.filled_qty).abs() < 1e-8);
     for a in &c.alternatives {
-        assert!((a.qty - c.filled_qty).abs() < 1e-8, "{} traded {}", a.name, a.qty);
+        assert!(
+            (a.qty - c.filled_qty).abs() < 1e-8,
+            "{} traded {}",
+            a.name,
+            a.qty
+        );
     }
 }
 

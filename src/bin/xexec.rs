@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use xexec::calibrate::{calibrate_impact, calibrate_impact_robust};
+use xexec::counterfactual::counterfactual;
 use xexec::curve::sweep_curve;
 use xexec::depth::{depth_metrics, queue_metrics};
 use xexec::execution::{bars, session_twap, session_vwap, summary};
@@ -9,7 +10,6 @@ use xexec::replay::{
     read_book, read_calibration, read_fills, read_impact, read_quotes, read_ticks,
 };
 use xexec::schedule::optimal_schedule;
-use xexec::counterfactual::counterfactual;
 use xexec::shortfall::shortfall;
 use xexec::sweep::sweep_cost;
 
