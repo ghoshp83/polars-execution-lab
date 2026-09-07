@@ -26,6 +26,7 @@ from xexeclab.engine import (
     read_impact,
     read_quotes,
     read_ticks,
+    sensitivity,
     shortfall,
     summary,
     sweep_cost,
@@ -48,6 +49,7 @@ SCHEDULE = dict(
     slices=6, total_size=3.0, per_slice_volume=2.0, coef_bps=25.0, perm_coef_bps=5.0, sigma_bps=8.0
 )
 SHORTFALL = dict(parent_qty=3.5, arrival_price=30000.0, coef_bps=25.0, perm_coef_bps=5.0)
+COEF_GRID = [10.0, 15.0, 20.0, 25.0, 30.0]
 BUCKET_MS = 1000
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -392,6 +394,59 @@ def test_rust_and_python_counterfactual_comparisons_are_identical():
     # engines agreed only that everything cost the same.
     assert rust["edge_bps"] != 0.0
     assert rust["realised"]["impact_bps"] != 0.0
+
+
+def test_rust_and_python_sensitivity_sweeps_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The whole grid is compared point by point, not just the summary: a
+    # disagreement at a single coefficient can flip verdict_stable, change where
+    # the sign flips, and invent or erase a breakeven the other engine never saw.
+    proc = subprocess.run(
+        [
+            binary,
+            "sensitivity",
+            "--input",
+            FILL_SAMPLE,
+            "--arrival",
+            str(SHORTFALL["arrival_price"]),
+            "--coef-grid",
+            ",".join(str(c) for c in COEF_GRID),
+            "--perm-coef-bps",
+            str(SHORTFALL["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = sensitivity(
+        read_fills(FILL_SAMPLE),
+        "BTC-USD",
+        SHORTFALL["arrival_price"],
+        COEF_GRID,
+        SHORTFALL["perm_coef_bps"],
+    )
+
+    for field in (
+        "side",
+        "intervals",
+        "edge_min_bps",
+        "edge_max_bps",
+        "sign_flips",
+        "verdict_stable",
+        "breakeven_coef_bps",
+    ):
+        assert rust[field] == py[field], field
+    assert rust["points"] == py["points"]
+
+    # The sweep must have moved something, or the engines agreed only that the
+    # coefficient makes no difference.
+    assert len(rust["points"]) == len(COEF_GRID)
+    assert rust["edge_min_bps"] != rust["edge_max_bps"]
 
 
 def test_rust_and_python_impact_curves_are_identical():
