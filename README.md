@@ -12,7 +12,8 @@ imply), by the **market impact** a schedule pays for the size it takes, by the
 **implementation shortfall** versus the price when the order arrived, and by
 how much of that shortfall the impact model was always going to charge, and by
 whether the schedule that was actually run beat the simple benchmarks it could
-have been. This project builds that measurement
+have been — and by whether that verdict survives the impact coefficient it was
+priced with. This project builds that measurement
 engine over live crypto tick, quote, and order-book data — the aggregations and
 benchmarks are expressed **once** with
 the [Polars](https://pola.rs) query engine and executed **natively in Rust** (the
@@ -82,6 +83,8 @@ flowchart LR
     PY --> SF
     RUST --> CF[Counterfactual scheduling<br/>realised vs TWAP vs volume]
     PY --> CF
+    RUST --> SENS[Coefficient sensitivity<br/>does the verdict survive the calibration?]
+    PY --> SENS
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
     PY --> CALIB
     PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
@@ -95,6 +98,7 @@ flowchart LR
     SCHED -.->|assert identical| EQ
     SF -.->|assert identical| EQ
     CF -.->|assert identical| EQ
+    SENS -.->|assert identical| EQ
     CALIB -.->|assert identical| EQ
 
     style engine fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
@@ -149,6 +153,10 @@ uv run xexeclab shortfall --input data/sample_fills.ndjson --parent-qty 3.5 \
 # and ask whether that schedule was worth anything: realised vs TWAP vs volume
 uv run xexeclab counterfactual --input data/sample_fills.ndjson --arrival 30000 \
                                --coef-bps 25 --perm-coef-bps 5
+
+# ...and whether that verdict survives the coefficient it was priced with
+uv run xexeclab sensitivity --input data/sample_fills.ndjson --arrival 30000 \
+                            --coef-grid 10,15,20,25,30 --perm-coef-bps 5
 
 # fit the impact coefficients from realised fills (participation + realised cost per child)
 uv run xexeclab calibrate --input data/sample_calibration.ndjson
@@ -319,6 +327,16 @@ This is a **market-data and execution-analytics** project, not a trading system.
   about whether finishing the parent was the right call — that is what
   `shortfall`'s `opportunity_bps` is for. Only TWAP and volume-following are
   offered; they are reference points, not the best schedule available.
+- **`xexeclab sensitivity` sweeps one axis, not the plane.** It varies `coef_bps`
+  across a grid you supply while holding `perm_coef_bps`, the price path, the
+  traded volumes and the allocation rules fixed, so it answers "would this
+  verdict change if the temporary coefficient were different" and nothing wider.
+  A `verdict_stable: true` therefore means stable *over the grid you chose*: pick
+  a narrow enough range and any verdict looks robust, so the range should come
+  from what `calibrate` or `curve` actually says the coefficient could be. The
+  `breakeven_coef_bps` is exact rather than interpolated — the edge is affine in
+  `coef_bps` — but it is the breakeven *under this cost model*, not a market
+  observable.
 
 ## License
 

@@ -4,6 +4,43 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] - 2026-09-07
+
+### Added
+- **Coefficient sensitivity -- `sensitivity` / `sensitivity`.** v0.14.0 reports
+  `edge_bps` as though the temporary-impact coefficient were known. It is not: it
+  is fitted, by `calibrate` or `curve`, from noisy data. So the same comparison is
+  re-run across a grid of `coef_bps` and the answers are lined up, which lets a
+  desk ask whether a verdict is a property of the execution or of the number that
+  was fed into it.
+
+  `verdict_stable` is the headline, and it is deliberately strict: true only when
+  every point on the grid picks the same best alternative *and* agrees on the sign
+  of the edge. A constant winner is not enough -- a comparison that shrinks
+  through zero has changed its answer even if the same benchmark keeps winning.
+  An edge of exactly zero is a tie, and a tie is not a stable verdict either.
+
+  When the sign does flip, `breakeven_coef_bps` is the coefficient at which it
+  does. That number is exact rather than approximate: the edge is affine in
+  `coef_bps` (drift does not depend on it, and both impact terms are linear in
+  their coefficients), so interpolating between the two bracketing grid points
+  lands on the true crossing. A test asserts this by re-running `counterfactual`
+  at the reported breakeven and requiring the edge back to be zero.
+
+  `perm_coef_bps` is held fixed: this sweeps one axis, not the plane.
+
+  On the bundled sample the verdict is stable -- the realised schedule loses to
+  volume-following at every coefficient from 10bps to 30bps, by between 0.73 and
+  0.94bps. That result is kept as it is: the loss reported in v0.14.0 is a
+  property of the schedule, not of the calibration.
+- `sensitivity` on both CLIs, reading the same realised-fill replay as
+  `counterfactual` and taking the grid as `--coef-grid 10,20,30`.
+
+### Changed
+- The cross-language equivalence suite gains a thirteenth test. It compares the
+  whole grid point by point, not just the summary, because a disagreement at a
+  single coefficient can flip `verdict_stable` and invent or erase a breakeven.
+
 ## [0.14.0] - 2026-09-05
 
 ### Added
