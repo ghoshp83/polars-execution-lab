@@ -934,6 +934,104 @@ def counterfactual(
     }
 
 
+def sensitivity(
+    df: pl.DataFrame,
+    product: str,
+    arrival_price: float,
+    coef_grid: list[float],
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """Does the counterfactual verdict survive the coefficient it was priced with?
+
+    ``counterfactual`` reports ``edge_bps`` as though the temporary-impact
+    coefficient were known. It is not: it is fitted, by ``calibrate_impact`` or
+    ``sweep_curve``, from noisy data. A desk told "your schedule lost 0.8bps to
+    volume-following" should be able to ask whether that verdict is a property of
+    the execution or of the number that was fed in.
+
+    So the same comparison is re-run across a grid of ``coef_bps`` and the
+    answers are lined up. ``verdict_stable`` is the headline: it is true only
+    when every point in the grid picks the same best alternative *and* agrees on
+    the sign of the edge. When the sign does flip, ``breakeven_coef_bps`` is the
+    coefficient at which it does -- and because the edge is affine in
+    ``coef_bps`` (drift does not depend on it, and both impact terms are linear
+    in their coefficients), interpolating between the two bracketing grid points
+    is exact rather than approximate.
+
+    ``perm_coef_bps`` is held fixed: this sweeps one axis, not the plane.
+
+    Mirrors ``sensitivity`` in ``src/sensitivity.rs`` operation for operation.
+    """
+    # One point is not a sensitivity, and an unsorted grid would make the
+    # bracketing interpolation meaningless.
+    if len(coef_grid) < 2:
+        raise ValueError(f"coef_grid needs at least 2 points, got {len(coef_grid)}")
+    for v in coef_grid:
+        if not math.isfinite(v) or v < 0.0:
+            raise ValueError(f"coef_grid values must be non-negative and finite, got {v}")
+    for a, b in zip(coef_grid, coef_grid[1:], strict=False):
+        if b <= a:
+            raise ValueError(f"coef_grid must be strictly increasing, got {a} then {b}")
+
+    reports = [counterfactual(df, product, arrival_price, c, perm_coef_bps) for c in coef_grid]
+    points = [
+        {
+            "coef_bps": _r8(c),
+            "realised_cost_bps": r["realised"]["cost_bps"],
+            "best_alternative": r["best_alternative"],
+            "best_cost_bps": min(a["cost_bps"] for a in r["alternatives"]),
+            "edge_bps": r["edge_bps"],
+        }
+        for c, r in zip(coef_grid, reports, strict=True)
+    ]
+
+    grid = pl.DataFrame(
+        {
+            "coef_bps": [p["coef_bps"] for p in points],
+            "edge_bps": [p["edge_bps"] for p in points],
+        }
+    )
+    agg = grid.select(
+        pl.col("edge_bps").min().alias("edge_min"),
+        pl.col("edge_bps").max().alias("edge_max"),
+    )
+    edge_min = float(agg["edge_min"][0])
+    edge_max = float(agg["edge_max"][0])
+
+    # A sign flip between adjacent points is where the verdict changes hands.
+    # An edge of exactly zero is a tie, and a tie is not a stable verdict either.
+    sign_flips = 0
+    breakeven: float | None = None
+    for a, b in zip(points, points[1:], strict=False):
+        if a["edge_bps"] * b["edge_bps"] < 0.0:
+            sign_flips += 1
+            if breakeven is None:
+                span = b["coef_bps"] - a["coef_bps"]
+                breakeven = a["coef_bps"] + span * (-a["edge_bps"]) / (
+                    b["edge_bps"] - a["edge_bps"]
+                )
+    for p in points:
+        if p["edge_bps"] == 0.0 and breakeven is None:
+            breakeven = p["coef_bps"]
+
+    names = {p["best_alternative"] for p in points}
+    stable = len(names) == 1 and (edge_min > 0.0 or edge_max < 0.0)
+
+    return {
+        "product": product,
+        "side": str(df["side"][0]),
+        "intervals": df.height,
+        "arrival_price": _r8(arrival_price),
+        "perm_coef_bps": _r8(perm_coef_bps),
+        "points": points,
+        "edge_min_bps": _r8(edge_min),
+        "edge_max_bps": _r8(edge_max),
+        "sign_flips": sign_flips,
+        "verdict_stable": stable,
+        "breakeven_coef_bps": None if breakeven is None else _r8(breakeven),
+    }
+
+
 def impact_curve(
     df: pl.DataFrame, product: str, coef_bps: float, perm_coef_bps: float = 0.0
 ) -> dict:
