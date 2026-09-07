@@ -23,6 +23,7 @@ from .engine import (
     read_impact,
     read_quotes,
     read_ticks,
+    sensitivity,
     session_twap,
     session_vwap,
     shortfall,
@@ -154,6 +155,13 @@ def cmd_counterfactual(a: argparse.Namespace) -> None:
     df = read_fills(a.input)
     product = df["product"][0] if df.height else a.product
     print(json.dumps(counterfactual(df, product, a.arrival, a.coef_bps, a.perm_coef_bps)))
+
+
+def cmd_sensitivity(a: argparse.Namespace) -> None:
+    df = read_fills(a.input)
+    product = df["product"][0] if df.height else a.product
+    grid = [float(s) for s in a.coef_grid.split(",")]
+    print(json.dumps(sensitivity(df, product, a.arrival, grid, a.perm_coef_bps)))
 
 
 def cmd_calibrate(a: argparse.Namespace) -> None:
@@ -487,6 +495,27 @@ def main(argv: list[str] | None = None) -> None:
     )
     pcf.add_argument("--product", default="BTC-USD")
     pcf.set_defaults(fn=cmd_counterfactual)
+
+    psen = sub.add_parser(
+        "sensitivity", help="re-run the counterfactual across a grid of impact coefficients"
+    )
+    psen.add_argument("--input", required=True, help="fill replay (.ndjson/.jsonl/.parquet)")
+    psen.add_argument(
+        "--arrival", type=float, required=True, help="arrival (decision) price of the parent"
+    )
+    psen.add_argument(
+        "--coef-grid",
+        default="10,20,30",
+        help="comma-separated, strictly increasing grid of temporary-impact coefficients",
+    )
+    psen.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation; held fixed across the grid",
+    )
+    psen.add_argument("--product", default="BTC-USD")
+    psen.set_defaults(fn=cmd_sensitivity)
 
     pcal = sub.add_parser("calibrate", help="fit impact coefficients from a realised-fill replay")
     pcal.add_argument("--input", required=True, help="calibration replay (.ndjson/.jsonl/.parquet)")
