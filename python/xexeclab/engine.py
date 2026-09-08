@@ -8,6 +8,7 @@ asserts the summaries match exactly.
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -157,6 +158,134 @@ def order_flow(df: pl.DataFrame) -> tuple[float, float, float]:
     total = buy + sell
     imbalance = 0.0 if total == 0 else (buy - sell) / total
     return _r8(buy), _r8(sell), _r8(imbalance)
+
+
+def _fold_chunk(rows: list[dict], acc: dict) -> None:
+    """Reduce one chunk of ticks into the accumulator with the Polars engine.
+
+    The price/size/side sums are the same expressions ``session_vwap`` and
+    ``order_flow`` use over the whole frame; summing chunk sums is what makes
+    the fold associative. Mirrors the Rust ``fold_chunk``.
+    """
+    chunk = pl.DataFrame(
+        {
+            "price": [float(r["price"]) for r in rows],
+            "size": [float(r["size"]) for r in rows],
+            "side": [str(r["side"]) for r in rows],
+        }
+    )
+    out = chunk.lazy().select(
+        (pl.col("price") * pl.col("size")).sum().alias("pv"),
+        pl.col("size").sum().alias("v"),
+        pl.col("size").filter(pl.col("side") == "buy").sum().alias("buy"),
+        pl.col("size").filter(pl.col("side") == "sell").sum().alias("sell"),
+    )
+    row = out.collect()
+    acc["pv"] += row["pv"][0] or 0.0
+    acc["volume"] += row["v"][0] or 0.0
+    acc["buy"] += row["buy"][0] or 0.0
+    acc["sell"] += row["sell"][0] or 0.0
+
+
+def stream_session(path: str | Path, chunk_rows: int) -> dict:
+    """Fold a session's benchmarks out of an NDJSON capture in bounded memory.
+
+    Every other reader in this module materialises the whole file. That is fine
+    for a fixture and wrong for a real capture: a day of trades on a liquid
+    product does not fit the machine that wants the VWAP of it. So the file is
+    folded in chunks of ``chunk_rows`` -- each aggregated with Polars and
+    reduced into a running accumulator -- and only one chunk plus one carried
+    tick is ever resident. ``peak_rows_in_memory`` reports that bound.
+
+    The result is the same session VWAP, TWAP and order flow the in-memory pass
+    computes: the fold is a different route to the answer, not a different
+    answer. A streamed pass cannot sort what it has not seen, so a capture that
+    is not already in time order is refused rather than silently mis-priced.
+
+    Mirrors the Rust ``stream_session`` operation for operation.
+    """
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be >= 1")
+    name = str(path)
+    if not (name.endswith(".ndjson") or name.endswith(".jsonl")):
+        raise ValueError(f"streaming reads NDJSON only, got {name}")
+
+    acc = {"pv": 0.0, "volume": 0.0, "buy": 0.0, "sell": 0.0}
+    twap_num = 0.0
+    twap_den = 0.0
+    buf: list[dict] = []
+    rows = 0
+    chunks = 0
+    product = ""
+    first_ts = 0
+    # The last tick of the previous chunk: its sample-and-hold interval runs
+    # into the next chunk, so it is carried across the boundary rather than
+    # dropped. Without it a chunked TWAP would silently lose one interval per
+    # boundary and drift away from the in-memory answer.
+    carry: dict | None = None
+
+    with open(name, encoding="utf-8") as fh:
+        for i, line in enumerate(fh):
+            trimmed = line.strip()
+            if not trimmed:
+                continue
+            try:
+                tick = json.loads(trimmed)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"parsing record on line {i + 1}") from exc
+            ts = int(tick["ts_ns"])
+            if rows == 0:
+                product = str(tick["product"])
+                first_ts = ts
+            if carry is not None:
+                prev_ts = int(carry["ts_ns"])
+                if ts < prev_ts:
+                    raise ValueError(
+                        f"replay is not in time order at row {rows + 1}: {ts} follows {prev_ts}"
+                    )
+                dt = float(ts - prev_ts)
+                twap_num += float(carry["price"]) * dt
+                twap_den += dt
+            carry = tick
+            buf.append(tick)
+            rows += 1
+            if len(buf) == chunk_rows:
+                _fold_chunk(buf, acc)
+                chunks += 1
+                buf = []
+    if buf:
+        _fold_chunk(buf, acc)
+        chunks += 1
+
+    if rows == 0:
+        raise ValueError(f"no ticks in {name}")
+    if rows < 2:
+        raise ValueError("need >= 2 ticks for twap")
+    if acc["volume"] == 0:
+        raise ValueError("zero total size")
+    if twap_den == 0:
+        raise ValueError("zero elapsed time")
+
+    total = acc["buy"] + acc["sell"]
+    imbalance = 0.0 if total == 0 else (acc["buy"] - acc["sell"]) / total
+    last_ts = int(carry["ts_ns"]) if carry is not None else first_ts
+    peak = min(chunk_rows, rows) + (1 if chunks > 1 else 0)
+    return {
+        "product": product,
+        "rows": rows,
+        "chunks": chunks,
+        "chunk_rows": chunk_rows,
+        "peak_rows_in_memory": peak,
+        "first_ts_ns": first_ts,
+        "last_ts_ns": last_ts,
+        "volume": _r8(acc["volume"]),
+        "notional": _r8(acc["pv"]),
+        "vwap": _r8(acc["pv"] / acc["volume"]),
+        "twap": _r8(twap_num / twap_den),
+        "buy_volume": _r8(acc["buy"]),
+        "sell_volume": _r8(acc["sell"]),
+        "imbalance": _r8(imbalance),
+    }
 
 
 def quote_metrics(df: pl.DataFrame, product: str) -> dict:
