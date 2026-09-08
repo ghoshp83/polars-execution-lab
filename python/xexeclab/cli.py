@@ -27,6 +27,7 @@ from .engine import (
     session_twap,
     session_vwap,
     shortfall,
+    stream_session,
     summary,
     sweep_cost,
     sweep_curve,
@@ -162,6 +163,10 @@ def cmd_sensitivity(a: argparse.Namespace) -> None:
     product = df["product"][0] if df.height else a.product
     grid = [float(s) for s in a.coef_grid.split(",")]
     print(json.dumps(sensitivity(df, product, a.arrival, grid, a.perm_coef_bps)))
+
+
+def cmd_stream(a: argparse.Namespace) -> None:
+    print(json.dumps(stream_session(a.input, a.chunk_rows)))
 
 
 def cmd_calibrate(a: argparse.Namespace) -> None:
@@ -516,6 +521,18 @@ def main(argv: list[str] | None = None) -> None:
     )
     psen.add_argument("--product", default="BTC-USD")
     psen.set_defaults(fn=cmd_sensitivity)
+
+    pstr = sub.add_parser(
+        "stream", help="session benchmarks folded out of a capture in bounded memory"
+    )
+    pstr.add_argument("--input", required=True, help="tick replay (.ndjson/.jsonl)")
+    pstr.add_argument(
+        "--chunk-rows",
+        type=int,
+        default=4096,
+        help="ticks resident at once; the answer does not depend on it, the memory does",
+    )
+    pstr.set_defaults(fn=cmd_stream)
 
     pcal = sub.add_parser("calibrate", help="fit impact coefficients from a realised-fill replay")
     pcal.add_argument("--input", required=True, help="calibration replay (.ndjson/.jsonl/.parquet)")

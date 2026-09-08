@@ -12,6 +12,7 @@ use xexec::replay::{
 use xexec::schedule::optimal_schedule;
 use xexec::sensitivity::sensitivity;
 use xexec::shortfall::shortfall;
+use xexec::stream::stream_session;
 use xexec::sweep::sweep_cost;
 
 fn arg_value(args: &[String], key: &str) -> Option<String> {
@@ -22,7 +23,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|shortfall|counterfactual|sensitivity> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--arrival N] [--coef-grid N,N,N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -55,6 +56,21 @@ fn main() -> Result<()> {
             arg_f64(&args, "--sigma-bps", 0.0)?,
         )?;
         println!("{}", serde_json::to_string(&plan)?);
+        return Ok(());
+    }
+
+    // `stream` is the other command that does not go through `read_ticks`: the
+    // whole point is that it never holds the capture, so it opens the file
+    // itself and folds it in chunks.
+    if cmd == "stream" {
+        let input =
+            arg_value(&args, "--input").ok_or_else(|| anyhow!("--input required\n{USAGE}"))?;
+        let chunk_rows: usize = arg_value(&args, "--chunk-rows")
+            .map(|s| s.parse())
+            .transpose()?
+            .unwrap_or(4096);
+        let report = stream_session(&input, chunk_rows)?;
+        println!("{}", serde_json::to_string(&report)?);
         return Ok(());
     }
 
