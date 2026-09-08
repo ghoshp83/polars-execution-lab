@@ -43,3 +43,31 @@ jobs:
         run: cargo build --release
       - name: Test
         run: XEXEC_BIN=target/release/xexec uv run pytest --cov=xexeclab
+
+  polars2:
+    name: python (Polars 2.0 forward-compatibility, advisory)
+    runs-on: ubuntu-latest
+    # Advisory only. The project pins `polars>=1.0` and the Rust half is on the
+    # 0.x crate line, so the Python engine must not be pinned to a 2.0 release
+    # candidate -- the two halves would then be different engine generations and
+    # the equivalence tests would be comparing across a version boundary. This
+    # job exists to find out *early* when a 2.0 change would break us, not to
+    # gate the build on a pre-release.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Install the Polars 2.0 release candidate
+        run: |
+          uv venv
+          uv pip install --prerelease=allow "polars>=2.0rc1" websockets pyarrow pytest
+          uv run python -c "import polars; print('polars', polars.__version__)"
+      - name: Test the Python engine against Polars 2.0
+        # The equivalence tests are excluded on purpose: they compare against a
+        # Rust binary built on the 0.x crate line, so a failure there would say
+        # something about the version gap rather than about our code.
+        run: uv run pytest python/tests -q -m "not equivalence"
