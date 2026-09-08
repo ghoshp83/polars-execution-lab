@@ -4,6 +4,67 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] - 2026-09-08
+
+### Added
+- **Streamed sessions -- `stream` / `stream_session`.** Every other command in
+  this project starts by reading the whole replay into memory: Python calls
+  `pl.read_ndjson`, Rust deserialises the file into a `Vec`. That is fine for a
+  fixture and wrong for a real capture -- a day of trades on a liquid product
+  does not fit the machine that wants the VWAP of it.
+
+  So the capture is folded in chunks of `chunk_rows`. Each chunk is aggregated
+  with the Polars engine -- the same `sum` expressions `session_vwap` and
+  `order_flow` use over a whole frame -- and reduced into a fixed-size
+  accumulator. Only one chunk plus one carried tick is ever resident, and
+  `peak_rows_in_memory` reports that bound in the output, so the claim is a
+  number rather than a sentence in a README. On the bundled 13-row sample:
+  4 chunks, 5 rows resident.
+
+  The carried tick is the subtle part. A sample-and-hold TWAP weights each price
+  by the gap to the *next* trade, and at a chunk boundary that next trade is in
+  the following chunk. Dropping it would silently lose one interval per boundary
+  and drift the answer as a function of the chunk size, so the last tick of each
+  chunk is carried across. A test folds the same file at `chunk_rows` 1 through
+  1000 and requires every reported number to be identical: a chunk size is a
+  memory setting, and a memory setting that moves the VWAP is a bug.
+
+  A streamed pass cannot sort what it has not seen, so unlike the in-memory
+  readers -- which sort by `ts_ns` -- `stream` requires a capture already in time
+  order and refuses one that is not, rather than pricing shuffled gaps as real.
+  Parquet is refused by extension for the same honesty: it is a columnar sink,
+  not a line-oriented stream.
+
+- **Fourteenth cross-language equivalence test.** Both engines fold
+  `data/sample_ticks.ndjson` in the same chunks and must return identical
+  reports -- chunk count and residency bound included, so an engine that
+  quietly read the whole file would fail even if its VWAP agreed.
+
+- **Polars 2.0 forward-compatibility job in CI (advisory).** Polars 2.0rc1 is
+  out, and its headline change is that the streaming engine becomes the default
+  for every `LazyFrame` query. The Python engine here already runs on it: the
+  full suite passes unchanged under `2.0.0-rc.1`, since none of 2.0's breaking
+  changes (stricter type coercion, stricter `concat` height checks, removed
+  ambiguous casts) touch the expressions this project uses. A new
+  `continue-on-error` CI job keeps checking that, so the claim stays verified
+  rather than becoming a note about one afternoon.
+
+### Notes
+- **The project is deliberately not pinned to Polars 2.0.** Two reasons. It is a
+  release candidate, and the stable is still weeks out. More importantly the
+  Rust `polars` crate has not gone 2.0 -- crates.io tops out at 0.55.2, and this
+  crate pins 0.44 -- so pinning the Python half to 2.0 would put the two engines
+  on different generations and leave the cross-language equivalence tests
+  comparing across a version boundary rather than proving one engine. The
+  dependency stays `polars>=1.0`; the advisory job watches the gap.
+- The Python test suite validates this release's fold against Polars' own
+  out-of-core engine (`scan_ndjson(...).collect(engine="streaming")`) on the
+  session sums. The fold exists because that engine has no notion of the
+  sample-and-hold carry across a chunk boundary; where it *can* answer, it is
+  used as the reference.
+- The Rust crate's Polars feature set is unchanged (`lazy`, `abs`, `cum_agg`).
+  No `json`, `parquet` or `streaming` features were added.
+
 ## [0.15.0] - 2026-09-07
 
 ### Added

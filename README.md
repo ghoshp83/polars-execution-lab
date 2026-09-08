@@ -85,6 +85,8 @@ flowchart LR
     PY --> CF
     RUST --> SENS[Coefficient sensitivity<br/>does the verdict survive the calibration?]
     PY --> SENS
+    RUST --> STREAM[Streamed session<br/>bounded memory — the file is never held]
+    PY --> STREAM
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
     PY --> CALIB
     PY --> FILLS["Execution sim - POV / TWAP<br/>market impact, shortfall, slippage"]
@@ -99,6 +101,7 @@ flowchart LR
     SF -.->|assert identical| EQ
     CF -.->|assert identical| EQ
     SENS -.->|assert identical| EQ
+    STREAM -.->|assert identical| EQ
     CALIB -.->|assert identical| EQ
 
     style engine fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
@@ -157,6 +160,10 @@ uv run xexeclab counterfactual --input data/sample_fills.ndjson --arrival 30000 
 # ...and whether that verdict survives the coefficient it was priced with
 uv run xexeclab sensitivity --input data/sample_fills.ndjson --arrival 30000 \
                             --coef-grid 10,15,20,25,30 --perm-coef-bps 5
+
+# the same session benchmarks, folded out of the capture without ever holding it
+# (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
+uv run xexeclab stream  --input data/sample_ticks.ndjson --chunk-rows 4
 
 # fit the impact coefficients from realised fills (participation + realised cost per child)
 uv run xexeclab calibrate --input data/sample_calibration.ndjson
@@ -337,6 +344,26 @@ This is a **market-data and execution-analytics** project, not a trading system.
   `breakeven_coef_bps` is exact rather than interpolated — the edge is affine in
   `coef_bps` — but it is the breakeven *under this cost model*, not a market
   observable.
+- **`xexeclab stream` is bounded memory, not a distributed engine, and it only
+  streams ticks.** It folds an NDJSON capture in chunks and never holds more than
+  `chunk_rows` ticks plus one carried tick — `peak_rows_in_memory` reports that
+  bound — but it is a single-process, single-pass fold over a local file: no
+  parallelism, no spill-to-disk, no cluster. It reads NDJSON only; Parquet is a
+  columnar sink rather than a line-oriented stream and is refused by extension.
+  Because a streamed pass cannot sort what it has not read, the capture must
+  already be in time order — one that is not is refused rather than priced as if
+  its gaps were real, which is a stricter contract than the in-memory readers,
+  which sort for you. Only the session aggregates (`vwap`, `twap`, volume,
+  notional, order flow) are streamed; every other command in this project still
+  reads its whole replay into memory.
+- **Polars 2.0 is watched, not adopted.** Polars 2.0rc1 makes the streaming
+  engine the default for every `LazyFrame` query, and the Python engine here
+  passes its whole test suite unchanged on it — an advisory CI job keeps
+  checking. The dependency stays `polars>=1.0` anyway: 2.0 is still a release
+  candidate, and the Rust `polars` crate has not gone 2.0 (crates.io tops out at
+  0.55.2, this crate pins 0.44). Pinning the Python half to 2.0 would put the two
+  engines on different generations and leave the cross-language equivalence
+  tests comparing across a version boundary instead of proving one engine.
 
 ## License
 
