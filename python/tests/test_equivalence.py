@@ -27,7 +27,10 @@ from xexeclab.engine import (
     read_quotes,
     read_ticks,
     sensitivity,
+    session_twap,
+    session_vwap,
     shortfall,
+    stream_session,
     summary,
     sweep_cost,
     sweep_curve,
@@ -50,6 +53,8 @@ SCHEDULE = dict(
 )
 SHORTFALL = dict(parent_qty=3.5, arrival_price=30000.0, coef_bps=25.0, perm_coef_bps=5.0)
 COEF_GRID = [10.0, 15.0, 20.0, 25.0, 30.0]
+# Deliberately smaller than the 13-row sample, so the fold really chunks.
+STREAM_CHUNK_ROWS = 4
 BUCKET_MS = 1000
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -447,6 +452,39 @@ def test_rust_and_python_sensitivity_sweeps_are_identical():
     # coefficient makes no difference.
     assert len(rust["points"]) == len(COEF_GRID)
     assert rust["edge_min_bps"] != rust["edge_max_bps"]
+
+
+def test_rust_and_python_streamed_sessions_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # Both engines fold the same capture in the same chunks. The chunk count and
+    # the residency bound are compared alongside the numbers: two engines that
+    # agreed on the VWAP while one of them quietly read the whole file would not
+    # be running the same algorithm, and this is the release that claims they do.
+    proc = subprocess.run(
+        [binary, "stream", "--input", SAMPLE, "--chunk-rows", str(STREAM_CHUNK_ROWS)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = stream_session(SAMPLE, STREAM_CHUNK_ROWS)
+
+    assert rust == py
+
+    # The fold must have actually chunked: with one chunk this would only prove
+    # the two engines agree on a single in-memory pass, which is the property
+    # the other thirteen tests already cover.
+    assert rust["chunks"] > 1
+    assert rust["peak_rows_in_memory"] < rust["rows"]
+
+    # ...and it must be the same session the in-memory pass reports.
+    df = read_ticks(SAMPLE)
+    assert rust["vwap"] == session_vwap(df)
+    assert rust["twap"] == session_twap(df)
 
 
 def test_rust_and_python_impact_curves_are_identical():
