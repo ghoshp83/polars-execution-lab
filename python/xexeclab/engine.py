@@ -764,6 +764,159 @@ def optimal_schedule(
     }
 
 
+def _volume_profile(df: pl.DataFrame, bucket_ns: int) -> pl.DataFrame:
+    """Per-bucket volume and VWAP, ascending by bucket.
+
+    The ticks are sorted first, exactly as ``bars`` does, so the within-bucket
+    summation order does not depend on the order the capture arrived in.
+    Mirrors the Rust ``volume_profile`` in ``src/pov.rs``.
+    """
+    return (
+        df.sort("ts_ns")
+        .with_columns(((pl.col("ts_ns") // bucket_ns) * bucket_ns).alias("bucket_ns"))
+        .group_by("bucket_ns")
+        .agg(
+            pl.col("size").sum().alias("volume"),
+            (pl.col("price") * pl.col("size")).sum().alias("pv"),
+        )
+        .sort("bucket_ns")
+        .with_columns((pl.col("pv") / pl.col("volume")).alias("vwap"))
+    )
+
+
+def pov_schedule(
+    df: pl.DataFrame,
+    product: str,
+    bucket_ns: int,
+    parent_qty: float,
+    cap: float,
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """The schedule the capture's own volume implies.
+
+    ``optimal_schedule`` chooses a trajectory against a single assumed
+    ``per_slice_volume``. Real volume is not flat, and a clock-uniform slice
+    dropped into a thin interval is a large share of a small market. This plan
+    is derived from measured volume instead: the capture is bucketed, and each
+    bucket gets the parent order in proportion to the volume it actually traded.
+
+    Two properties follow from that allocation, and both are reported rather
+    than assumed -- participation is ``parent_qty / total_volume`` in *every*
+    bucket by construction, so the cap is a single scalar check with nothing to
+    redistribute; and the achieved price is the volume-weighted mean of the
+    bucket VWAPs, which is the session VWAP itself, so ``pov_tracking_bps`` is
+    zero up to rounding.
+
+    The clock-uniform allocation of the same quantity over the same buckets is
+    priced alongside it as the benchmark, and has neither property. Mirrors the
+    Rust ``pov_schedule`` operation for operation; see the Rust ``PovPlan`` doc
+    for the field meanings.
+    """
+    if df.height == 0:
+        raise ValueError("no ticks")
+    if bucket_ns < 1:
+        raise ValueError(f"bucket_ns must be >= 1, got {bucket_ns}")
+    if not math.isfinite(parent_qty) or parent_qty <= 0:
+        raise ValueError(f"parent_qty must be a positive finite number, got {parent_qty}")
+    if not math.isfinite(cap) or cap <= 0 or cap > 1:
+        raise ValueError(f"cap must be in (0, 1], got {cap}")
+    for name, v in (("coef_bps", coef_bps), ("perm_coef_bps", perm_coef_bps)):
+        if not math.isfinite(v) or v < 0:
+            raise ValueError(f"{name} must be a non-negative finite number, got {v}")
+
+    profile = _volume_profile(df, bucket_ns)
+    volume = profile["volume"].to_list()
+    total_volume = sum(volume)
+    if total_volume <= 0:
+        raise ValueError("zero traded volume")
+    # A bucket that traded nothing has no VWAP to execute at. Buckets only exist
+    # where trades landed, so this means one whose trades all had zero size.
+    for i, v in enumerate(volume):
+        if v <= 0:
+            raise ValueError(
+                f"bucket {profile['bucket_ns'][i]} traded no volume and cannot be priced"
+            )
+
+    participation = parent_qty / total_volume
+    if participation > cap:
+        raise ValueError(
+            f"a volume-proportional schedule takes {participation:.4f} of the traded "
+            f"volume, above the cap {cap:.4f}; use a smaller order or raise the cap"
+        )
+
+    n = profile.height
+    priced = (
+        profile.with_columns((pl.col("volume") / total_volume).alias("share"))
+        .with_columns(
+            (pl.col("share") * parent_qty).alias("size"),
+            (parent_qty / n / pl.col("volume")).alias("twap_participation"),
+        )
+        .with_columns(
+            (pl.col("share") * (coef_bps * math.sqrt(participation))).alias("temp_bps"),
+            (pl.col("share") * (perm_coef_bps * participation)).alias("perm_bps"),
+            (pl.col("share") * pl.col("vwap")).alias("pov_pv"),
+            (pl.col("vwap") / n).alias("twap_pv"),
+        )
+        .with_columns(
+            (pl.col("twap_participation").sqrt() * (coef_bps / n)).alias("twap_temp_bps"),
+            (pl.col("twap_participation") * (perm_coef_bps / n)).alias("twap_perm_bps"),
+        )
+    )
+    totals = priced.select(
+        pl.col("temp_bps").sum().alias("temp"),
+        pl.col("perm_bps").sum().alias("perm"),
+        pl.col("pov_pv").sum().alias("pov_price"),
+        pl.col("twap_pv").sum().alias("twap_price"),
+        pl.col("twap_temp_bps").sum().alias("twap_temp"),
+        pl.col("twap_perm_bps").sum().alias("twap_perm"),
+        pl.col("twap_participation").max().alias("twap_max"),
+    )
+
+    session = session_vwap(df)
+    pov_price = totals["pov_price"][0]
+    twap_price = totals["twap_price"][0]
+    pov_impact = totals["temp"][0] + totals["perm"][0]
+    twap_impact = totals["twap_temp"][0] + totals["twap_perm"][0]
+    twap_max = totals["twap_max"][0]
+
+    schedule = [
+        {
+            "bucket_ns": priced["bucket_ns"][i],
+            "volume": _r8(volume[i]),
+            "volume_share": _r8(priced["share"][i]),
+            "vwap": _r8(priced["vwap"][i]),
+            "size": _r8(priced["size"][i]),
+            "participation": _r8(participation),
+            "temp_bps": _r8(priced["temp_bps"][i]),
+            "perm_bps": _r8(priced["perm_bps"][i]),
+        }
+        for i in range(n)
+    ]
+    return {
+        "product": product,
+        "bucket_ns": bucket_ns,
+        "buckets": n,
+        "parent_qty": _r8(parent_qty),
+        "cap": _r8(cap),
+        "total_volume": _r8(total_volume),
+        "participation": _r8(participation),
+        "coef_bps": _r8(coef_bps),
+        "perm_coef_bps": _r8(perm_coef_bps),
+        "session_vwap": session,
+        "pov_price": _r8(pov_price),
+        "pov_tracking_bps": _r8((pov_price - session) / session * 1e4),
+        "pov_impact_bps": _r8(pov_impact),
+        "twap_price": _r8(twap_price),
+        "twap_tracking_bps": _r8((twap_price - session) / session * 1e4),
+        "twap_impact_bps": _r8(twap_impact),
+        "twap_max_participation": _r8(twap_max),
+        "twap_feasible": _r8(twap_max) <= _r8(cap),
+        "edge_bps": _r8(twap_impact - pov_impact),
+        "schedule": schedule,
+    }
+
+
 def shortfall(
     df: pl.DataFrame,
     product: str,
