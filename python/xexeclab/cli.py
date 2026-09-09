@@ -15,6 +15,7 @@ from .engine import (
     depth_metrics,
     impact_curve,
     optimal_schedule,
+    pov_schedule,
     queue_metrics,
     quote_metrics,
     read_book,
@@ -135,6 +136,24 @@ def cmd_schedule(a: argparse.Namespace) -> None:
                 a.coef_bps,
                 a.perm_coef_bps,
                 a.sigma_bps,
+            )
+        )
+    )
+
+
+def cmd_pov_plan(a: argparse.Namespace) -> None:
+    df = read_ticks(a.input)
+    product = df["product"][0] if df.height else a.product
+    print(
+        json.dumps(
+            pov_schedule(
+                df,
+                product,
+                a.bucket_ms * 1_000_000,
+                a.parent_qty,
+                a.cap,
+                a.coef_bps,
+                a.perm_coef_bps,
             )
         )
     )
@@ -443,6 +462,33 @@ def main(argv: list[str] | None = None) -> None:
     )
     psc.add_argument("--product", default="BTC-USD")
     psc.set_defaults(fn=cmd_schedule)
+
+    ppv = sub.add_parser(
+        "pov-plan",
+        help="allocate a parent order across a capture in proportion to traded volume",
+    )
+    ppv.add_argument("--input", required=True, help="tick replay (.ndjson/.jsonl/.parquet)")
+    ppv.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
+    ppv.add_argument(
+        "--parent-qty", type=float, default=1.0, help="parent order size in base units"
+    )
+    ppv.add_argument(
+        "--cap",
+        type=float,
+        default=0.25,
+        help="largest share of any bucket's volume the plan may take, in (0, 1]",
+    )
+    ppv.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    ppv.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    ppv.add_argument("--product", default="BTC-USD")
+    ppv.set_defaults(fn=cmd_pov_plan)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"
