@@ -18,6 +18,7 @@ from xexeclab.engine import (
     depth_metrics,
     impact_curve,
     optimal_schedule,
+    pov_schedule,
     queue_metrics,
     quote_metrics,
     read_book,
@@ -55,6 +56,10 @@ SHORTFALL = dict(parent_qty=3.5, arrival_price=30000.0, coef_bps=25.0, perm_coef
 COEF_GRID = [10.0, 15.0, 20.0, 25.0, 30.0]
 # Deliberately smaller than the 13-row sample, so the fold really chunks.
 STREAM_CHUNK_ROWS = 4
+# 0.2 against the sample's 1.73 of traded volume: an eighth of the capture, well
+# inside the cap, and small enough that the clock-uniform benchmark is feasible
+# too -- so the comparison is between two tradeable plans, not against a fiction.
+POV_PLAN = dict(parent_qty=0.2, cap=0.25, coef_bps=25.0, perm_coef_bps=5.0)
 BUCKET_MS = 1000
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -452,6 +457,66 @@ def test_rust_and_python_sensitivity_sweeps_are_identical():
     # coefficient makes no difference.
     assert len(rust["points"]) == len(COEF_GRID)
     assert rust["edge_min_bps"] != rust["edge_max_bps"]
+
+
+def test_rust_and_python_volume_following_plans_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The fifteenth equivalence test, and the first over a plan derived from the
+    # replay rather than from parameters alone: `schedule` chooses a trajectory
+    # from numbers the caller supplies, whereas this allocation is read out of
+    # the capture's own volume profile. So the engines must agree on the
+    # bucketing before they can agree on anything else.
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-plan",
+            "--input",
+            SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap",
+            str(POV_PLAN["cap"]),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    df = read_ticks(SAMPLE)
+    py = pov_schedule(
+        df,
+        df["product"][0],
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        POV_PLAN["cap"],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+
+    assert rust == py
+
+    # The profile must have more than one bucket, or "follows the volume" is
+    # vacuous -- a single bucket takes the whole parent whatever the rule.
+    assert rust["buckets"] > 1
+
+    # The two claims the module makes, checked against the Rust output rather
+    # than only the Python one: constant participation, and exact VWAP tracking.
+    assert {s["participation"] for s in rust["schedule"]} == {rust["participation"]}
+    assert rust["pov_price"] == session_vwap(df)
+    assert rust["pov_tracking_bps"] == 0.0
+
+    # The benchmark is a real alternative here, not an infeasible strawman.
+    assert rust["twap_feasible"]
 
 
 def test_rust_and_python_streamed_sessions_are_identical():
