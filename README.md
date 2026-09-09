@@ -85,6 +85,8 @@ flowchart LR
     PY --> CF
     RUST --> SENS[Coefficient sensitivity<br/>does the verdict survive the calibration?]
     PY --> SENS
+    RUST --> POV[Volume-following plan<br/>allocation read out of the capture]
+    PY --> POV
     RUST --> STREAM[Streamed session<br/>bounded memory — the file is never held]
     PY --> STREAM
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
@@ -101,6 +103,7 @@ flowchart LR
     SF -.->|assert identical| EQ
     CF -.->|assert identical| EQ
     SENS -.->|assert identical| EQ
+    POV -.->|assert identical| EQ
     STREAM -.->|assert identical| EQ
     CALIB -.->|assert identical| EQ
 
@@ -160,6 +163,11 @@ uv run xexeclab counterfactual --input data/sample_fills.ndjson --arrival 30000 
 # ...and whether that verdict survives the coefficient it was priced with
 uv run xexeclab sensitivity --input data/sample_fills.ndjson --arrival 30000 \
                             --coef-grid 10,15,20,25,30 --perm-coef-bps 5
+
+# plan the parent order against the volume the capture actually traded, not a
+# flat assumption (participation is constant by construction; it tracks the VWAP)
+uv run xexeclab pov-plan --input data/sample_ticks.ndjson --parent-qty 0.2 --cap 0.25 \
+                         --coef-bps 25 --perm-coef-bps 5
 
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
@@ -344,6 +352,13 @@ This is a **market-data and execution-analytics** project, not a trading system.
   `breakeven_coef_bps` is exact rather than interpolated — the edge is affine in
   `coef_bps` — but it is the breakeven *under this cost model*, not a market
   observable.
+- **`xexeclab pov-plan` follows the volume the capture already traded, which is
+  not the volume the future will trade.** The allocation is derived from a
+  historical profile, so using it as a forward schedule assumes tomorrow's shape
+  resembles the captured one; it is a planning aid and a benchmark, not a
+  forecast. The clock-uniform comparison is priced with the same square-root
+  law, and where that benchmark breaches the participation cap the output says
+  so (`twap_feasible: false`) rather than quietly clipping it.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
   streams ticks.** It folds an NDJSON capture in chunks and never holds more than
   `chunk_rows` ticks plus one carried tick — `peak_rows_in_memory` reports that

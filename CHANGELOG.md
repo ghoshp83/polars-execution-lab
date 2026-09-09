@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] - 2026-09-09
+
+### Added
+- **Volume-following execution plans -- `pov-plan` / `pov_schedule`.** `schedule`
+  (v0.12.0) chooses a trajectory against a single assumed `per_slice_volume`:
+  one number, held to be true of every interval. Real volume is not flat, and a
+  clock-uniform slice dropped into a thin interval is a large share of a small
+  market -- which is precisely what the square-root impact law charges most for.
+
+  This plan is derived from measured volume instead. The capture is bucketed
+  (the same buckets `bars` builds), and each bucket receives the parent order in
+  proportion to the volume it actually traded. Two properties follow from that
+  allocation, and both are reported rather than assumed:
+
+  1. **Participation is constant by construction.** Allocating
+     `parent_qty * volume_i / total_volume` into a bucket holding `volume_i`
+     leaves `parent_qty / total_volume` in every bucket, whatever the profile
+     looks like. So the participation cap is one scalar check -- there is
+     nothing to redistribute, and no water-filling loop for the two engines to
+     disagree about.
+  2. **It tracks the session VWAP exactly.** The achieved price is the
+     volume-weighted mean of the bucket VWAPs, which is the session VWAP itself.
+     `pov_tracking_bps` is therefore zero, and it is reported so that a
+     regression shows up as a number rather than as silence.
+
+  The clock-uniform allocation of the same quantity over the same buckets is
+  priced alongside it with the same two-term impact law. It has neither
+  property, and where it breaches the participation cap the output says so
+  (`twap_feasible: false`) instead of clipping it and calling the result a
+  benchmark.
+
+- **Fifteenth cross-language equivalence test.** The first over a plan derived
+  from the replay rather than from parameters alone: the engines have to agree
+  on the volume profile before they can agree on the allocation. Alongside the
+  exact equality it checks constant participation and exact VWAP tracking
+  against the Rust output, not only the Python one.
+
+### Notes
+- No new Polars feature flags. The profile is a `group_by` over an integer
+  bucket column, which the crate's minimal feature set already covers.
+- Named `pov-plan`, not `pov`, because `simulate --algo pov` already fills a POV
+  order; this one plans one from measured volume rather than simulating it.
+
 ## [0.16.0] - 2026-09-08
 
 ### Added
