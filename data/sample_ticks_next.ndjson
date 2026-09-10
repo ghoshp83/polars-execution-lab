@@ -1,0 +1,9 @@
+{"ts_ns": 1719792060000000000, "product": "BTC-USD", "price": 60070.0, "size": 0.30, "side": "buy", "trade_id": 14}
+{"ts_ns": 1719792060200000000, "product": "BTC-USD", "price": 60080.0, "size": 0.25, "side": "buy", "trade_id": 15}
+{"ts_ns": 1719792060500000000, "product": "BTC-USD", "price": 60075.0, "size": 0.20, "side": "sell", "trade_id": 16}
+{"ts_ns": 1719792060800000000, "product": "BTC-USD", "price": 60090.0, "size": 0.15, "side": "buy", "trade_id": 17}
+{"ts_ns": 1719792061300000000, "product": "BTC-USD", "price": 60085.0, "size": 0.10, "side": "sell", "trade_id": 18}
+{"ts_ns": 1719792061700000000, "product": "BTC-USD", "price": 60095.0, "size": 0.08, "side": "buy", "trade_id": 19}
+{"ts_ns": 1719792062100000000, "product": "BTC-USD", "price": 60100.0, "size": 0.22, "side": "buy", "trade_id": 20}
+{"ts_ns": 1719792062500000000, "product": "BTC-USD", "price": 60110.0, "size": 0.14, "side": "sell", "trade_id": 21}
+{"ts_ns": 1719792062800000000, "product": "BTC-USD", "price": 60105.0, "size": 0.11, "side": "buy", "trade_id": 22}
