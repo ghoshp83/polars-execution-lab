@@ -18,6 +18,7 @@ from xexeclab.engine import (
     depth_metrics,
     impact_curve,
     optimal_schedule,
+    pov_backtest,
     pov_schedule,
     queue_metrics,
     quote_metrics,
@@ -40,6 +41,9 @@ from xexeclab.engine import (
 pytestmark = pytest.mark.equivalence
 
 SAMPLE = "data/sample_ticks.ndjson"
+# A later session of the same product, over the same three seconds of the clock
+# but with a thin middle second: the session a plan built on SAMPLE has to meet.
+NEXT_SAMPLE = "data/sample_ticks_next.ndjson"
 QUOTE_SAMPLE = "data/sample_quotes.ndjson"
 BOOK_SAMPLE = "data/sample_book.ndjson"
 IMPACT_SAMPLE = "data/sample_impact.ndjson"
@@ -517,6 +521,61 @@ def test_rust_and_python_volume_following_plans_are_identical():
 
     # The benchmark is a real alternative here, not an infeasible strawman.
     assert rust["twap_feasible"]
+
+
+def test_rust_and_python_out_of_sample_volume_plans_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The sixteenth equivalence test, and the first over two captures: the
+    # engines must agree on both volume profiles, on how they line up, and on
+    # the price of the difference between them.
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-backtest",
+            "--plan-input",
+            SAMPLE,
+            "--input",
+            NEXT_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap",
+            str(POV_PLAN["cap"]),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = pov_backtest(
+        read_ticks(SAMPLE),
+        read_ticks(NEXT_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        POV_PLAN["cap"],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+
+    assert rust == py
+
+    # The profiles genuinely differ, or the backtest is the in-sample plan again.
+    assert rust["profile_distance"] > 0.0
+    assert len({s["participation"] for s in rust["schedule"]}) > 1
+
+    # The oracle is the cheapest allocation the cost model admits, so the price
+    # of the forecast is never negative -- checked on the Rust output too.
+    assert rust["forecast_cost_bps"] >= 0.0
+    assert rust["impact_bps"] >= rust["oracle_impact_bps"]
 
 
 def test_rust_and_python_streamed_sessions_are_identical():
