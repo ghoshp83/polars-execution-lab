@@ -784,6 +784,48 @@ def _volume_profile(df: pl.DataFrame, bucket_ns: int) -> pl.DataFrame:
     )
 
 
+def _validate_pov(
+    bucket_ns: int, parent_qty: float, cap: float, coef_bps: float, perm_coef_bps: float
+) -> None:
+    """The argument checks every volume plan shares; mirrors the Rust ``validate``."""
+    if bucket_ns < 1:
+        raise ValueError(f"bucket_ns must be >= 1, got {bucket_ns}")
+    if not math.isfinite(parent_qty) or parent_qty <= 0:
+        raise ValueError(f"parent_qty must be a positive finite number, got {parent_qty}")
+    if not math.isfinite(cap) or cap <= 0 or cap > 1:
+        raise ValueError(f"cap must be in (0, 1], got {cap}")
+    for name, v in (("coef_bps", coef_bps), ("perm_coef_bps", perm_coef_bps)):
+        if not math.isfinite(v) or v < 0:
+            raise ValueError(f"{name} must be a non-negative finite number, got {v}")
+
+
+def _measured(df: pl.DataFrame, bucket_ns: int) -> tuple[pl.DataFrame, list[float], float]:
+    """A capture's profile, per-bucket volumes and total, refusing one no plan
+    can be priced on. Mirrors the Rust ``measured``."""
+    if df.height == 0:
+        raise ValueError("no ticks")
+    profile = _volume_profile(df, bucket_ns)
+    volume = profile["volume"].to_list()
+    total_volume = sum(volume)
+    if total_volume <= 0:
+        raise ValueError("zero traded volume")
+    # A bucket that traded nothing has no VWAP to execute at. Buckets only exist
+    # where trades landed, so this means one whose trades all had zero size.
+    for i, v in enumerate(volume):
+        if v <= 0:
+            raise ValueError(
+                f"bucket {profile['bucket_ns'][i]} traded no volume and cannot be priced"
+            )
+    return profile, volume, total_volume
+
+
+def _slots(profile: pl.DataFrame, bucket_ns: int) -> list[int]:
+    """Bucket positions from the capture's first bucket: captures from different
+    sessions line up by time into the session, not by wall clock."""
+    bucket = profile["bucket_ns"].to_list()
+    return [(b - bucket[0]) // bucket_ns for b in bucket]
+
+
 def pov_schedule(
     df: pl.DataFrame,
     product: str,
@@ -813,30 +855,8 @@ def pov_schedule(
     Rust ``pov_schedule`` operation for operation; see the Rust ``PovPlan`` doc
     for the field meanings.
     """
-    if df.height == 0:
-        raise ValueError("no ticks")
-    if bucket_ns < 1:
-        raise ValueError(f"bucket_ns must be >= 1, got {bucket_ns}")
-    if not math.isfinite(parent_qty) or parent_qty <= 0:
-        raise ValueError(f"parent_qty must be a positive finite number, got {parent_qty}")
-    if not math.isfinite(cap) or cap <= 0 or cap > 1:
-        raise ValueError(f"cap must be in (0, 1], got {cap}")
-    for name, v in (("coef_bps", coef_bps), ("perm_coef_bps", perm_coef_bps)):
-        if not math.isfinite(v) or v < 0:
-            raise ValueError(f"{name} must be a non-negative finite number, got {v}")
-
-    profile = _volume_profile(df, bucket_ns)
-    volume = profile["volume"].to_list()
-    total_volume = sum(volume)
-    if total_volume <= 0:
-        raise ValueError("zero traded volume")
-    # A bucket that traded nothing has no VWAP to execute at. Buckets only exist
-    # where trades landed, so this means one whose trades all had zero size.
-    for i, v in enumerate(volume):
-        if v <= 0:
-            raise ValueError(
-                f"bucket {profile['bucket_ns'][i]} traded no volume and cannot be priced"
-            )
+    _validate_pov(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)
+    profile, volume, total_volume = _measured(df, bucket_ns)
 
     participation = parent_qty / total_volume
     if participation > cap:
@@ -913,6 +933,131 @@ def pov_schedule(
         "twap_max_participation": _r8(twap_max),
         "twap_feasible": _r8(twap_max) <= _r8(cap),
         "edge_bps": _r8(twap_impact - pov_impact),
+        "schedule": schedule,
+    }
+
+
+def pov_backtest(
+    plan_df: pl.DataFrame,
+    exec_df: pl.DataFrame,
+    bucket_ns: int,
+    parent_qty: float,
+    cap: float,
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """A volume plan, judged out of sample.
+
+    ``pov_schedule``'s two properties -- constant participation and exact VWAP
+    tracking -- hold only in the capture the plan was built from. This replays
+    the allocation derived from ``plan_df`` against ``exec_df``, aligned by time
+    into the session, and reports what the forecast error did.
+
+    The comparison point is the oracle: the volume-following plan built on the
+    execution capture itself. Under the two-term law, equal participation in
+    every bucket minimises impact per unit of parent, so ``forecast_cost_bps`` is
+    never negative -- reported, not assumed. A cap breach is reported
+    (``feasible: False``) rather than refused. Mirrors the Rust ``pov_backtest``
+    operation for operation; see the Rust ``PovBacktest`` doc for the fields.
+    """
+    _validate_pov(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)
+    try:
+        plan_profile, _, plan_total = _measured(plan_df, bucket_ns)
+    except ValueError as e:
+        raise ValueError(f"plan capture: {e}") from e
+    try:
+        exec_profile, _, exec_total = _measured(exec_df, bucket_ns)
+    except ValueError as e:
+        raise ValueError(f"execution capture: {e}") from e
+
+    product = exec_df["product"][0]
+    if plan_df["product"][0] != product:
+        raise ValueError(
+            f"the plan capture is {plan_df['product'][0]} but the execution capture is {product}"
+        )
+    plan_slots = _slots(plan_profile, bucket_ns)
+    exec_slots = _slots(exec_profile, bucket_ns)
+    if plan_slots != exec_slots:
+        raise ValueError(
+            f"the captures cover different buckets: the plan traded in slots {plan_slots}, "
+            f"the execution in {exec_slots}"
+        )
+
+    n = len(exec_slots)
+    priced = (
+        pl.DataFrame(
+            {
+                "slot": pl.Series(exec_slots, dtype=pl.Int64),
+                "plan_volume": plan_profile["volume"],
+                "exec_volume": exec_profile["volume"],
+                "vwap": exec_profile["vwap"],
+            }
+        )
+        .with_columns(
+            (pl.col("plan_volume") / plan_total).alias("plan_share"),
+            (pl.col("exec_volume") / exec_total).alias("exec_share"),
+        )
+        .with_columns((pl.col("plan_share") * parent_qty).alias("size"))
+        .with_columns((pl.col("size") / pl.col("exec_volume")).alias("participation"))
+        .with_columns(
+            (pl.col("plan_share") * pl.col("participation").sqrt() * coef_bps).alias("temp_bps"),
+            (pl.col("plan_share") * pl.col("participation") * perm_coef_bps).alias("perm_bps"),
+            (pl.col("plan_share") * pl.col("vwap")).alias("pv"),
+            (pl.col("plan_share") - pl.col("exec_share")).alias("share_diff"),
+        )
+    )
+    totals = priced.select(
+        pl.col("temp_bps").sum().alias("temp"),
+        pl.col("perm_bps").sum().alias("perm"),
+        pl.col("pv").sum().alias("price"),
+        pl.col("participation").max().alias("max_participation"),
+        pl.col("share_diff").abs().sum().alias("share_gap"),
+    )
+
+    session = session_vwap(exec_df)
+    price = totals["price"][0]
+    impact = totals["temp"][0] + totals["perm"][0]
+    max_participation = totals["max_participation"][0]
+    oracle_participation = parent_qty / exec_total
+    oracle_impact = (
+        coef_bps * math.sqrt(oracle_participation) + perm_coef_bps * oracle_participation
+    )
+
+    schedule = [
+        {
+            "slot": priced["slot"][i],
+            "plan_share": _r8(priced["plan_share"][i]),
+            "exec_share": _r8(priced["exec_share"][i]),
+            "exec_volume": _r8(priced["exec_volume"][i]),
+            "vwap": _r8(priced["vwap"][i]),
+            "size": _r8(priced["size"][i]),
+            "participation": _r8(priced["participation"][i]),
+            "temp_bps": _r8(priced["temp_bps"][i]),
+            "perm_bps": _r8(priced["perm_bps"][i]),
+        }
+        for i in range(n)
+    ]
+    return {
+        "product": product,
+        "bucket_ns": bucket_ns,
+        "buckets": n,
+        "parent_qty": _r8(parent_qty),
+        "cap": _r8(cap),
+        "coef_bps": _r8(coef_bps),
+        "perm_coef_bps": _r8(perm_coef_bps),
+        "plan_volume": _r8(plan_total),
+        "exec_volume": _r8(exec_total),
+        "profile_distance": _r8(totals["share_gap"][0] / 2.0),
+        "session_vwap": session,
+        "price": _r8(price),
+        "tracking_bps": _r8((price - session) / session * 1e4),
+        "impact_bps": _r8(impact),
+        "max_participation": _r8(max_participation),
+        "feasible": _r8(max_participation) <= _r8(cap),
+        "oracle_participation": _r8(oracle_participation),
+        "oracle_impact_bps": _r8(oracle_impact),
+        "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
+        "forecast_cost_bps": _r8(impact - oracle_impact),
         "schedule": schedule,
     }
 
