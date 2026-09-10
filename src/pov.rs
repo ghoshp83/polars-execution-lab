@@ -89,6 +89,75 @@ pub struct PovPlan {
     pub schedule: Vec<PovSlice>,
 }
 
+/// One bucket of a volume plan replayed against a capture it was not built on.
+#[derive(Debug, Serialize)]
+pub struct BacktestSlice {
+    /// Bucket position counted from the first bucket of each capture.
+    pub slot: i64,
+    /// The fraction of the parent the plan capture assigned to this slot.
+    pub plan_share: f64,
+    /// The fraction of the execution capture's volume that traded in it.
+    pub exec_share: f64,
+    pub exec_volume: f64,
+    /// VWAP the execution capture printed in this slot.
+    pub vwap: f64,
+    pub size: f64,
+    /// `size` against the volume that actually traded — no longer constant.
+    pub participation: f64,
+    pub temp_bps: f64,
+    pub perm_bps: f64,
+}
+
+/// **A volume plan, judged out of sample.**
+///
+/// [`pov_schedule`] allocates against the volume a capture *already* traded, so
+/// both of its properties — constant participation and exact VWAP tracking —
+/// hold only in the capture the plan was built from. Used as a forward
+/// schedule, the plan meets a different session. This replays the allocation
+/// derived from one capture (the plan) against another (the execution), aligned
+/// by time into the session, and reports what the forecast error did.
+///
+/// The comparison point is the **oracle**: the volume-following plan built on
+/// the execution capture itself, as though its volume had been known in
+/// advance. Under the two-term law the impact per unit of parent is
+/// `sum(share_i * (coef * sqrt(p_i) + perm * p_i))`, and minimising either term
+/// subject to the shares summing to one gives `p_i` equal in every bucket —
+/// the proportional allocation. So the oracle is the cheapest allocation this
+/// cost model admits, and `forecast_cost_bps` (`impact_bps - oracle_impact_bps`)
+/// is never negative: a mis-forecast can only cost, never help. It is reported
+/// rather than assumed, so a regression shows up as a negative number.
+#[derive(Debug, Serialize)]
+pub struct PovBacktest {
+    pub product: String,
+    pub bucket_ns: i64,
+    pub buckets: usize,
+    pub parent_qty: f64,
+    pub cap: f64,
+    pub coef_bps: f64,
+    pub perm_coef_bps: f64,
+    pub plan_volume: f64,
+    pub exec_volume: f64,
+    /// Total-variation distance between the two volume profiles: half the sum
+    /// of absolute share differences, `0` for identical shapes, `1` for
+    /// profiles with no bucket in common.
+    pub profile_distance: f64,
+    /// Session VWAP of the execution capture.
+    pub session_vwap: f64,
+    pub price: f64,
+    /// Zero in sample; out of sample, what the profile error did to tracking.
+    pub tracking_bps: f64,
+    pub impact_bps: f64,
+    pub max_participation: f64,
+    /// Whether every bucket stayed inside the cap once the real volume arrived.
+    pub feasible: bool,
+    pub oracle_participation: f64,
+    pub oracle_impact_bps: f64,
+    pub oracle_feasible: bool,
+    /// `impact_bps - oracle_impact_bps`: the price of not knowing the volume.
+    pub forecast_cost_bps: f64,
+    pub schedule: Vec<BacktestSlice>,
+}
+
 /// Per-bucket volume and VWAP, ascending by bucket, reduced with Polars.
 ///
 /// The ticks are sorted first, exactly as [`crate::execution::bars`] does, so
@@ -120,22 +189,15 @@ fn volume_profile(ticks: &[Tick], bucket_ns: i64) -> Result<DataFrame> {
     .collect()?)
 }
 
-/// Plan a participation-of-volume execution against a measured capture.
-///
-/// Mirrors `pov_schedule` in `python/xexeclab/engine.py` operation for
-/// operation, including the bucket ordering that fixes the summation order.
-pub fn pov_schedule(
-    ticks: &[Tick],
-    product: &str,
+/// The argument checks every volume plan shares. Error wordings match the
+/// Python engine exactly.
+fn validate(
     bucket_ns: i64,
     parent_qty: f64,
     cap: f64,
     coef_bps: f64,
     perm_coef_bps: f64,
-) -> Result<PovPlan> {
-    if ticks.is_empty() {
-        return Err(anyhow!("no ticks"));
-    }
+) -> Result<()> {
     if bucket_ns < 1 {
         return Err(anyhow!("bucket_ns must be >= 1, got {bucket_ns}"));
     }
@@ -154,7 +216,15 @@ pub fn pov_schedule(
             ));
         }
     }
+    Ok(())
+}
 
+/// A capture's volume profile, its per-bucket volumes and their total —
+/// refusing a capture no plan can be priced on.
+fn measured(ticks: &[Tick], bucket_ns: i64) -> Result<(DataFrame, Vec<f64>, f64)> {
+    if ticks.is_empty() {
+        return Err(anyhow!("no ticks"));
+    }
     let profile = volume_profile(ticks, bucket_ns)?;
     let volume: Vec<f64> = profile
         .column("volume")?
@@ -175,6 +245,46 @@ pub fn pov_schedule(
             bkt.unwrap_or_default()
         ));
     }
+    Ok((profile, volume, total_volume))
+}
+
+/// Bucket positions counted from the capture's first bucket, so captures from
+/// different sessions line up by time into the session, not by wall clock.
+fn slots(profile: &DataFrame, bucket_ns: i64) -> Result<Vec<i64>> {
+    let bucket: Vec<i64> = profile
+        .column("bucket_ns")?
+        .i64()?
+        .into_no_null_iter()
+        .collect();
+    Ok(bucket.iter().map(|b| (b - bucket[0]) / bucket_ns).collect())
+}
+
+fn column_f64(df: &DataFrame, name: &str) -> Result<Vec<f64>> {
+    Ok(df.column(name)?.f64()?.into_no_null_iter().collect())
+}
+
+fn scalar_f64(df: &DataFrame, name: &str) -> Result<f64> {
+    df.column(name)?
+        .f64()?
+        .get(0)
+        .ok_or_else(|| anyhow!("null {name}"))
+}
+
+/// Plan a participation-of-volume execution against a measured capture.
+///
+/// Mirrors `pov_schedule` in `python/xexeclab/engine.py` operation for
+/// operation, including the bucket ordering that fixes the summation order.
+pub fn pov_schedule(
+    ticks: &[Tick],
+    product: &str,
+    bucket_ns: i64,
+    parent_qty: f64,
+    cap: f64,
+    coef_bps: f64,
+    perm_coef_bps: f64,
+) -> Result<PovPlan> {
+    validate(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)?;
+    let (profile, volume, total_volume) = measured(ticks, bucket_ns)?;
 
     let participation = parent_qty / total_volume;
     if participation > cap {
@@ -217,35 +327,20 @@ pub fn pov_schedule(
         ])
         .collect()?;
 
-    let scalar = |name: &str| -> Result<f64> {
-        totals
-            .column(name)?
-            .f64()?
-            .get(0)
-            .ok_or_else(|| anyhow!("null {name}"))
-    };
-    let take = |name: &str| -> Result<Vec<f64>> {
-        Ok(priced
-            .column(name)?
-            .f64()?
-            .into_no_null_iter()
-            .collect::<Vec<f64>>())
-    };
-
     let session = crate::execution::session_vwap(ticks)?;
-    let pov_price = scalar("pov_price")?;
-    let twap_price = scalar("twap_price")?;
+    let pov_price = scalar_f64(&totals, "pov_price")?;
+    let twap_price = scalar_f64(&totals, "twap_price")?;
     let bps = |p: f64| -> f64 { (p - session) / session * 1e4 };
-    let pov_impact = scalar("temp")? + scalar("perm")?;
-    let twap_impact = scalar("twap_temp")? + scalar("twap_perm")?;
-    let twap_max = scalar("twap_max")?;
+    let pov_impact = scalar_f64(&totals, "temp")? + scalar_f64(&totals, "perm")?;
+    let twap_impact = scalar_f64(&totals, "twap_temp")? + scalar_f64(&totals, "twap_perm")?;
+    let twap_max = scalar_f64(&totals, "twap_max")?;
 
     let bkt = priced.column("bucket_ns")?.i64()?;
-    let share = take("share")?;
-    let vwap = take("vwap")?;
-    let size = take("size")?;
-    let temp = take("temp_bps")?;
-    let perm = take("perm_bps")?;
+    let share = column_f64(&priced, "share")?;
+    let vwap = column_f64(&priced, "vwap")?;
+    let size = column_f64(&priced, "size")?;
+    let temp = column_f64(&priced, "temp_bps")?;
+    let perm = column_f64(&priced, "perm_bps")?;
     let schedule = (0..n)
         .map(|i| -> Result<PovSlice> {
             Ok(PovSlice {
@@ -281,6 +376,135 @@ pub fn pov_schedule(
         twap_max_participation: r8(twap_max),
         twap_feasible: r8(twap_max) <= r8(cap),
         edge_bps: r8(twap_impact - pov_impact),
+        schedule,
+    })
+}
+
+/// Replay the volume plan built on `plan` against the `exec` capture.
+///
+/// The product is read from the captures, which must agree. Unlike
+/// [`pov_schedule`], an allocation that breaches the cap is *reported*
+/// (`feasible: false`) rather than refused: the point is to show what the
+/// forecast did, and a breach is the most important thing it can do. Mirrors
+/// `pov_backtest` in `python/xexeclab/engine.py` operation for operation.
+pub fn pov_backtest(
+    plan: &[Tick],
+    exec: &[Tick],
+    bucket_ns: i64,
+    parent_qty: f64,
+    cap: f64,
+    coef_bps: f64,
+    perm_coef_bps: f64,
+) -> Result<PovBacktest> {
+    validate(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)?;
+    let (plan_profile, plan_volume, plan_total) =
+        measured(plan, bucket_ns).map_err(|e| anyhow!("plan capture: {e}"))?;
+    let (exec_profile, exec_volume, exec_total) =
+        measured(exec, bucket_ns).map_err(|e| anyhow!("execution capture: {e}"))?;
+
+    let product = exec[0].product.clone();
+    if plan[0].product != product {
+        return Err(anyhow!(
+            "the plan capture is {} but the execution capture is {product}",
+            plan[0].product
+        ));
+    }
+    let plan_slots = slots(&plan_profile, bucket_ns)?;
+    let exec_slots = slots(&exec_profile, bucket_ns)?;
+    if plan_slots != exec_slots {
+        return Err(anyhow!(
+            "the captures cover different buckets: the plan traded in slots {plan_slots:?}, the execution in {exec_slots:?}"
+        ));
+    }
+
+    let n = exec_slots.len();
+    let priced = df!(
+        "slot" => exec_slots,
+        "plan_volume" => plan_volume,
+        "exec_volume" => exec_volume,
+        "vwap" => column_f64(&exec_profile, "vwap")?,
+    )?
+    .lazy()
+    .with_columns([
+        (col("plan_volume") / lit(plan_total)).alias("plan_share"),
+        (col("exec_volume") / lit(exec_total)).alias("exec_share"),
+    ])
+    .with_column((col("plan_share") * lit(parent_qty)).alias("size"))
+    .with_column((col("size") / col("exec_volume")).alias("participation"))
+    .with_columns([
+        (col("plan_share") * col("participation").sqrt() * lit(coef_bps)).alias("temp_bps"),
+        (col("plan_share") * col("participation") * lit(perm_coef_bps)).alias("perm_bps"),
+        (col("plan_share") * col("vwap")).alias("pv"),
+        (col("plan_share") - col("exec_share")).alias("share_diff"),
+    ])
+    .collect()?;
+
+    let totals = priced
+        .clone()
+        .lazy()
+        .select([
+            col("temp_bps").sum().alias("temp"),
+            col("perm_bps").sum().alias("perm"),
+            col("pv").sum().alias("price"),
+            col("participation").max().alias("max_participation"),
+            col("share_diff").abs().sum().alias("share_gap"),
+        ])
+        .collect()?;
+
+    let session = crate::execution::session_vwap(exec)?;
+    let price = scalar_f64(&totals, "price")?;
+    let impact = scalar_f64(&totals, "temp")? + scalar_f64(&totals, "perm")?;
+    let max_participation = scalar_f64(&totals, "max_participation")?;
+    let oracle_participation = parent_qty / exec_total;
+    let oracle_impact =
+        coef_bps * oracle_participation.sqrt() + perm_coef_bps * oracle_participation;
+
+    let slot = priced.column("slot")?.i64()?;
+    let plan_share = column_f64(&priced, "plan_share")?;
+    let exec_share = column_f64(&priced, "exec_share")?;
+    let volume = column_f64(&priced, "exec_volume")?;
+    let vwap = column_f64(&priced, "vwap")?;
+    let size = column_f64(&priced, "size")?;
+    let participation = column_f64(&priced, "participation")?;
+    let temp = column_f64(&priced, "temp_bps")?;
+    let perm = column_f64(&priced, "perm_bps")?;
+    let schedule = (0..n)
+        .map(|i| -> Result<BacktestSlice> {
+            Ok(BacktestSlice {
+                slot: slot.get(i).ok_or_else(|| anyhow!("null slot"))?,
+                plan_share: r8(plan_share[i]),
+                exec_share: r8(exec_share[i]),
+                exec_volume: r8(volume[i]),
+                vwap: r8(vwap[i]),
+                size: r8(size[i]),
+                participation: r8(participation[i]),
+                temp_bps: r8(temp[i]),
+                perm_bps: r8(perm[i]),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(PovBacktest {
+        product,
+        bucket_ns,
+        buckets: n,
+        parent_qty: r8(parent_qty),
+        cap: r8(cap),
+        coef_bps: r8(coef_bps),
+        perm_coef_bps: r8(perm_coef_bps),
+        plan_volume: r8(plan_total),
+        exec_volume: r8(exec_total),
+        profile_distance: r8(scalar_f64(&totals, "share_gap")? / 2.0),
+        session_vwap: session,
+        price: r8(price),
+        tracking_bps: r8((price - session) / session * 1e4),
+        impact_bps: r8(impact),
+        max_participation: r8(max_participation),
+        feasible: r8(max_participation) <= r8(cap),
+        oracle_participation: r8(oracle_participation),
+        oracle_impact_bps: r8(oracle_impact),
+        oracle_feasible: r8(oracle_participation) <= r8(cap),
+        forecast_cost_bps: r8(impact - oracle_impact),
         schedule,
     })
 }
