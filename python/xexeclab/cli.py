@@ -15,6 +15,7 @@ from .engine import (
     depth_metrics,
     impact_curve,
     optimal_schedule,
+    pov_backtest,
     pov_schedule,
     queue_metrics,
     quote_metrics,
@@ -149,6 +150,22 @@ def cmd_pov_plan(a: argparse.Namespace) -> None:
             pov_schedule(
                 df,
                 product,
+                a.bucket_ms * 1_000_000,
+                a.parent_qty,
+                a.cap,
+                a.coef_bps,
+                a.perm_coef_bps,
+            )
+        )
+    )
+
+
+def cmd_pov_backtest(a: argparse.Namespace) -> None:
+    print(
+        json.dumps(
+            pov_backtest(
+                read_ticks(a.plan_input),
+                read_ticks(a.input),
                 a.bucket_ms * 1_000_000,
                 a.parent_qty,
                 a.cap,
@@ -489,6 +506,35 @@ def main(argv: list[str] | None = None) -> None:
     )
     ppv.add_argument("--product", default="BTC-USD")
     ppv.set_defaults(fn=cmd_pov_plan)
+
+    pbt = sub.add_parser(
+        "pov-backtest",
+        help="replay a volume plan built on one capture against another session",
+    )
+    pbt.add_argument(
+        "--plan-input", required=True, help="capture whose volume profile the plan is built from"
+    )
+    pbt.add_argument("--input", required=True, help="the session the plan is executed against")
+    pbt.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
+    pbt.add_argument(
+        "--parent-qty", type=float, default=1.0, help="parent order size in base units"
+    )
+    pbt.add_argument(
+        "--cap",
+        type=float,
+        default=0.25,
+        help="largest share of any bucket's volume the plan may take, in (0, 1]",
+    )
+    pbt.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    pbt.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    pbt.set_defaults(fn=cmd_pov_backtest)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"

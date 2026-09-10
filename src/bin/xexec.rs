@@ -5,7 +5,7 @@ use xexec::curve::sweep_curve;
 use xexec::depth::{depth_metrics, queue_metrics};
 use xexec::execution::{bars, session_twap, session_vwap, summary};
 use xexec::impact::impact_curve;
-use xexec::pov::pov_schedule;
+use xexec::pov::{pov_backtest, pov_schedule};
 use xexec::quote::quote_metrics;
 use xexec::replay::{
     read_book, read_calibration, read_fills, read_impact, read_quotes, read_ticks,
@@ -24,7 +24,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -321,6 +321,22 @@ fn main() -> Result<()> {
                 arg_f64(&args, "--perm-coef-bps", 0.0)?,
             )?;
             println!("{}", serde_json::to_string(&plan)?);
+        }
+        // `--input` is the session the plan meets; `--plan-input` is the
+        // capture whose volume profile the plan is built from.
+        "pov-backtest" => {
+            let plan_input = arg_value(&args, "--plan-input")
+                .ok_or_else(|| anyhow!("--plan-input required\n{USAGE}"))?;
+            let report = pov_backtest(
+                &read_ticks(&plan_input)?,
+                &ticks,
+                bucket_ns,
+                arg_f64(&args, "--parent-qty", 1.0)?,
+                arg_f64(&args, "--cap", 0.25)?,
+                arg_f64(&args, "--coef-bps", 10.0)?,
+                arg_f64(&args, "--perm-coef-bps", 0.0)?,
+            )?;
+            println!("{}", serde_json::to_string(&report)?);
         }
         other => return Err(anyhow!("unknown command {other:?}\n{USAGE}")),
     }
