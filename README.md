@@ -87,6 +87,7 @@ flowchart LR
     PY --> SENS
     RUST --> POV[Volume-following plan<br/>allocation read out of the capture]
     PY --> POV
+    POV --> BT[Out-of-sample backtest<br/>plan from one session, priced on the next]
     RUST --> STREAM[Streamed session<br/>bounded memory — the file is never held]
     PY --> STREAM
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
@@ -104,6 +105,7 @@ flowchart LR
     CF -.->|assert identical| EQ
     SENS -.->|assert identical| EQ
     POV -.->|assert identical| EQ
+    BT -.->|assert identical| EQ
     STREAM -.->|assert identical| EQ
     CALIB -.->|assert identical| EQ
 
@@ -168,6 +170,12 @@ uv run xexeclab sensitivity --input data/sample_fills.ndjson --arrival 30000 \
 # flat assumption (participation is constant by construction; it tracks the VWAP)
 uv run xexeclab pov-plan --input data/sample_ticks.ndjson --parent-qty 0.2 --cap 0.25 \
                          --coef-bps 25 --perm-coef-bps 5
+
+# ...then hold that plan to the next session: what the volume forecast cost, and
+# whether the real volume pushed any bucket over the cap
+uv run xexeclab pov-backtest --plan-input data/sample_ticks.ndjson \
+                             --input data/sample_ticks_next.ndjson \
+                             --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
 
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
@@ -359,6 +367,14 @@ This is a **market-data and execution-analytics** project, not a trading system.
   forecast. The clock-uniform comparison is priced with the same square-root
   law, and where that benchmark breaches the participation cap the output says
   so (`twap_feasible: false`) rather than quietly clipping it.
+- **`xexeclab pov-backtest` measures one forecast against one session.** Its
+  plan is the previous capture's profile used unchanged — a naive forecast, not
+  a model — and the bundled pair is three seconds each, so its numbers
+  illustrate the mechanism rather than estimate how well volume profiles carry
+  over in a real market. The oracle is the cheapest plan *under this cost
+  model*; a `forecast_cost_bps` of zero means the forecast matched the session,
+  not that execution was free. Sessions are aligned by bucket position, so two
+  captures must trade in the same buckets or the comparison is refused.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
   streams ticks.** It folds an NDJSON capture in chunks and never holds more than
   `chunk_rows` ticks plus one carried tick — `peak_rows_in_memory` reports that

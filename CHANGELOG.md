@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.0] - 2026-09-10
+
+### Added
+- **Out-of-sample volume plans -- `pov-backtest` / `pov_backtest`.** `pov-plan`
+  (v0.17.0) allocates against the volume a capture *already* traded, so both of
+  its properties -- constant participation and exact VWAP tracking -- hold only
+  inside the capture the plan was built from. Used as a forward schedule, the
+  plan meets a different session. This replays the allocation derived from one
+  capture (`--plan-input`) against another (`--input`), lining the buckets up by
+  time into the session rather than by wall clock, and reports what the forecast
+  error did: per-bucket participation against the volume that actually arrived,
+  whether any bucket breached the cap, how far the tracking drifted from the
+  session VWAP, and the total-variation `profile_distance` between the shapes.
+
+  The comparison point is the **oracle** -- the volume-following plan built on
+  the execution session itself, as if its volume had been known. Under the
+  two-term law, equal participation in every bucket minimises impact per unit of
+  parent, so the oracle is the cheapest allocation the cost model admits and
+  `forecast_cost_bps` (`impact_bps - oracle_impact_bps`) can never be negative.
+  It is reported rather than assumed, so a regression surfaces as a negative
+  number.
+
+  A cap breach is **reported** (`feasible: false`) rather than refused: the
+  backtest exists to show what the forecast did, and a breach is the most
+  important thing it can do.
+
+- **A second bundled session, `data/sample_ticks_next.ndjson`.** The same product
+  a minute later, over the same three seconds of the clock, with a thin middle
+  second. Planned on `sample_ticks.ndjson` with `--parent-qty 0.2 --cap 0.25`,
+  the plan that took a constant 11.6% of every bucket in sample takes 34% of
+  that thin second -- over the cap -- while the oracle stays inside it.
+
+- **Sixteenth cross-language equivalence test.** The first over two captures:
+  the engines must agree on both profiles, on their alignment, and on the price
+  of the difference. It also checks `forecast_cost_bps >= 0` against the Rust
+  output.
+
+### Changed
+- `pov_schedule`'s argument checks and capture measurement are factored into
+  helpers shared with `pov_backtest` on both engines. Refusals and their
+  wordings are unchanged.
+
+### Notes
+- Still no new Polars feature flags: the two profiles are aligned by slot index
+  and assembled into one frame, not joined, and `abs` was already enabled.
+
 ## [0.17.0] - 2026-09-09
 
 ### Added
