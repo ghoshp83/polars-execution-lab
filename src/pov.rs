@@ -172,6 +172,46 @@ pub struct PlanScore {
     pub forecast_cost_bps: f64,
 }
 
+/// **A volume forecast pooled from several sessions, scored out of sample.**
+///
+/// [`PovBacktest`] judges the naive forecast: one earlier session's profile,
+/// used unchanged. Any single session carries its own noise -- a burst in one
+/// second, a lull in the next -- and a plan built on it inherits all of it.
+/// This builds the plan from the *mean* share profile of every history session
+/// instead, each session weighted equally so a busy day cannot outvote a quiet
+/// one, and prices it against the execution session beside two references: the
+/// naive forecast (the most recent history session alone) and the oracle.
+///
+/// `improvement_bps` is `naive.impact_bps - forecast.impact_bps`. Unlike
+/// `forecast_cost_bps` it has no sign guarantee: when the session repeats the
+/// last one, pooling only adds error, and the number goes negative. It is
+/// reported so that claim can be checked session by session.
+#[derive(Debug, Serialize)]
+pub struct PovForecast {
+    pub product: String,
+    pub bucket_ns: i64,
+    pub buckets: usize,
+    /// History sessions pooled into the forecast.
+    pub sessions: usize,
+    pub parent_qty: f64,
+    pub cap: f64,
+    pub coef_bps: f64,
+    pub perm_coef_bps: f64,
+    pub exec_volume: f64,
+    pub session_vwap: f64,
+    /// The plan built on the mean share profile.
+    pub forecast: PlanScore,
+    /// The plan built on the most recent history session alone.
+    pub naive: PlanScore,
+    pub oracle_participation: f64,
+    pub oracle_impact_bps: f64,
+    pub oracle_feasible: bool,
+    /// `naive.impact_bps - forecast.impact_bps`: what pooling bought, or cost.
+    pub improvement_bps: f64,
+    /// The pooled plan, slot by slot.
+    pub schedule: Vec<BacktestSlice>,
+}
+
 /// Per-bucket volume and VWAP, ascending by bucket, reduced with Polars.
 ///
 /// The ticks are sorted first, exactly as [`crate::execution::bars`] does, so
@@ -468,6 +508,116 @@ pub fn pov_backtest(
         oracle_feasible: r8(oracle_participation) <= r8(cap),
         forecast_cost_bps: score.forecast_cost_bps,
         schedule: priced.schedule,
+    })
+}
+
+/// Pool the volume profiles of `history` into one forecast and score it
+/// against `exec`.
+///
+/// `history` is ordered oldest first; its last session is the naive forecast.
+/// Every history session must be the execution capture's product and trade in
+/// the same slots. The mean is taken over shares, summed session by session in
+/// the order given, so both engines add the same floats in the same order.
+/// Mirrors `pov_forecast` in `python/xexeclab/engine.py` operation for
+/// operation.
+pub fn pov_forecast(
+    history: &[Vec<Tick>],
+    exec: &[Tick],
+    bucket_ns: i64,
+    parent_qty: f64,
+    cap: f64,
+    coef_bps: f64,
+    perm_coef_bps: f64,
+) -> Result<PovForecast> {
+    validate(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)?;
+    if history.is_empty() {
+        return Err(anyhow!("need at least one history capture"));
+    }
+    let mut profiles = Vec::with_capacity(history.len());
+    let mut shares: Vec<Vec<f64>> = Vec::with_capacity(history.len());
+    for (i, ticks) in history.iter().enumerate() {
+        let (profile, volume, total) =
+            measured(ticks, bucket_ns).map_err(|e| anyhow!("history capture {}: {e}", i + 1))?;
+        shares.push(volume.iter().map(|v| v / total).collect());
+        profiles.push(profile);
+    }
+    let (exec_profile, _, exec_total) =
+        measured(exec, bucket_ns).map_err(|e| anyhow!("execution capture: {e}"))?;
+
+    let product = exec[0].product.clone();
+    let exec_slots = slots(&exec_profile, bucket_ns)?;
+    for (i, (ticks, profile)) in history.iter().zip(&profiles).enumerate() {
+        if ticks[0].product != product {
+            return Err(anyhow!(
+                "history capture {} is {} but the execution capture is {product}",
+                i + 1,
+                ticks[0].product
+            ));
+        }
+        let history_slots = slots(profile, bucket_ns)?;
+        if history_slots != exec_slots {
+            return Err(anyhow!(
+                "history capture {} covers different buckets: it traded in slots {history_slots:?}, the execution in {exec_slots:?}",
+                i + 1
+            ));
+        }
+    }
+
+    let n = exec_slots.len();
+    let k = history.len() as f64;
+    let forecast_share: Vec<f64> = (0..n)
+        .map(|j| {
+            let mut acc = 0.0;
+            for s in &shares {
+                acc += s[j];
+            }
+            acc / k
+        })
+        .collect();
+    let naive_share = shares[shares.len() - 1].clone();
+
+    let session = crate::execution::session_vwap(exec)?;
+    let (oracle_participation, oracle_impact) =
+        oracle(parent_qty, exec_total, coef_bps, perm_coef_bps);
+    let forecast = price_plan(
+        forecast_share,
+        &exec_slots,
+        &exec_profile,
+        exec_total,
+        parent_qty,
+        coef_bps,
+        perm_coef_bps,
+    )?;
+    let naive = price_plan(
+        naive_share,
+        &exec_slots,
+        &exec_profile,
+        exec_total,
+        parent_qty,
+        coef_bps,
+        perm_coef_bps,
+    )?;
+    let forecast_score = score(&forecast, session, cap, oracle_impact);
+    let naive_score = score(&naive, session, cap, oracle_impact);
+
+    Ok(PovForecast {
+        product,
+        bucket_ns,
+        buckets: n,
+        sessions: history.len(),
+        parent_qty: r8(parent_qty),
+        cap: r8(cap),
+        coef_bps: r8(coef_bps),
+        perm_coef_bps: r8(perm_coef_bps),
+        exec_volume: r8(exec_total),
+        session_vwap: session,
+        forecast: forecast_score,
+        naive: naive_score,
+        oracle_participation: r8(oracle_participation),
+        oracle_impact_bps: r8(oracle_impact),
+        oracle_feasible: r8(oracle_participation) <= r8(cap),
+        improvement_bps: r8(naive.impact - forecast.impact),
+        schedule: forecast.schedule,
     })
 }
 
