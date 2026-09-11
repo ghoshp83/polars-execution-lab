@@ -962,7 +962,7 @@ def pov_backtest(
     """
     _validate_pov(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)
     try:
-        plan_profile, _, plan_total = _measured(plan_df, bucket_ns)
+        plan_profile, plan_volume, plan_total = _measured(plan_df, bucket_ns)
     except ValueError as e:
         raise ValueError(f"plan capture: {e}") from e
     try:
@@ -983,20 +983,70 @@ def pov_backtest(
             f"the execution in {exec_slots}"
         )
 
+    plan_share = [v / plan_total for v in plan_volume]
+    session = session_vwap(exec_df)
+    oracle_participation, oracle_impact = _oracle(parent_qty, exec_total, coef_bps, perm_coef_bps)
+    priced = _price_plan(
+        plan_share, exec_slots, exec_profile, exec_total, parent_qty, coef_bps, perm_coef_bps
+    )
+    score = _score(priced, session, cap, oracle_impact)
+    return {
+        "product": product,
+        "bucket_ns": bucket_ns,
+        "buckets": len(exec_slots),
+        "parent_qty": _r8(parent_qty),
+        "cap": _r8(cap),
+        "coef_bps": _r8(coef_bps),
+        "perm_coef_bps": _r8(perm_coef_bps),
+        "plan_volume": _r8(plan_total),
+        "exec_volume": _r8(exec_total),
+        "profile_distance": score["profile_distance"],
+        "session_vwap": session,
+        "price": score["price"],
+        "tracking_bps": score["tracking_bps"],
+        "impact_bps": score["impact_bps"],
+        "max_participation": score["max_participation"],
+        "feasible": score["feasible"],
+        "oracle_participation": _r8(oracle_participation),
+        "oracle_impact_bps": _r8(oracle_impact),
+        "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
+        "forecast_cost_bps": score["forecast_cost_bps"],
+        "schedule": priced["schedule"],
+    }
+
+
+def _oracle(
+    parent_qty: float, exec_total: float, coef_bps: float, perm_coef_bps: float
+) -> tuple[float, float]:
+    """The oracle's participation and impact, in closed form; mirrors the Rust ``oracle``."""
+    participation = parent_qty / exec_total
+    impact = coef_bps * math.sqrt(participation) + perm_coef_bps * participation
+    return participation, impact
+
+
+def _price_plan(
+    plan_share: list[float],
+    exec_slots: list[int],
+    exec_profile: pl.DataFrame,
+    exec_total: float,
+    parent_qty: float,
+    coef_bps: float,
+    perm_coef_bps: float,
+) -> dict:
+    """Price an allocation -- a share of the parent per slot -- against the session
+    it met. Every out-of-sample comparison goes through here, so no two of them
+    can charge the same plan differently. Mirrors the Rust ``price_plan``."""
     n = len(exec_slots)
     priced = (
         pl.DataFrame(
             {
                 "slot": pl.Series(exec_slots, dtype=pl.Int64),
-                "plan_volume": plan_profile["volume"],
+                "plan_share": pl.Series(plan_share, dtype=pl.Float64),
                 "exec_volume": exec_profile["volume"],
                 "vwap": exec_profile["vwap"],
             }
         )
-        .with_columns(
-            (pl.col("plan_volume") / plan_total).alias("plan_share"),
-            (pl.col("exec_volume") / exec_total).alias("exec_share"),
-        )
+        .with_columns((pl.col("exec_volume") / exec_total).alias("exec_share"))
         .with_columns((pl.col("plan_share") * parent_qty).alias("size"))
         .with_columns((pl.col("size") / pl.col("exec_volume")).alias("participation"))
         .with_columns(
@@ -1014,15 +1064,6 @@ def pov_backtest(
         pl.col("share_diff").abs().sum().alias("share_gap"),
     )
 
-    session = session_vwap(exec_df)
-    price = totals["price"][0]
-    impact = totals["temp"][0] + totals["perm"][0]
-    max_participation = totals["max_participation"][0]
-    oracle_participation = parent_qty / exec_total
-    oracle_impact = (
-        coef_bps * math.sqrt(oracle_participation) + perm_coef_bps * oracle_participation
-    )
-
     schedule = [
         {
             "slot": priced["slot"][i],
@@ -1038,27 +1079,25 @@ def pov_backtest(
         for i in range(n)
     ]
     return {
-        "product": product,
-        "bucket_ns": bucket_ns,
-        "buckets": n,
-        "parent_qty": _r8(parent_qty),
-        "cap": _r8(cap),
-        "coef_bps": _r8(coef_bps),
-        "perm_coef_bps": _r8(perm_coef_bps),
-        "plan_volume": _r8(plan_total),
-        "exec_volume": _r8(exec_total),
-        "profile_distance": _r8(totals["share_gap"][0] / 2.0),
-        "session_vwap": session,
+        "price": totals["price"][0],
+        "impact": totals["temp"][0] + totals["perm"][0],
+        "max_participation": totals["max_participation"][0],
+        "share_gap": totals["share_gap"][0],
+        "schedule": schedule,
+    }
+
+
+def _score(priced: dict, session: float, cap: float, oracle_impact: float) -> dict:
+    """The reported, rounded verdict on one priced allocation; mirrors the Rust ``score``."""
+    price = priced["price"]
+    return {
+        "profile_distance": _r8(priced["share_gap"] / 2.0),
         "price": _r8(price),
         "tracking_bps": _r8((price - session) / session * 1e4),
-        "impact_bps": _r8(impact),
-        "max_participation": _r8(max_participation),
-        "feasible": _r8(max_participation) <= _r8(cap),
-        "oracle_participation": _r8(oracle_participation),
-        "oracle_impact_bps": _r8(oracle_impact),
-        "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
-        "forecast_cost_bps": _r8(impact - oracle_impact),
-        "schedule": schedule,
+        "impact_bps": _r8(priced["impact"]),
+        "max_participation": _r8(priced["max_participation"]),
+        "feasible": _r8(priced["max_participation"]) <= _r8(cap),
+        "forecast_cost_bps": _r8(priced["impact"] - oracle_impact),
     }
 
 

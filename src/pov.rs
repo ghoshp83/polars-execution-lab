@@ -158,6 +158,20 @@ pub struct PovBacktest {
     pub schedule: Vec<BacktestSlice>,
 }
 
+/// How one allocation fared against the execution session: the fields a
+/// [`PovBacktest`] reports for its single plan, for each plan a
+/// [`PovForecast`] compares.
+#[derive(Debug, Serialize)]
+pub struct PlanScore {
+    pub profile_distance: f64,
+    pub price: f64,
+    pub tracking_bps: f64,
+    pub impact_bps: f64,
+    pub max_participation: f64,
+    pub feasible: bool,
+    pub forecast_cost_bps: f64,
+}
+
 /// Per-bucket volume and VWAP, ascending by bucket, reduced with Polars.
 ///
 /// The ticks are sorted first, exactly as [`crate::execution::bars`] does, so
@@ -399,7 +413,7 @@ pub fn pov_backtest(
     validate(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)?;
     let (plan_profile, plan_volume, plan_total) =
         measured(plan, bucket_ns).map_err(|e| anyhow!("plan capture: {e}"))?;
-    let (exec_profile, exec_volume, exec_total) =
+    let (exec_profile, _, exec_total) =
         measured(exec, bucket_ns).map_err(|e| anyhow!("execution capture: {e}"))?;
 
     let product = exec[0].product.clone();
@@ -417,18 +431,86 @@ pub fn pov_backtest(
         ));
     }
 
+    let plan_share: Vec<f64> = plan_volume.iter().map(|v| v / plan_total).collect();
+    let session = crate::execution::session_vwap(exec)?;
+    let (oracle_participation, oracle_impact) =
+        oracle(parent_qty, exec_total, coef_bps, perm_coef_bps);
+    let priced = price_plan(
+        plan_share,
+        &exec_slots,
+        &exec_profile,
+        exec_total,
+        parent_qty,
+        coef_bps,
+        perm_coef_bps,
+    )?;
+    let score = score(&priced, session, cap, oracle_impact);
+
+    Ok(PovBacktest {
+        product,
+        bucket_ns,
+        buckets: exec_slots.len(),
+        parent_qty: r8(parent_qty),
+        cap: r8(cap),
+        coef_bps: r8(coef_bps),
+        perm_coef_bps: r8(perm_coef_bps),
+        plan_volume: r8(plan_total),
+        exec_volume: r8(exec_total),
+        profile_distance: score.profile_distance,
+        session_vwap: session,
+        price: score.price,
+        tracking_bps: score.tracking_bps,
+        impact_bps: score.impact_bps,
+        max_participation: score.max_participation,
+        feasible: score.feasible,
+        oracle_participation: r8(oracle_participation),
+        oracle_impact_bps: r8(oracle_impact),
+        oracle_feasible: r8(oracle_participation) <= r8(cap),
+        forecast_cost_bps: score.forecast_cost_bps,
+        schedule: priced.schedule,
+    })
+}
+
+/// The oracle's participation and impact: the volume-following plan built on
+/// the execution capture, priced in closed form because its participation is
+/// the same in every bucket.
+fn oracle(parent_qty: f64, exec_total: f64, coef_bps: f64, perm_coef_bps: f64) -> (f64, f64) {
+    let participation = parent_qty / exec_total;
+    let impact = coef_bps * participation.sqrt() + perm_coef_bps * participation;
+    (participation, impact)
+}
+
+/// An allocation priced against the session it met, before rounding.
+struct Priced {
+    price: f64,
+    impact: f64,
+    max_participation: f64,
+    share_gap: f64,
+    schedule: Vec<BacktestSlice>,
+}
+
+/// Price an allocation -- a share of the parent per slot -- against the volume
+/// and VWAPs the execution capture actually printed. Every out-of-sample
+/// comparison in this module goes through here, so no two of them can charge
+/// the same plan differently.
+fn price_plan(
+    plan_share: Vec<f64>,
+    exec_slots: &[i64],
+    exec_profile: &DataFrame,
+    exec_total: f64,
+    parent_qty: f64,
+    coef_bps: f64,
+    perm_coef_bps: f64,
+) -> Result<Priced> {
     let n = exec_slots.len();
     let priced = df!(
-        "slot" => exec_slots,
-        "plan_volume" => plan_volume,
-        "exec_volume" => exec_volume,
-        "vwap" => column_f64(&exec_profile, "vwap")?,
+        "slot" => exec_slots.to_vec(),
+        "plan_share" => plan_share,
+        "exec_volume" => column_f64(exec_profile, "volume")?,
+        "vwap" => column_f64(exec_profile, "vwap")?,
     )?
     .lazy()
-    .with_columns([
-        (col("plan_volume") / lit(plan_total)).alias("plan_share"),
-        (col("exec_volume") / lit(exec_total)).alias("exec_share"),
-    ])
+    .with_column((col("exec_volume") / lit(exec_total)).alias("exec_share"))
     .with_column((col("plan_share") * lit(parent_qty)).alias("size"))
     .with_column((col("size") / col("exec_volume")).alias("participation"))
     .with_columns([
@@ -450,14 +532,6 @@ pub fn pov_backtest(
             col("share_diff").abs().sum().alias("share_gap"),
         ])
         .collect()?;
-
-    let session = crate::execution::session_vwap(exec)?;
-    let price = scalar_f64(&totals, "price")?;
-    let impact = scalar_f64(&totals, "temp")? + scalar_f64(&totals, "perm")?;
-    let max_participation = scalar_f64(&totals, "max_participation")?;
-    let oracle_participation = parent_qty / exec_total;
-    let oracle_impact =
-        coef_bps * oracle_participation.sqrt() + perm_coef_bps * oracle_participation;
 
     let slot = priced.column("slot")?.i64()?;
     let plan_share = column_f64(&priced, "plan_share")?;
@@ -484,27 +558,24 @@ pub fn pov_backtest(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(PovBacktest {
-        product,
-        bucket_ns,
-        buckets: n,
-        parent_qty: r8(parent_qty),
-        cap: r8(cap),
-        coef_bps: r8(coef_bps),
-        perm_coef_bps: r8(perm_coef_bps),
-        plan_volume: r8(plan_total),
-        exec_volume: r8(exec_total),
-        profile_distance: r8(scalar_f64(&totals, "share_gap")? / 2.0),
-        session_vwap: session,
-        price: r8(price),
-        tracking_bps: r8((price - session) / session * 1e4),
-        impact_bps: r8(impact),
-        max_participation: r8(max_participation),
-        feasible: r8(max_participation) <= r8(cap),
-        oracle_participation: r8(oracle_participation),
-        oracle_impact_bps: r8(oracle_impact),
-        oracle_feasible: r8(oracle_participation) <= r8(cap),
-        forecast_cost_bps: r8(impact - oracle_impact),
+    Ok(Priced {
+        price: scalar_f64(&totals, "price")?,
+        impact: scalar_f64(&totals, "temp")? + scalar_f64(&totals, "perm")?,
+        max_participation: scalar_f64(&totals, "max_participation")?,
+        share_gap: scalar_f64(&totals, "share_gap")?,
         schedule,
     })
+}
+
+/// The reported, rounded verdict on one priced allocation.
+fn score(p: &Priced, session: f64, cap: f64, oracle_impact: f64) -> PlanScore {
+    PlanScore {
+        profile_distance: r8(p.share_gap / 2.0),
+        price: r8(p.price),
+        tracking_bps: r8((p.price - session) / session * 1e4),
+        impact_bps: r8(p.impact),
+        max_participation: r8(p.max_participation),
+        feasible: r8(p.max_participation) <= r8(cap),
+        forecast_cost_bps: r8(p.impact - oracle_impact),
+    }
 }
