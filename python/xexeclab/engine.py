@@ -1015,6 +1015,98 @@ def pov_backtest(
     }
 
 
+def pov_forecast(
+    history: list[pl.DataFrame],
+    exec_df: pl.DataFrame,
+    bucket_ns: int,
+    parent_qty: float,
+    cap: float,
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """A volume forecast pooled from several sessions, scored out of sample.
+
+    ``pov_backtest`` judges the naive forecast -- one earlier session's profile,
+    used unchanged, noise and all. This plans on the mean share profile of every
+    ``history`` session instead (oldest first, each weighted equally so a busy
+    day cannot outvote a quiet one) and prices it against ``exec_df`` beside the
+    naive forecast (the last history session alone) and the oracle.
+
+    ``improvement_bps`` (``naive - forecast`` impact) has no sign guarantee:
+    when the session repeats the last one, pooling only adds error. The shares
+    are summed in an explicit loop, session by session, because the built-in
+    ``sum`` compensates float error on recent Pythons and Rust does not. Mirrors
+    the Rust ``pov_forecast`` operation for operation; see the Rust
+    ``PovForecast`` doc for the fields.
+    """
+    _validate_pov(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)
+    if not history:
+        raise ValueError("need at least one history capture")
+    profiles = []
+    shares = []
+    for i, df in enumerate(history):
+        try:
+            profile, volume, total = _measured(df, bucket_ns)
+        except ValueError as e:
+            raise ValueError(f"history capture {i + 1}: {e}") from e
+        shares.append([v / total for v in volume])
+        profiles.append(profile)
+    try:
+        exec_profile, _, exec_total = _measured(exec_df, bucket_ns)
+    except ValueError as e:
+        raise ValueError(f"execution capture: {e}") from e
+
+    product = exec_df["product"][0]
+    exec_slots = _slots(exec_profile, bucket_ns)
+    for i, (df, profile) in enumerate(zip(history, profiles, strict=True)):
+        if df["product"][0] != product:
+            raise ValueError(
+                f"history capture {i + 1} is {df['product'][0]} "
+                f"but the execution capture is {product}"
+            )
+        history_slots = _slots(profile, bucket_ns)
+        if history_slots != exec_slots:
+            raise ValueError(
+                f"history capture {i + 1} covers different buckets: it traded in slots "
+                f"{history_slots}, the execution in {exec_slots}"
+            )
+
+    n = len(exec_slots)
+    k = float(len(history))
+    forecast_share = []
+    for j in range(n):
+        acc = 0.0
+        for s in shares:
+            acc += s[j]
+        forecast_share.append(acc / k)
+    naive_share = list(shares[-1])
+
+    session = session_vwap(exec_df)
+    oracle_participation, oracle_impact = _oracle(parent_qty, exec_total, coef_bps, perm_coef_bps)
+    args = (exec_slots, exec_profile, exec_total, parent_qty, coef_bps, perm_coef_bps)
+    forecast = _price_plan(forecast_share, *args)
+    naive = _price_plan(naive_share, *args)
+    return {
+        "product": product,
+        "bucket_ns": bucket_ns,
+        "buckets": n,
+        "sessions": len(history),
+        "parent_qty": _r8(parent_qty),
+        "cap": _r8(cap),
+        "coef_bps": _r8(coef_bps),
+        "perm_coef_bps": _r8(perm_coef_bps),
+        "exec_volume": _r8(exec_total),
+        "session_vwap": session,
+        "forecast": _score(forecast, session, cap, oracle_impact),
+        "naive": _score(naive, session, cap, oracle_impact),
+        "oracle_participation": _r8(oracle_participation),
+        "oracle_impact_bps": _r8(oracle_impact),
+        "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
+        "improvement_bps": _r8(naive["impact"] - forecast["impact"]),
+        "schedule": forecast["schedule"],
+    }
+
+
 def _oracle(
     parent_qty: float, exec_total: float, coef_bps: float, perm_coef_bps: float
 ) -> tuple[float, float]:
