@@ -19,6 +19,7 @@ from xexeclab.engine import (
     impact_curve,
     optimal_schedule,
     pov_backtest,
+    pov_forecast,
     pov_schedule,
     queue_metrics,
     quote_metrics,
@@ -44,6 +45,9 @@ SAMPLE = "data/sample_ticks.ndjson"
 # A later session of the same product, over the same three seconds of the clock
 # but with a thin middle second: the session a plan built on SAMPLE has to meet.
 NEXT_SAMPLE = "data/sample_ticks_next.ndjson"
+# A third session whose shape sits between the first two: the one a forecast
+# pooled from both has to meet.
+THIRD_SAMPLE = "data/sample_ticks_third.ndjson"
 QUOTE_SAMPLE = "data/sample_quotes.ndjson"
 BOOK_SAMPLE = "data/sample_book.ndjson"
 IMPACT_SAMPLE = "data/sample_impact.ndjson"
@@ -576,6 +580,60 @@ def test_rust_and_python_out_of_sample_volume_plans_are_identical():
     # of the forecast is never negative -- checked on the Rust output too.
     assert rust["forecast_cost_bps"] >= 0.0
     assert rust["impact_bps"] >= rust["oracle_impact_bps"]
+
+
+def test_rust_and_python_pooled_volume_forecasts_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The seventeenth equivalence test, and the first over an estimate built
+    # from several captures: the engines must agree on every session's profile,
+    # on the order the shares are averaged in, and on two plans priced against
+    # a third session -- a last-place disagreement in the mean moves both.
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-forecast",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE}",
+            "--input",
+            THIRD_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap",
+            str(POV_PLAN["cap"]),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = pov_forecast(
+        [read_ticks(SAMPLE), read_ticks(NEXT_SAMPLE)],
+        read_ticks(THIRD_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        POV_PLAN["cap"],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+
+    assert rust == py
+
+    # The pooled plan must differ from the naive one, or the engines agreed
+    # only on a single session copied twice.
+    assert rust["sessions"] == 2
+    assert rust["forecast"]["impact_bps"] != rust["naive"]["impact_bps"]
+    assert rust["forecast"]["forecast_cost_bps"] >= 0.0
+    assert rust["naive"]["forecast_cost_bps"] >= 0.0
 
 
 def test_rust_and_python_streamed_sessions_are_identical():
