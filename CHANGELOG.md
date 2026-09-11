@@ -4,6 +4,50 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.19.0] - 2026-09-11
+
+### Added
+- **Pooled volume forecasts -- `pov-forecast` / `pov_forecast`.** `pov-backtest`
+  (v0.18.0) judges the naive forecast: one earlier session's profile, used
+  unchanged, with every burst and lull of that one session baked into the plan.
+  This builds the plan from the **mean share profile of several history
+  sessions** (`--history a.ndjson,b.ndjson`, oldest first) and prices it against
+  the execution session beside two references -- the naive forecast (the most
+  recent history session alone) and the oracle.
+
+  Sessions are pooled by **share, not by volume**, so a session that traded ten
+  times as much cannot outvote the others. The result carries a `PlanScore` for
+  each plan (`profile_distance`, `price`, `tracking_bps`, `impact_bps`,
+  `max_participation`, `feasible`, `forecast_cost_bps`) and `improvement_bps`,
+  the naive plan's impact minus the pooled plan's.
+
+  `forecast_cost_bps` is still never negative -- the oracle is the minimum under
+  this cost model. `improvement_bps` has **no such guarantee**: when a session
+  repeats the most recent one exactly, pooling only adds error and the number
+  goes negative. A test pins that case, so the claim that averaging helps is
+  checked per session rather than assumed.
+
+- **A third bundled session, `data/sample_ticks_third.ndjson`**, whose shape sits
+  between the first two. Pooling `sample_ticks` and `sample_ticks_next` forecasts
+  it more closely than `sample_ticks_next` alone does.
+
+- **Seventeenth cross-language equivalence test.** The first over an estimate
+  built from several captures: the engines must agree on every session's
+  profile, on the order the shares are averaged in, and on two plans priced
+  against a third session.
+
+### Changed
+- The out-of-sample pricing is factored into one path (`price_plan`, with the
+  oracle and the rounded `PlanScore` beside it) on both engines, so the backtest
+  and the forecast cannot charge the same allocation differently. `pov_backtest`
+  output is unchanged.
+
+### Notes
+- The mean is summed in an explicit loop, session by session, on both engines.
+  Python's built-in `sum` uses compensated float summation from 3.12, which Rust
+  does not, so it would not be bit-identical.
+- Still no new Polars feature flags.
+
 ## [0.18.0] - 2026-09-10
 
 ### Added
