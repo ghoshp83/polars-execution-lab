@@ -188,6 +188,7 @@ def cmd_pov_forecast(a: argparse.Namespace) -> None:
                 a.cap,
                 a.coef_bps,
                 a.perm_coef_bps,
+                a.half_life,
             )
         )
     )
@@ -555,7 +556,7 @@ def main(argv: list[str] | None = None) -> None:
 
     pfc = sub.add_parser(
         "pov-forecast",
-        help="plan from the average volume profile of several sessions and score it",
+        help="plan from the pooled volume profile of several sessions and score it",
     )
     pfc.add_argument(
         "--history",
@@ -581,6 +582,12 @@ def main(argv: list[str] | None = None) -> None:
         type=float,
         default=0.0,
         help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    pfc.add_argument(
+        "--half-life",
+        type=float,
+        default=0.0,
+        help="sessions over which a session's weight halves (0 = pool them equally)",
     )
     pfc.set_defaults(fn=cmd_pov_forecast)
 
