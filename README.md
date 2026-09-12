@@ -88,7 +88,7 @@ flowchart LR
     RUST --> POV[Volume-following plan<br/>allocation read out of the capture]
     PY --> POV
     POV --> BT[Out-of-sample backtest<br/>plan from one session, priced on the next]
-    BT --> FC[Pooled forecast<br/>mean profile of several sessions vs the last one]
+    BT --> FC[Pooled forecast<br/>several sessions pooled, recency-weighted, vs the last one]
     RUST --> STREAM[Streamed session<br/>bounded memory — the file is never held]
     PY --> STREAM
     RUST --> CALIB[Impact calibration<br/>fit coef + perm_coef — OLS or robust Huber + ridge]
@@ -179,10 +179,16 @@ uv run xexeclab pov-backtest --plan-input data/sample_ticks.ndjson \
                              --input data/sample_ticks_next.ndjson \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
 
-# ...and forecast from more than one session: plan on the mean volume profile of
-# the history, scored against the most recent session alone and the oracle
+# ...and forecast from more than one session: plan on the pooled volume profile
+# of the history, scored against the most recent session alone and the oracle
 uv run xexeclab pov-forecast --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
                              --input data/sample_ticks_third.ndjson \
+                             --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
+
+# ...and lean the pool towards the recent sessions when the profile is drifting:
+# a session two half-lives back carries a quarter of yesterday's weight
+uv run xexeclab pov-forecast --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
+                             --input data/sample_ticks_third.ndjson --half-life 1.5 \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
 
 # the same session benchmarks, folded out of the capture without ever holding it
@@ -383,15 +389,18 @@ This is a **market-data and execution-analytics** project, not a trading system.
   model*; a `forecast_cost_bps` of zero means the forecast matched the session,
   not that execution was free. Sessions are aligned by bucket position, so two
   captures must trade in the same buckets or the comparison is refused.
-- **`xexeclab pov-forecast` is an equal-weighted average, not a volume model.**
-  It pools the share profiles of the sessions you pass, with no seasonality, no
-  recency weighting and no regime detection, and the bundled history is two
-  three-second sessions — enough to show the mechanism, not to say how much
-  pooling helps in a real market. `improvement_bps` compares it only with the
-  most recent session used alone, and it can be negative: a session that repeats
-  the last one is forecast worse by the average. Every history session must
-  trade in the same buckets as the execution session, so sessions with a gap are
-  refused rather than filled in.
+- **`xexeclab pov-forecast` is a weighted average, not a volume model.** It pools
+  the share profiles of the sessions you pass, with no seasonality and no regime
+  detection, and the bundled history is two three-second sessions — enough to
+  show the mechanism, not to say how much pooling helps in a real market.
+  `--half-life` is the one shape knob: it decays the older sessions' weight
+  geometrically, and it is **a parameter you supply, not one the engine fits**.
+  Nothing here estimates the right half-life, or tests whether the profile is
+  drifting at all; `improvement_bps` is the number to search it with, and it
+  compares the pool only with the most recent session used alone. It can be
+  negative: a session that repeats the last one is forecast worse by any pool.
+  Every history session must trade in the same buckets as the execution session,
+  so sessions with a gap are refused rather than filled in.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
   streams ticks.** It folds an NDJSON capture in chunks and never holds more than
   `chunk_rows` ticks plus one carried tick — `peak_rows_in_memory` reports that

@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.20.0] - 2026-09-12
+
+### Added
+- **Recency-weighted pooling -- `--half-life` / `half_life` on `pov-forecast`.**
+  v0.19.0 pooled the history sessions with equal weight, which is the right
+  estimator for a profile that is merely noisy and the wrong one for a profile
+  that is drifting: a week-old session votes as loudly as yesterday's. The
+  forecast is now a **weighted** mean of the history share profiles, with a
+  session `age` sessions back weighted `0.5 ** (age / half_life)` and the weights
+  normalised over the history.
+
+  The parameter is the dial between the two plans `pov-forecast` already prices:
+  `--half-life 0` (the default, and the v0.19.0 behaviour) pools every session
+  equally, and a half-life far below one session drives the weight onto the last
+  session, where the forecast *is* the naive baseline. Both ends are pinned by
+  tests. The result reports `half_life` and the normalised `weights` it used, so
+  the plan can be re-derived from the output.
+
+  Which half-life is right is a property of the market, not of the engine:
+  `improvement_bps` is how a desk would choose it, session by session.
+
+### Fixed
+- **`_measured` totalled bucket volume with the built-in `sum`.** From Python
+  3.12 that uses compensated summation and Rust's plain running sum does not, so
+  the two engines' totals could differ in the last bit and diverge after
+  rounding. It is an explicit loop now, as the rest of the mirrored host-side
+  arithmetic already was. CI pins Python 3.11, where the two agree, so this could
+  only ever have been hit by a user on 3.12 or newer -- the package supports
+  `>=3.11`.
+
 ## [0.19.0] - 2026-09-11
 
 ### Added
