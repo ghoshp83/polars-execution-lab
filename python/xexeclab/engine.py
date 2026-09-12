@@ -1028,14 +1028,23 @@ def pov_forecast(
     cap: float,
     coef_bps: float,
     perm_coef_bps: float = 0.0,
+    half_life: float = 0.0,
 ) -> dict:
     """A volume forecast pooled from several sessions, scored out of sample.
 
     ``pov_backtest`` judges the naive forecast -- one earlier session's profile,
-    used unchanged, noise and all. This plans on the mean share profile of every
-    ``history`` session instead (oldest first, each weighted equally so a busy
-    day cannot outvote a quiet one) and prices it against ``exec_df`` beside the
-    naive forecast (the last history session alone) and the oracle.
+    used unchanged, noise and all. This plans on the weighted mean share profile
+    of every ``history`` session instead (oldest first, weighted by session and
+    never by volume, so a busy day cannot outvote a quiet one) and prices it
+    against ``exec_df`` beside the naive forecast (the last history session
+    alone) and the oracle.
+
+    ``half_life`` is the decay of that weighting, in sessions: a capture ``age``
+    sessions back is weighted ``0.5 ** (age / half_life)``, normalised over the
+    history. It is the dial between the two forecasts already priced here --
+    ``0`` disables the decay and pools every session equally, and a half-life far
+    below one drives the weight onto the last session, where the forecast is the
+    naive one.
 
     ``improvement_bps`` (``naive - forecast`` impact) has no sign guarantee:
     when the session repeats the last one, pooling only adds error. The shares
@@ -1045,6 +1054,8 @@ def pov_forecast(
     ``PovForecast`` doc for the fields.
     """
     _validate_pov(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)
+    if not math.isfinite(half_life) or half_life < 0:
+        raise ValueError(f"half_life must be a non-negative finite number, got {half_life}")
     if not history:
         raise ValueError("need at least one history capture")
     profiles = []
@@ -1077,13 +1088,13 @@ def pov_forecast(
             )
 
     n = len(exec_slots)
-    k = float(len(history))
+    weights = _pooling_weights(len(history), half_life)
     forecast_share = []
     for j in range(n):
         acc = 0.0
-        for s in shares:
-            acc += s[j]
-        forecast_share.append(acc / k)
+        for w, s in zip(weights, shares, strict=True):
+            acc += w * s[j]
+        forecast_share.append(acc)
     naive_share = list(shares[-1])
 
     session = session_vwap(exec_df)
@@ -1096,6 +1107,8 @@ def pov_forecast(
         "bucket_ns": bucket_ns,
         "buckets": n,
         "sessions": len(history),
+        "half_life": _r8(half_life),
+        "weights": [_r8(w) for w in weights],
         "parent_qty": _r8(parent_qty),
         "cap": _r8(cap),
         "coef_bps": _r8(coef_bps),
@@ -1110,6 +1123,24 @@ def pov_forecast(
         "improvement_bps": _r8(naive["impact"] - forecast["impact"]),
         "schedule": forecast["schedule"],
     }
+
+
+def _pooling_weights(sessions: int, half_life: float) -> list[float]:
+    """The weight each history session carries, oldest first, summing to one.
+
+    A session ``age`` back is weighted ``0.5 ** (age / half_life)`` before
+    normalising, so the most recent one always weighs the most. A ``half_life``
+    of zero is the no-decay case and is returned directly rather than as a limit.
+    Mirrors the Rust ``pooling_weights``, including the explicit summation of the
+    normalising total.
+    """
+    if half_life == 0:
+        return [1.0 / sessions] * sessions
+    raw = [0.5 ** ((sessions - 1 - i) / half_life) for i in range(sessions)]
+    total = 0.0
+    for r in raw:
+        total += r
+    return [r / total for r in raw]
 
 
 def _oracle(

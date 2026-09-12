@@ -90,6 +90,46 @@ def test_the_average_can_lose_to_the_most_recent_session():
     assert fc["improvement_bps"] < 0.0
 
 
+def test_a_half_life_of_one_session_halves_the_weight_each_step_back():
+    fc = pov_forecast(
+        [_lumpy(), _reshaped(), _blended()], _blended(), BUCKET, 1.0, 1.0, 10.0, 0.0, 1.0
+    )
+    # Raw weights 0.25 / 0.5 / 1.0 over 1.75: the newest session weighs four
+    # times the oldest, and the weights are reported normalised.
+    assert fc["half_life"] == 1.0
+    assert fc["weights"] == [0.14285714, 0.28571429, 0.57142857]
+    assert abs(sum(fc["weights"]) - 1.0) < 1e-7
+
+
+def test_a_short_half_life_converges_on_the_naive_forecast():
+    # A half-life of a hundredth of a session leaves the older capture 2^-100 of
+    # the weight, so the pooled plan *is* the last session.
+    fc = pov_forecast([_lumpy(), _reshaped()], _blended(), BUCKET, 1.0, 1.0, 10.0, 0.0, 0.01)
+    assert fc["weights"] == [0.0, 1.0]
+    assert fc["forecast"]["impact_bps"] == fc["naive"]["impact_bps"]
+    assert fc["forecast"]["profile_distance"] == fc["naive"]["profile_distance"]
+    assert fc["improvement_bps"] == 0.0
+
+
+def test_recency_weighting_wins_when_the_profile_has_drifted():
+    # The old session is the odd one out and the market has settled into the
+    # recent shape: leaning on the recent sessions beats pooling all three.
+    history = [_lumpy(), _reshaped(), _reshaped()]
+    exec_df = _session(3 * HOUR, [6.0, 1.0, 3.0])
+    flat = pov_forecast(history, exec_df, BUCKET, 1.0, 1.0, 10.0, 0.0, 0.0)
+    decayed = pov_forecast(history, exec_df, BUCKET, 1.0, 1.0, 10.0, 0.0, 0.5)
+    assert decayed["forecast"]["forecast_cost_bps"] < flat["forecast"]["forecast_cost_bps"]
+    assert decayed["forecast"]["profile_distance"] < flat["forecast"]["profile_distance"]
+    assert decayed["improvement_bps"] > flat["improvement_bps"]
+
+
+def test_a_negative_half_life_is_refused():
+    with pytest.raises(
+        ValueError, match="^half_life must be a non-negative finite number, got -1.0$"
+    ):
+        pov_forecast([_lumpy()], _blended(), BUCKET, 1.0, 1.0, 10.0, 0.0, -1.0)
+
+
 def test_no_history_is_refused():
     with pytest.raises(ValueError, match="^need at least one history capture$"):
         pov_forecast([], _blended(), BUCKET, 1.0, 1.0, 10.0)
