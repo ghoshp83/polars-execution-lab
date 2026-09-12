@@ -24,7 +24,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -339,7 +339,8 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string(&report)?);
         }
         // `--history` lists earlier sessions, oldest first; the last one is the
-        // naive forecast the pooled profile is scored against.
+        // naive forecast the pooled profile is scored against. `--half-life`
+        // decays the older sessions' weight; 0, the default, pools them equally.
         "pov-forecast" => {
             let history = arg_value(&args, "--history")
                 .ok_or_else(|| anyhow!("--history required\n{USAGE}"))?
@@ -354,6 +355,7 @@ fn main() -> Result<()> {
                 arg_f64(&args, "--cap", 0.25)?,
                 arg_f64(&args, "--coef-bps", 10.0)?,
                 arg_f64(&args, "--perm-coef-bps", 0.0)?,
+                arg_f64(&args, "--half-life", 0.0)?,
             )?;
             println!("{}", serde_json::to_string(&report)?);
         }

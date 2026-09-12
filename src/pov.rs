@@ -177,10 +177,21 @@ pub struct PlanScore {
 /// [`PovBacktest`] judges the naive forecast: one earlier session's profile,
 /// used unchanged. Any single session carries its own noise -- a burst in one
 /// second, a lull in the next -- and a plan built on it inherits all of it.
-/// This builds the plan from the *mean* share profile of every history session
-/// instead, each session weighted equally so a busy day cannot outvote a quiet
-/// one, and prices it against the execution session beside two references: the
-/// naive forecast (the most recent history session alone) and the oracle.
+/// This builds the plan from the *weighted mean* share profile of every history
+/// session instead — weighted by session, never by volume, so a busy day cannot
+/// outvote a quiet one — and prices it against the execution session beside two
+/// references: the naive forecast (the most recent history session alone) and
+/// the oracle.
+///
+/// `half_life` sets how fast the weight decays into the past, in sessions: a
+/// capture `age` sessions back is weighted `0.5^(age / half_life)`, normalised
+/// over the history. It is the dial between the two forecasts already priced
+/// here — `0` disables the decay entirely and pools every session equally, while
+/// a half-life far below one drives the weight onto the last session and the
+/// forecast converges on the naive one. Neither end is right in general: a
+/// market whose profile is drifting wants a short half-life, and one that is
+/// merely noisy wants a long one, so the number is a parameter and
+/// `improvement_bps` is how a desk would choose it.
 ///
 /// `improvement_bps` is `naive.impact_bps - forecast.impact_bps`. Unlike
 /// `forecast_cost_bps` it has no sign guarantee: when the session repeats the
@@ -193,6 +204,10 @@ pub struct PovForecast {
     pub buckets: usize,
     /// History sessions pooled into the forecast.
     pub sessions: usize,
+    /// Sessions over which a session's weight halves; `0` means no decay.
+    pub half_life: f64,
+    /// The weight each history session carried, oldest first; sums to one.
+    pub weights: Vec<f64>,
     pub parent_qty: f64,
     pub cap: f64,
     pub coef_bps: f64,
@@ -520,6 +535,10 @@ pub fn pov_backtest(
 /// the order given, so both engines add the same floats in the same order.
 /// Mirrors `pov_forecast` in `python/xexeclab/engine.py` operation for
 /// operation.
+// One argument over the lint's threshold: `half_life` belongs with the other
+// scalars the caller tunes, and boxing them into a struct for one parameter
+// would put the two engines' signatures further apart, not closer.
+#[allow(clippy::too_many_arguments)]
 pub fn pov_forecast(
     history: &[Vec<Tick>],
     exec: &[Tick],
@@ -528,8 +547,14 @@ pub fn pov_forecast(
     cap: f64,
     coef_bps: f64,
     perm_coef_bps: f64,
+    half_life: f64,
 ) -> Result<PovForecast> {
     validate(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)?;
+    if !half_life.is_finite() || half_life < 0.0 {
+        return Err(anyhow!(
+            "half_life must be a non-negative finite number, got {half_life}"
+        ));
+    }
     if history.is_empty() {
         return Err(anyhow!("need at least one history capture"));
     }
@@ -564,14 +589,14 @@ pub fn pov_forecast(
     }
 
     let n = exec_slots.len();
-    let k = history.len() as f64;
+    let weights = pooling_weights(history.len(), half_life);
     let forecast_share: Vec<f64> = (0..n)
         .map(|j| {
             let mut acc = 0.0;
-            for s in &shares {
-                acc += s[j];
+            for (w, s) in weights.iter().zip(&shares) {
+                acc += w * s[j];
             }
-            acc / k
+            acc
         })
         .collect();
     let naive_share = shares[shares.len() - 1].clone();
@@ -605,6 +630,8 @@ pub fn pov_forecast(
         bucket_ns,
         buckets: n,
         sessions: history.len(),
+        half_life: r8(half_life),
+        weights: weights.iter().map(|w| r8(*w)).collect(),
         parent_qty: r8(parent_qty),
         cap: r8(cap),
         coef_bps: r8(coef_bps),
@@ -619,6 +646,28 @@ pub fn pov_forecast(
         improvement_bps: r8(naive.impact - forecast.impact),
         schedule: forecast.schedule,
     })
+}
+
+/// The weight each history session carries, oldest first, summing to one.
+///
+/// A session `age` back is weighted `0.5^(age / half_life)` before normalising,
+/// so the most recent one always weighs the most and the decay is geometric. A
+/// `half_life` of zero is the no-decay case and is returned directly rather than
+/// as a limit. The normalising total is added in an explicit loop, in the order
+/// the sessions were given, so the Python engine adds the same floats in the
+/// same order.
+fn pooling_weights(sessions: usize, half_life: f64) -> Vec<f64> {
+    if half_life == 0.0 {
+        return vec![1.0 / sessions as f64; sessions];
+    }
+    let raw: Vec<f64> = (0..sessions)
+        .map(|i| 0.5f64.powf((sessions - 1 - i) as f64 / half_life))
+        .collect();
+    let mut total = 0.0;
+    for r in &raw {
+        total += r;
+    }
+    raw.iter().map(|r| r / total).collect()
 }
 
 /// The oracle's participation and impact: the volume-following plan built on
