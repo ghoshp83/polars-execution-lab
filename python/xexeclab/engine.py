@@ -806,7 +806,12 @@ def _measured(df: pl.DataFrame, bucket_ns: int) -> tuple[pl.DataFrame, list[floa
         raise ValueError("no ticks")
     profile = _volume_profile(df, bucket_ns)
     volume = profile["volume"].to_list()
-    total_volume = sum(volume)
+    # Summed in an explicit loop, not with the built-in ``sum``: from Python 3.12
+    # that compensates float error and Rust's plain running sum does not, so the
+    # two engines' totals could differ in the last bit.
+    total_volume = 0.0
+    for v in volume:
+        total_volume += v
     if total_volume <= 0:
         raise ValueError("zero traded volume")
     # A bucket that traded nothing has no VWAP to execute at. Buckets only exist
