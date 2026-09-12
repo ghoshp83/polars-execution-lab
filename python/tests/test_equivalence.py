@@ -636,6 +636,65 @@ def test_rust_and_python_pooled_volume_forecasts_are_identical():
     assert rust["naive"]["forecast_cost_bps"] >= 0.0
 
 
+def test_rust_and_python_recency_weighted_forecasts_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The eighteenth equivalence test. The weights are the one quantity in the
+    # engine neither Polars nor a plain sum produces: each is a `pow` of 0.5
+    # called in the host language, then divided by a total the two engines must
+    # accumulate in the same order. A half-life of 1.5 sessions gives both
+    # weights an infinite binary expansion, so any disagreement shows up.
+    half_life = "1.5"
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-forecast",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE}",
+            "--input",
+            THIRD_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap",
+            str(POV_PLAN["cap"]),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+            "--half-life",
+            half_life,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = pov_forecast(
+        [read_ticks(SAMPLE), read_ticks(NEXT_SAMPLE)],
+        read_ticks(THIRD_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        POV_PLAN["cap"],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+        float(half_life),
+    )
+
+    assert rust == py
+
+    # The decay must actually have tilted the pool, or the test is the flat
+    # case again under a different name.
+    assert rust["half_life"] == 1.5
+    assert rust["weights"][0] < rust["weights"][1]
+    assert rust["weights"] != [0.5, 0.5]
+    assert rust["forecast"]["forecast_cost_bps"] >= 0.0
+
+
 def test_rust_and_python_streamed_sessions_are_identical():
     binary = _find_binary()
     if not binary:
