@@ -71,3 +71,16 @@ jobs:
         # Rust binary built on the 0.x crate line, so a failure there would say
         # something about the version gap rather than about our code.
         run: uv run pytest python/tests -q -m "not equivalence"
+      - name: Fingerprint a 400k-tick capture under Polars 2.0
+        # The fixtures above are too small for the streaming engine to partition,
+        # so they cannot see a change in how a column is summed. This can.
+        run: PYTHONPATH=python uv run python -m xexeclab.compat dump v2.json
+      - name: Fingerprint the same capture under Polars 1.x
+        run: |
+          uv venv .venv1
+          VIRTUAL_ENV=.venv1 uv pip install "polars>=1.0,<2"
+          PYTHONPATH=python .venv1/bin/python -m xexeclab.compat dump v1.json
+      - name: Compare bit for bit against the recorded baseline
+        # Passes while the versions differ exactly as recorded in the baseline;
+        # fails on any new, changed, or vanished difference.
+        run: PYTHONPATH=python uv run python -m xexeclab.compat compare v1.json v2.json python/tests/polars2_baseline.json
