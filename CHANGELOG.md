@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.21.0] - 2026-09-13
+
+### Added
+- **A cross-version bit-identity check -- `python -m xexeclab.compat`.** The
+  advisory Polars 2.0 CI job ran the test suite only, and its fixtures are a few
+  ticks long: too small for the streaming engine to partition, so a change in how
+  a column is summed could never show up there. The module builds a
+  deterministic 400,000-tick capture, fingerprints every `summary` and
+  `pov_schedule` value as an exact hex float, and compares a fingerprint taken
+  under Polars 1.x with one taken under 2.0.
+
+  Known differences are recorded in `python/tests/polars2_baseline.json`; the
+  check passes while the versions differ exactly as recorded and fails on any
+  new, changed, or vanished difference, so it never settles into a permanently
+  red job that people learn to ignore. On 1.43.2 vs 2.0.0-rc.1 all 60,507 values
+  match, and the baseline is empty.
+
+### Changed
+- The `polars2` CI job now runs the check after the test suite, building a
+  second environment on Polars 1.x to compare against.
+
 ## [0.20.0] - 2026-09-12
 
 ### Added

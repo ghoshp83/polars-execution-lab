@@ -415,8 +415,12 @@ This is a **market-data and execution-analytics** project, not a trading system.
   reads its whole replay into memory.
 - **Polars 2.0 is watched, not adopted.** Polars 2.0rc1 makes the streaming
   engine the default for every `LazyFrame` query, and the Python engine here
-  passes its whole test suite unchanged on it — an advisory CI job keeps
-  checking. The dependency stays `polars>=1.0` anyway: 2.0 is still a release
+  passes its whole test suite unchanged on it. An advisory CI job also runs
+  `python -m xexeclab.compat` on a 400,000-tick capture under both 1.x and 2.0
+  and compares every result bit for bit against a recorded baseline; today they
+  match exactly. That covers one synthetic capture and two engine entry points,
+  not every input a real session can produce, and CI runners may partition work
+  differently from a local machine. The dependency stays `polars>=1.0` anyway: 2.0 is still a release
   candidate, and the Rust `polars` crate has not gone 2.0 (crates.io tops out at
   0.55.2, this crate pins 0.44). Pinning the Python half to 2.0 would put the two
   engines on different generations and leave the cross-language equivalence
