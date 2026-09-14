@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.22.0] - 2026-09-14
+
+### Added
+- **`python/tests/test_precision.py` pins the `r8` magnitude ceiling.** Every
+  reported value is rounded to 8 absolute decimals, but a double's spacing grows
+  with magnitude: below 2^26 it is finer than 1e-8 and every 8th decimal is
+  resolved; above it a 1e-8 step can vanish, and near 1e9 the resolution is
+  about 1.2e-7. Past 2^53 / 1e8 the rounding is the identity.
+
+### Changed
+- The README's byte-identical claim now says it concerns 8dp-rounded values, and
+  the honest disclaimer states the ceiling: prices, sizes, basis points and
+  ratios sit far below it, volume and notional totals can cross it. The engines
+  still agree bit for bit above it -- the equivalence tests prove agreement, not
+  resolution.
+
 ## [0.21.0] - 2026-09-13
 
 ### Added
