@@ -19,7 +19,9 @@ benchmarks are expressed **once** with
 the [Polars](https://pola.rs) query engine and executed **natively in Rust** (the
 compiled hot path) and **in Python** (the research and evaluation layer). A
 cross-language test asserts the two produce **byte-identical** summaries, so
-"prototype in Python, ship in Rust" carries zero logic drift.
+"prototype in Python, ship in Rust" carries zero logic drift. (Results are
+rounded to 8 decimals; how many of those decimals are meaningful depends on
+magnitude — see the disclaimer.)
 
 It is deliberately shaped like a slice of what an onchain market-data / execution
 firm (e.g. [LO:TECH](https://lo.tech)) operates: live market data, deterministic
