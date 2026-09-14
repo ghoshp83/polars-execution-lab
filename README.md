@@ -427,6 +427,17 @@ This is a **market-data and execution-analytics** project, not a trading system.
   0.55.2, this crate pins 0.44). Pinning the Python half to 2.0 would put the two
   engines on different generations and leave the cross-language equivalence
   tests comparing across a version boundary instead of proving one engine.
+- **"8 decimal places" is a rounding rule, not a precision guarantee at every
+  magnitude.** Both engines round every reported value to 8 *absolute*
+  decimals, but a 64-bit float's spacing grows with the size of the number.
+  Below about 67 million (2^26) that spacing is finer than 1e-8, so every 8th
+  decimal is real. Above it, neighbouring 8-decimal values can collapse onto the
+  same float, and the effective resolution keeps coarsening — roughly 1.2e-7 for
+  a value near 1e9, which is where a busy session's `notional` sits. Prices,
+  sizes, basis points and ratios stay far below the ceiling; volume and notional
+  totals are the fields that can cross it. The two engines still agree bit for
+  bit above the ceiling — the equivalence tests prove agreement, not resolution.
+  `python/tests/test_precision.py` pins where the ceiling is.
 
 ## License
 
