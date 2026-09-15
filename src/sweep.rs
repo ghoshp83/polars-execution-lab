@@ -81,7 +81,7 @@ pub fn sweep_cost(
     // taker meets them -- asks cheapest first, bids dearest first -- so the
     // running total of size *ahead* of a level decides how much of that level
     // the order reaches.
-    let cum_before = col("size").cum_sum(false).over([col("ts_ns")]) - col("size");
+    let cum_before = col("size").cum_sum(false).over([col("ts_ns")])? - col("size");
     let remaining = lit(order_size) - cum_before;
     let alloc = when(remaining.clone().lt_eq(lit(0.0)))
         .then(lit(0.0))
