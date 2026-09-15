@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.23.0] - 2026-09-15
+
+### Added
+- A sweep test over two identical snapshots pins that the running size total is
+  windowed per snapshot -- the one expression the upgrade had to touch.
+
+### Changed
+- **The Rust engine moves from `polars` 0.44 to 0.55.2**, the latest crate on
+  crates.io, keeping the same minimal feature set (`lazy`, `abs`, `cum_agg`).
+  The one source change: a window expression's `.over(...)` now returns a
+  `Result`, so the order-book sweep propagates it. The full Rust suite and all
+  18 cross-language equivalence tests pass unchanged against the new binary --
+  eleven minor versions of the engine moved and not one reported value did.
+- The README's Polars 2.0 disclaimer now states the current crate pin.
+
 ## [0.22.0] - 2026-09-14
 
 ### Added
