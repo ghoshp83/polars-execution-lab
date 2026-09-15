@@ -85,6 +85,25 @@ fn a_sell_walks_the_bids_downward() {
 }
 
 #[test]
+fn each_snapshot_is_walked_from_its_own_touch() {
+    // Two identical books a tick apart. The running total of size ahead of a
+    // level is windowed per snapshot; if it ever leaked across snapshots the
+    // second book would look already consumed and report a short fill.
+    let levels = vec![
+        bl(0, "ask", 0, 100.0, 1.0),
+        bl(0, "ask", 1, 101.0, 1.0),
+        bl(1, "ask", 0, 100.0, 1.0),
+        bl(1, "ask", 1, 101.0, 1.0),
+    ];
+    let m = sweep_cost(&levels, "BTC-USD", "buy", 1.5).unwrap();
+    assert_eq!(m.snapshots, 2);
+    assert_eq!(m.filled_snapshots, 2);
+    assert!((m.avg_fill_ratio - 1.0).abs() < 1e-9);
+    assert!((m.avg_levels_consumed - 2.0).abs() < 1e-9);
+    assert!((m.avg_sweep_vwap - 150.5 / 1.5).abs() < 1e-8);
+}
+
+#[test]
 fn a_buy_and_a_sell_of_the_same_size_price_different_sides() {
     // The same order size must not read the same book: a buy crosses the asks,
     // a sell crosses the bids.
