@@ -424,7 +424,7 @@ This is a **market-data and execution-analytics** project, not a trading system.
   not every input a real session can produce, and CI runners may partition work
   differently from a local machine. The dependency stays `polars>=1.0` anyway: 2.0 is still a release
   candidate, and the Rust `polars` crate has not gone 2.0 (crates.io tops out at
-  0.55.2, this crate pins 0.44). Pinning the Python half to 2.0 would put the two
+  0.55.2, which this crate pins). Pinning the Python half to 2.0 would put the two
   engines on different generations and leave the cross-language equivalence
   tests comparing across a version boundary instead of proving one engine.
 - **"8 decimal places" is a rounding rule, not a precision guarantee at every
