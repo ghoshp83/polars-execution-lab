@@ -1,0 +1,24 @@
+name: upstream
+
+# A tripwire, not a gate: goes red on the first weekly run after both the Rust
+# crate and the Python package publish a stable Polars 2.0, which is the signal
+# to start the migration checklist in the README.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  polars2-watch:
+    name: Polars 2.0 stable on crates.io and PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check both registries
+        # Standard library only -- no install step, so the watch cannot break on
+        # a dependency the way the thing it watches for might.
+        # Run as a plain script so the package (and Polars) is never imported.
+        run: python python/xexeclab/upstream.py
