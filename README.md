@@ -427,6 +427,15 @@ This is a **market-data and execution-analytics** project, not a trading system.
   0.55.2, which this crate pins). Pinning the Python half to 2.0 would put the two
   engines on different generations and leave the cross-language equivalence
   tests comparing across a version boundary instead of proving one engine.
+  A weekly `upstream` workflow (`python python/xexeclab/upstream.py`) goes red
+  once both registries publish a stable 2.x; pre-releases never trip it. The
+  migration then runs in this order, both engines in one release:
+  1. Move the Rust crate to 2.x and fix any API breaks; `cargo test` passes.
+  2. Move the Python pin to `polars>=2,<3`; `pytest -m "not equivalence"` passes.
+  3. Rebuild the binary and run all equivalence tests against it — they must
+     pass unchanged, or the difference is explained before anything ships.
+  4. Retire the advisory `polars2` job and its baseline, which have nothing
+     left to compare.
 - **"8 decimal places" is a rounding rule, not a precision guarantee at every
   magnitude.** Both engines round every reported value to 8 *absolute*
   decimals, but a 64-bit float's spacing grows with the size of the number.
