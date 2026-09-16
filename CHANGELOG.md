@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.24.0] - 2026-09-16
+
+### Added
+- **`python/xexeclab/upstream.py` watches for a stable Polars 2.0** on both
+  crates.io and PyPI, using only the standard library. Release candidates never
+  count, and versions compare numerically, not as text. It exits 1 only when
+  both engines can move.
+- A weekly `upstream` workflow runs it, so CI goes red the week migration
+  becomes possible. Today: crate 0.55.2, PyPI 1.44.2 stable (2.0.0rc1 ignored).
+- Tests for the watch's version logic.
+
+### Changed
+- The README's Polars 2.0 note now carries the ordered migration checklist.
+
 ## [0.23.0] - 2026-09-15
 
 ### Added
