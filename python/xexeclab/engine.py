@@ -991,6 +991,16 @@ def pov_backtest(
     plan_share = [v / plan_total for v in plan_volume]
     session = session_vwap(exec_df)
     oracle_participation, oracle_impact = _oracle(parent_qty, exec_total, coef_bps, perm_coef_bps)
+    capped = _capped_replay(
+        plan_share,
+        exec_profile["volume"].to_list(),
+        exec_profile["vwap"].to_list(),
+        parent_qty,
+        cap,
+        coef_bps,
+        perm_coef_bps,
+        session,
+    )
     priced = _price_plan(
         plan_share, exec_slots, exec_profile, exec_total, parent_qty, coef_bps, perm_coef_bps
     )
@@ -1016,7 +1026,53 @@ def pov_backtest(
         "oracle_impact_bps": _r8(oracle_impact),
         "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
         "forecast_cost_bps": score["forecast_cost_bps"],
+        "capped": capped,
         "schedule": priced["schedule"],
+    }
+
+
+def _capped_replay(
+    plan_share: list[float],
+    volume: list[float],
+    vwap: list[float],
+    parent_qty: float,
+    cap: float,
+    coef_bps: float,
+    perm_coef_bps: float,
+    session: float,
+) -> dict:
+    """The plan executed under the cap with forward carry: each slot takes its
+    planned size plus the earlier shortfall, up to ``cap`` times its traded
+    volume, and defers the rest. Plain loops in slot order; mirrors the Rust
+    ``capped_replay`` (see ``CappedReplay`` for the fields)."""
+    carry = 0.0
+    filled = pv = impact = max_p = 0.0
+    capped_slots = 0
+    sizes = []
+    for share, vol, px in zip(plan_share, volume, vwap, strict=True):
+        want = share * parent_qty + carry
+        fill = min(want, cap * vol)
+        if fill < want:
+            capped_slots += 1
+        carry = want - fill
+        p = fill / vol
+        w = fill / parent_qty
+        filled += fill
+        pv += fill * px
+        impact += w * math.sqrt(p) * coef_bps + w * p * perm_coef_bps
+        max_p = max(max_p, p)
+        sizes.append(_r8(fill))
+    price = pv / filled
+    return {
+        "filled_qty": _r8(filled),
+        "unfilled_qty": _r8(carry),
+        "completed": _r8(carry) == 0.0,
+        "capped_slots": capped_slots,
+        "price": _r8(price),
+        "tracking_bps": _r8((price - session) / session * 1e4),
+        "impact_bps": _r8(impact),
+        "max_participation": _r8(max_p),
+        "sizes": sizes,
     }
 
 
