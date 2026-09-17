@@ -176,7 +176,8 @@ uv run xexeclab pov-plan --input data/sample_ticks.ndjson --parent-qty 0.2 --cap
                          --coef-bps 25 --perm-coef-bps 5
 
 # ...then hold that plan to the next session: what the volume forecast cost, and
-# whether the real volume pushed any bucket over the cap
+# whether the real volume pushed any bucket over the cap -- plus a `capped` replay
+# that defers the excess instead of breaching, and reports anything left unfilled
 uv run xexeclab pov-backtest --plan-input data/sample_ticks.ndjson \
                              --input data/sample_ticks_next.ndjson \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
@@ -391,6 +392,10 @@ This is a **market-data and execution-analytics** project, not a trading system.
   model*; a `forecast_cost_bps` of zero means the forecast matched the session,
   not that execution was free. Sessions are aligned by bucket position, so two
   captures must trade in the same buckets or the comparison is refused.
+  The `capped` replay caps each bucket against the volume that bucket
+  *actually* traded, which a live algorithm only approximates while the bucket
+  is still open, and it carries excess forward only — never back — so its
+  `unfilled_qty` is an upper bound on what a real desk would leave behind.
 - **`xexeclab pov-forecast` is a weighted average, not a volume model.** It pools
   the share profiles of the sessions you pass, with no seasonality and no regime
   detection, and the bundled history is two three-second sessions — enough to
