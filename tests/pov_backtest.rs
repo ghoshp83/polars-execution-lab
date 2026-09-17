@@ -80,6 +80,42 @@ fn the_forecast_can_breach_a_cap_the_oracle_respects() {
 }
 
 #[test]
+fn a_capped_replay_defers_the_breach_into_the_next_slot() {
+    let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 0.5, 10.0, 0.0).unwrap();
+    let c = &bt.capped;
+    // The thin slot can absorb 0.5 of the planned 0.6; the 0.1 it could not
+    // take moves into the last slot, which has room, so the parent still fills.
+    assert_eq!(c.sizes, vec![0.1, 0.5, 0.4]);
+    assert_eq!(c.capped_slots, 1);
+    assert!(c.completed);
+    assert_eq!(c.unfilled_qty, 0.0);
+    assert_eq!(c.max_participation, 0.5);
+    // 0.1 * 200 + 0.5 * 190 + 0.4 * 210: deferral moved size to a dearer slot.
+    assert_eq!(c.price, 199.0);
+}
+
+#[test]
+fn a_cap_too_tight_for_the_close_leaves_the_remainder_unfilled() {
+    let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 0.2, 10.0, 0.0).unwrap();
+    let c = &bt.capped;
+    // Carry only moves forward, so what the last slot cannot absorb is reported
+    // as unfilled rather than forced through past the cap.
+    assert_eq!(c.sizes, vec![0.1, 0.2, 0.6]);
+    assert!(!c.completed);
+    assert_eq!(c.unfilled_qty, 0.1);
+    assert_eq!(c.filled_qty, 0.9);
+    assert!(c.max_participation <= 0.2);
+}
+
+#[test]
+fn a_capped_replay_that_never_binds_is_the_uncapped_backtest() {
+    let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 1.0, 10.0, 2.0).unwrap();
+    assert_eq!(bt.capped.capped_slots, 0);
+    assert_eq!(bt.capped.price, bt.price);
+    assert!((bt.capped.impact_bps - bt.impact_bps).abs() < 1e-7);
+}
+
+#[test]
 fn the_price_is_the_plan_weighted_mean_of_the_execution_vwaps() {
     let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 1.0, 10.0, 0.0).unwrap();
     // 0.1 * 200 + 0.6 * 190 + 0.3 * 210, against a session VWAP of 202.

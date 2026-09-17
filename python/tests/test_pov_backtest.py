@@ -86,6 +86,32 @@ def test_the_forecast_can_breach_a_cap_the_oracle_respects():
     assert bt["oracle_feasible"] is True
 
 
+def test_a_capped_replay_defers_the_breach_into_the_next_slot():
+    c = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 0.5, 10.0)["capped"]
+    # The thin slot absorbs 0.5 of the planned 0.6; the rest moves to a slot with room.
+    assert c["sizes"] == [0.1, 0.5, 0.4]
+    assert c["capped_slots"] == 1
+    assert c["completed"] is True
+    assert c["max_participation"] == 0.5
+    assert c["price"] == 199.0
+
+
+def test_a_cap_too_tight_for_the_close_leaves_the_remainder_unfilled():
+    c = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 0.2, 10.0)["capped"]
+    # Carry only moves forward: the remainder is reported, not forced past the cap.
+    assert c["sizes"] == [0.1, 0.2, 0.6]
+    assert c["completed"] is False
+    assert c["unfilled_qty"] == 0.1
+    assert c["filled_qty"] == 0.9
+
+
+def test_a_capped_replay_that_never_binds_is_the_uncapped_backtest():
+    bt = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 1.0, 10.0, 2.0)
+    assert bt["capped"]["capped_slots"] == 0
+    assert bt["capped"]["price"] == bt["price"]
+    assert bt["capped"]["impact_bps"] == pytest.approx(bt["impact_bps"], abs=1e-7)
+
+
 def test_the_price_is_the_plan_weighted_mean_of_the_execution_vwaps():
     bt = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 1.0, 10.0)
     # 0.1 * 200 + 0.6 * 190 + 0.3 * 210, against a session VWAP of 202.
