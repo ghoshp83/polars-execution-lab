@@ -155,7 +155,85 @@ pub struct PovBacktest {
     pub oracle_feasible: bool,
     /// `impact_bps - oracle_impact_bps`: the price of not knowing the volume.
     pub forecast_cost_bps: f64,
+    /// The same plan executed under the cap instead of past it.
+    pub capped: CappedReplay,
     pub schedule: Vec<BacktestSlice>,
+}
+
+/// **The plan executed as a capped participation algorithm would.**
+///
+/// An infeasible backtest says the forecast breached the cap; it does not say
+/// what a desk that *respects* the cap would have got. This replays the same
+/// allocation slot by slot: each slot takes its planned size plus whatever
+/// earlier slots could not fill, up to `cap` times the volume that slot
+/// actually traded, and carries the remainder forward. Deferral only moves
+/// quantity later, so a breach near the close can leave part of the parent
+/// unfilled; `unfilled_qty` reports it instead of forcing it through.
+///
+/// `impact_bps` is per unit of *parent*, like [`PovBacktest::impact_bps`], so
+/// an unfilled remainder lowers it; read it with `completed`.
+#[derive(Debug, Serialize)]
+pub struct CappedReplay {
+    pub filled_qty: f64,
+    pub unfilled_qty: f64,
+    /// Whether the whole parent filled inside the cap.
+    pub completed: bool,
+    /// Slots where the cap bound and quantity was deferred.
+    pub capped_slots: usize,
+    /// Average fill price of the filled quantity.
+    pub price: f64,
+    pub tracking_bps: f64,
+    pub impact_bps: f64,
+    pub max_participation: f64,
+    /// Filled size per slot.
+    pub sizes: Vec<f64>,
+}
+
+/// Replay `plan_share` under the cap with forward carry. Plain loops in slot
+/// order, mirrored by `_capped_replay` in the Python engine, so both engines
+/// add the same floats in the same order.
+#[allow(clippy::too_many_arguments)]
+fn capped_replay(
+    plan_share: &[f64],
+    volume: &[f64],
+    vwap: &[f64],
+    parent_qty: f64,
+    cap: f64,
+    coef_bps: f64,
+    perm_coef_bps: f64,
+    session: f64,
+) -> CappedReplay {
+    let mut carry = 0.0;
+    let (mut filled, mut pv, mut impact, mut max_p) = (0.0, 0.0, 0.0, 0.0f64);
+    let mut capped_slots = 0;
+    let mut sizes = Vec::with_capacity(plan_share.len());
+    for i in 0..plan_share.len() {
+        let want = plan_share[i] * parent_qty + carry;
+        let fill = want.min(cap * volume[i]);
+        if fill < want {
+            capped_slots += 1;
+        }
+        carry = want - fill;
+        let p = fill / volume[i];
+        let w = fill / parent_qty;
+        filled += fill;
+        pv += fill * vwap[i];
+        impact += w * p.sqrt() * coef_bps + w * p * perm_coef_bps;
+        max_p = max_p.max(p);
+        sizes.push(r8(fill));
+    }
+    let price = pv / filled;
+    CappedReplay {
+        filled_qty: r8(filled),
+        unfilled_qty: r8(carry),
+        completed: r8(carry) == 0.0,
+        capped_slots,
+        price: r8(price),
+        tracking_bps: r8((price - session) / session * 1e4),
+        impact_bps: r8(impact),
+        max_participation: r8(max_p),
+        sizes,
+    }
 }
 
 /// How one allocation fared against the execution session: the fields a
@@ -490,6 +568,16 @@ pub fn pov_backtest(
     let session = crate::execution::session_vwap(exec)?;
     let (oracle_participation, oracle_impact) =
         oracle(parent_qty, exec_total, coef_bps, perm_coef_bps);
+    let capped = capped_replay(
+        &plan_share,
+        &column_f64(&exec_profile, "volume")?,
+        &column_f64(&exec_profile, "vwap")?,
+        parent_qty,
+        cap,
+        coef_bps,
+        perm_coef_bps,
+        session,
+    );
     let priced = price_plan(
         plan_share,
         &exec_slots,
@@ -522,6 +610,7 @@ pub fn pov_backtest(
         oracle_impact_bps: r8(oracle_impact),
         oracle_feasible: r8(oracle_participation) <= r8(cap),
         forecast_cost_bps: score.forecast_cost_bps,
+        capped,
         schedule: priced.schedule,
     })
 }
