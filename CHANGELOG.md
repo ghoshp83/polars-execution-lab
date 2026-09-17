@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.25.0] - 2026-09-17
+
+### Added
+- **`pov-backtest` reports a `capped` replay.** An infeasible backtest said the
+  forecast breached the cap, but not what a desk that respects the cap would
+  have got. The same plan is now also executed slot by slot, taking at most
+  `cap` of each slot's traded volume and carrying the rest forward. It reports
+  `filled_qty`, `unfilled_qty`, `completed`, `capped_slots`, the price,
+  tracking, impact and per-slot sizes. Identical in both engines and covered by
+  the existing `pov-backtest` equivalence test.
+- Tests on both sides: the deferral lands in the next slot, a cap too tight
+  for the close leaves a reported remainder, and a cap that never binds
+  collapses back to the uncapped backtest.
+
+### Changed
+- README: the `pov-backtest` limitation now states that the capped replay
+  knows each bucket's volume in advance and only carries forward.
+
 ## [0.24.0] - 2026-09-16
 
 ### Added
