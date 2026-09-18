@@ -112,6 +112,52 @@ def test_a_capped_replay_that_never_binds_is_the_uncapped_backtest():
     assert bt["capped"]["impact_bps"] == pytest.approx(bt["impact_bps"], abs=1e-7)
 
 
+def test_spreading_re_shapes_the_plan_instead_of_deferring_it():
+    bt = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 0.5, 10.0)
+    s = bt["spread"]
+    # The pinned slot's 0.1 is re-spread over the other two in their planned
+    # 0.1 : 0.3 proportions, not dropped into whichever slot comes next.
+    assert s["sizes"] == [0.125, 0.5, 0.375]
+    assert s["capped_slots"] == 1
+    assert s["completed"] is True
+    assert s["max_participation"] == 0.5
+    # The two capped executions of one plan do not price the same.
+    assert s["price"] == 198.75
+    assert bt["capped"]["price"] == 199.0
+
+
+def test_spreading_fills_a_parent_the_forward_carry_cannot():
+    bt = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 0.2, 10.0)
+    # Deferral runs out of session; spreading moves that quantity into the first
+    # slot, which had the volume for it, and the parent completes inside the cap.
+    assert bt["capped"]["completed"] is False
+    assert bt["capped"]["unfilled_qty"] == 0.1
+    assert bt["spread"]["completed"] is True
+    assert bt["spread"]["unfilled_qty"] == 0.0
+    assert bt["spread"]["sizes"] == [0.2, 0.2, 0.6]
+    assert bt["spread"]["max_participation"] <= 0.2
+
+
+def test_spreading_misses_only_what_the_session_had_no_volume_for():
+    # 0.05 of 10.0 of volume is 0.5 -- half the parent -- so no feasible plan
+    # completes, and the shortfall is exactly the quantity the cap forbids.
+    s = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 0.05, 10.0)["spread"]
+    assert s["completed"] is False
+    assert s["filled_qty"] == 0.5
+    assert s["unfilled_qty"] == 0.5
+    # Every slot pinned at its own ceiling: 0.05 of 6.0, 1.0 and 3.0.
+    assert s["sizes"] == [0.3, 0.05, 0.15]
+    assert s["capped_slots"] == 3
+
+
+def test_a_spread_that_never_binds_is_the_uncapped_backtest():
+    bt = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 1.0, 10.0, 2.0)
+    assert bt["spread"]["capped_slots"] == 0
+    assert bt["spread"]["sizes"] == [0.1, 0.6, 0.3]
+    assert bt["spread"]["price"] == bt["price"]
+    assert bt["spread"]["impact_bps"] == pytest.approx(bt["impact_bps"], abs=1e-7)
+
+
 def test_the_price_is_the_plan_weighted_mean_of_the_execution_vwaps():
     bt = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 1.0, 10.0)
     # 0.1 * 200 + 0.6 * 190 + 0.3 * 210, against a session VWAP of 202.

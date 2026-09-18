@@ -116,6 +116,60 @@ fn a_capped_replay_that_never_binds_is_the_uncapped_backtest() {
 }
 
 #[test]
+fn spreading_re_shapes_the_plan_instead_of_deferring_it() {
+    let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 0.5, 10.0, 0.0).unwrap();
+    let s = &bt.spread;
+    // The thin slot is pinned at 0.5 and the 0.1 it cannot take is re-spread
+    // over the other two in their planned proportions -- 0.1 : 0.3 -- rather
+    // than all landing in the slot that happens to come next.
+    assert_eq!(s.sizes, vec![0.125, 0.5, 0.375]);
+    assert_eq!(s.capped_slots, 1);
+    assert!(s.completed);
+    assert_eq!(s.max_participation, 0.5);
+    // 0.125 * 200 + 0.5 * 190 + 0.375 * 210, against the capped replay's 199.0:
+    // the two capped executions of one plan do not price the same.
+    assert_eq!(s.price, 198.75);
+    assert_eq!(bt.capped.price, 199.0);
+}
+
+#[test]
+fn spreading_fills_a_parent_the_forward_carry_cannot() {
+    let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 0.2, 10.0, 0.0).unwrap();
+    // This is the point of the reshape. Deferral runs out of session and leaves
+    // 0.1 behind; spreading moves that quantity into the first slot, which had
+    // the volume for it all along, and the parent completes inside the cap.
+    assert!(!bt.capped.completed);
+    assert_eq!(bt.capped.unfilled_qty, 0.1);
+    assert!(bt.spread.completed);
+    assert_eq!(bt.spread.unfilled_qty, 0.0);
+    assert_eq!(bt.spread.sizes, vec![0.2, 0.2, 0.6]);
+    assert!(bt.spread.max_participation <= 0.2);
+}
+
+#[test]
+fn spreading_misses_only_what_the_session_had_no_volume_for() {
+    // 0.05 of 10.0 of volume is 0.5 -- half the parent -- so no feasible plan
+    // completes, and the shortfall is exactly the quantity the cap forbids.
+    let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 0.05, 10.0, 0.0).unwrap();
+    let s = &bt.spread;
+    assert!(!s.completed);
+    assert_eq!(s.filled_qty, 0.5);
+    assert_eq!(s.unfilled_qty, 0.5);
+    // Every slot pinned at its own ceiling: 0.05 of 6.0, 1.0 and 3.0.
+    assert_eq!(s.sizes, vec![0.3, 0.05, 0.15]);
+    assert_eq!(s.capped_slots, 3);
+}
+
+#[test]
+fn a_spread_that_never_binds_is_the_uncapped_backtest() {
+    let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 1.0, 10.0, 2.0).unwrap();
+    assert_eq!(bt.spread.capped_slots, 0);
+    assert_eq!(bt.spread.sizes, vec![0.1, 0.6, 0.3]);
+    assert_eq!(bt.spread.price, bt.price);
+    assert!((bt.spread.impact_bps - bt.impact_bps).abs() < 1e-7);
+}
+
+#[test]
 fn the_price_is_the_plan_weighted_mean_of_the_execution_vwaps() {
     let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 1.0, 10.0, 0.0).unwrap();
     // 0.1 * 200 + 0.6 * 190 + 0.3 * 210, against a session VWAP of 202.
