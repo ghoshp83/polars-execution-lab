@@ -157,6 +157,8 @@ pub struct PovBacktest {
     pub forecast_cost_bps: f64,
     /// The same plan executed under the cap instead of past it.
     pub capped: CappedReplay,
+    /// The same plan reshaped to fit the cap, rather than replayed into it.
+    pub spread: SpreadPlan,
     pub schedule: Vec<BacktestSlice>,
 }
 
@@ -233,6 +235,123 @@ fn capped_replay(
         impact_bps: r8(impact),
         max_participation: r8(max_p),
         sizes,
+    }
+}
+
+/// **The plan reshaped to fit the cap, instead of replayed into it.**
+///
+/// [`CappedReplay`] only ever moves quantity *later*, so a cap that binds near
+/// the close can leave a remainder an earlier slot had the volume to absorb —
+/// its `unfilled_qty` is an upper bound, not the least a capped desk must miss.
+/// This allocates the parent over every slot at once: sizes stay proportional to
+/// `plan_share` wherever the cap is slack, each binding slot is pinned at `cap`
+/// times its traded volume, and the quantity those slots could not take is
+/// re-spread over the rest in the same proportions. Water-filling, so it is
+/// feasible by construction and fills the whole parent whenever
+/// `parent_qty <= cap * exec_volume` — the least the cap can cost.
+///
+/// It is not the *cheap* plan. Pinning a slot at the cap and pushing quantity
+/// into the others moves participation away from the equal-participation oracle,
+/// so `impact_bps` is read against [`PovBacktest::oracle_impact_bps`] like any
+/// other allocation. What it bounds is the shortfall, not the impact.
+///
+/// `impact_bps` is per unit of *parent*, as in [`CappedReplay`], so an unfilled
+/// remainder lowers it; read it with `completed`.
+#[derive(Debug, Serialize)]
+pub struct SpreadPlan {
+    pub filled_qty: f64,
+    pub unfilled_qty: f64,
+    /// Whether the whole parent filled inside the cap. True exactly when the
+    /// session had the volume for it — `parent_qty <= cap * exec_volume`.
+    pub completed: bool,
+    /// Slots pinned at the cap, whose quantity was re-spread over the others.
+    pub capped_slots: usize,
+    /// Average fill price of the filled quantity.
+    pub price: f64,
+    pub tracking_bps: f64,
+    pub impact_bps: f64,
+    pub max_participation: f64,
+    /// Filled size per slot.
+    pub sizes: Vec<f64>,
+}
+
+/// Water-fill `plan_share` under the cap. Each pass scales the shares of the
+/// still-free slots to the quantity left, pins every slot that scaling would
+/// push past its cap, and repeats; a pass that pins nothing is the answer. At
+/// least one slot is pinned per pass, so it terminates in at most `n` passes.
+/// Plain loops in slot order, mirrored by `_spread_plan` in the Python engine,
+/// so both engines add the same floats in the same order.
+#[allow(clippy::too_many_arguments)]
+fn spread_plan(
+    plan_share: &[f64],
+    volume: &[f64],
+    vwap: &[f64],
+    parent_qty: f64,
+    cap: f64,
+    coef_bps: f64,
+    perm_coef_bps: f64,
+    session: f64,
+) -> SpreadPlan {
+    let n = plan_share.len();
+    let mut sizes = vec![0.0; n];
+    let mut pinned = vec![false; n];
+    let mut remaining = parent_qty;
+    let mut capped_slots = 0;
+    loop {
+        let mut free_share = 0.0;
+        for i in 0..n {
+            if !pinned[i] {
+                free_share += plan_share[i];
+            }
+        }
+        // Every slot is pinned: the session had no room for the rest.
+        if free_share == 0.0 {
+            break;
+        }
+        let scale = remaining / free_share;
+        let mut newly_pinned = 0;
+        for i in 0..n {
+            if !pinned[i] && scale * plan_share[i] > cap * volume[i] {
+                pinned[i] = true;
+                sizes[i] = cap * volume[i];
+                remaining -= sizes[i];
+                newly_pinned += 1;
+            }
+        }
+        if newly_pinned == 0 {
+            for i in 0..n {
+                if !pinned[i] {
+                    sizes[i] = scale * plan_share[i];
+                }
+            }
+            remaining = 0.0;
+            break;
+        }
+        capped_slots += newly_pinned;
+    }
+
+    let (mut filled, mut pv, mut impact, mut max_p) = (0.0, 0.0, 0.0, 0.0f64);
+    let mut reported = Vec::with_capacity(n);
+    for i in 0..n {
+        let p = sizes[i] / volume[i];
+        let w = sizes[i] / parent_qty;
+        filled += sizes[i];
+        pv += sizes[i] * vwap[i];
+        impact += w * p.sqrt() * coef_bps + w * p * perm_coef_bps;
+        max_p = max_p.max(p);
+        reported.push(r8(sizes[i]));
+    }
+    let price = pv / filled;
+    SpreadPlan {
+        filled_qty: r8(filled),
+        unfilled_qty: r8(remaining),
+        completed: r8(remaining) == 0.0,
+        capped_slots,
+        price: r8(price),
+        tracking_bps: r8((price - session) / session * 1e4),
+        impact_bps: r8(impact),
+        max_participation: r8(max_p),
+        sizes: reported,
     }
 }
 
@@ -568,10 +687,22 @@ pub fn pov_backtest(
     let session = crate::execution::session_vwap(exec)?;
     let (oracle_participation, oracle_impact) =
         oracle(parent_qty, exec_total, coef_bps, perm_coef_bps);
+    let exec_bucket_volume = column_f64(&exec_profile, "volume")?;
+    let exec_bucket_vwap = column_f64(&exec_profile, "vwap")?;
     let capped = capped_replay(
         &plan_share,
-        &column_f64(&exec_profile, "volume")?,
-        &column_f64(&exec_profile, "vwap")?,
+        &exec_bucket_volume,
+        &exec_bucket_vwap,
+        parent_qty,
+        cap,
+        coef_bps,
+        perm_coef_bps,
+        session,
+    );
+    let spread = spread_plan(
+        &plan_share,
+        &exec_bucket_volume,
+        &exec_bucket_vwap,
         parent_qty,
         cap,
         coef_bps,
@@ -611,6 +742,7 @@ pub fn pov_backtest(
         oracle_feasible: r8(oracle_participation) <= r8(cap),
         forecast_cost_bps: score.forecast_cost_bps,
         capped,
+        spread,
         schedule: priced.schedule,
     })
 }
