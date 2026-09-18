@@ -991,10 +991,22 @@ def pov_backtest(
     plan_share = [v / plan_total for v in plan_volume]
     session = session_vwap(exec_df)
     oracle_participation, oracle_impact = _oracle(parent_qty, exec_total, coef_bps, perm_coef_bps)
+    exec_bucket_volume = exec_profile["volume"].to_list()
+    exec_bucket_vwap = exec_profile["vwap"].to_list()
     capped = _capped_replay(
         plan_share,
-        exec_profile["volume"].to_list(),
-        exec_profile["vwap"].to_list(),
+        exec_bucket_volume,
+        exec_bucket_vwap,
+        parent_qty,
+        cap,
+        coef_bps,
+        perm_coef_bps,
+        session,
+    )
+    spread = _spread_plan(
+        plan_share,
+        exec_bucket_volume,
+        exec_bucket_vwap,
         parent_qty,
         cap,
         coef_bps,
@@ -1027,6 +1039,7 @@ def pov_backtest(
         "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
         "forecast_cost_bps": score["forecast_cost_bps"],
         "capped": capped,
+        "spread": spread,
         "schedule": priced["schedule"],
     }
 
@@ -1073,6 +1086,75 @@ def _capped_replay(
         "impact_bps": _r8(impact),
         "max_participation": _r8(max_p),
         "sizes": sizes,
+    }
+
+
+def _spread_plan(
+    plan_share: list[float],
+    volume: list[float],
+    vwap: list[float],
+    parent_qty: float,
+    cap: float,
+    coef_bps: float,
+    perm_coef_bps: float,
+    session: float,
+) -> dict:
+    """The plan reshaped to fit the cap: each pass scales the shares of the
+    still-free slots to the quantity left, pins every slot that scaling would
+    push past its cap, and repeats. Water-filling, so it defers nothing and
+    fills the whole parent whenever the session had the volume. Plain loops in
+    slot order; mirrors the Rust ``spread_plan`` (see ``SpreadPlan`` for the
+    fields)."""
+    n = len(plan_share)
+    sizes = [0.0] * n
+    pinned = [False] * n
+    remaining = parent_qty
+    capped_slots = 0
+    while True:
+        free_share = 0.0
+        for i in range(n):
+            if not pinned[i]:
+                free_share += plan_share[i]
+        # Every slot is pinned: the session had no room for the rest.
+        if free_share == 0.0:
+            break
+        scale = remaining / free_share
+        newly_pinned = 0
+        for i in range(n):
+            if not pinned[i] and scale * plan_share[i] > cap * volume[i]:
+                pinned[i] = True
+                sizes[i] = cap * volume[i]
+                remaining -= sizes[i]
+                newly_pinned += 1
+        if newly_pinned == 0:
+            for i in range(n):
+                if not pinned[i]:
+                    sizes[i] = scale * plan_share[i]
+            remaining = 0.0
+            break
+        capped_slots += newly_pinned
+
+    filled = pv = impact = max_p = 0.0
+    reported = []
+    for size, vol, px in zip(sizes, volume, vwap, strict=True):
+        p = size / vol
+        w = size / parent_qty
+        filled += size
+        pv += size * px
+        impact += w * math.sqrt(p) * coef_bps + w * p * perm_coef_bps
+        max_p = max(max_p, p)
+        reported.append(_r8(size))
+    price = pv / filled
+    return {
+        "filled_qty": _r8(filled),
+        "unfilled_qty": _r8(remaining),
+        "completed": _r8(remaining) == 0.0,
+        "capped_slots": capped_slots,
+        "price": _r8(price),
+        "tracking_bps": _r8((price - session) / session * 1e4),
+        "impact_bps": _r8(impact),
+        "max_participation": _r8(max_p),
+        "sizes": reported,
     }
 
 
