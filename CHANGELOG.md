@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.26.0] - 2026-09-18
+
+### Added
+- **`pov-backtest` reports a `spread` plan beside the `capped` replay.** The
+  capped replay only carries quantity forward, so a cap that binds near the
+  close leaves a remainder an earlier bucket had the volume to absorb — its
+  `unfilled_qty` is an upper bound, not the least a capped desk must miss. The
+  `spread` water-fills the same plan instead: sizes stay proportional to the
+  plan wherever the cap is slack, every binding bucket is pinned at `cap` times
+  its traded volume, and what those buckets cannot take is re-spread over the
+  rest in the same proportions. Feasible by construction, and it fills the whole
+  parent whenever `parent_qty <= cap * exec_volume`. Same fields as the capped
+  replay, identical in both engines, covered by the `pov-backtest` equivalence
+  test.
+- Tests on both sides: the reshape splits the pinned bucket's excess by planned
+  proportion rather than into the next bucket, it completes a parent the forward
+  carry leaves short, it misses exactly the quantity the session had no volume
+  for, and a cap that never binds collapses back to the uncapped backtest.
+
+### Changed
+- The README states what each of the two capped executions bounds, and that
+  neither is the cheap plan — pinning a bucket at the cap moves participation
+  away from the oracle.
+
 ## [0.25.0] - 2026-09-17
 
 ### Added
