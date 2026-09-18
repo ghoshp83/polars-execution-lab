@@ -176,8 +176,9 @@ uv run xexeclab pov-plan --input data/sample_ticks.ndjson --parent-qty 0.2 --cap
                          --coef-bps 25 --perm-coef-bps 5
 
 # ...then hold that plan to the next session: what the volume forecast cost, and
-# whether the real volume pushed any bucket over the cap -- plus a `capped` replay
-# that defers the excess instead of breaching, and reports anything left unfilled
+# whether the real volume pushed any bucket over the cap -- plus two ways of
+# staying inside it: a `capped` replay that defers the excess to later slots, and
+# a `spread` that re-shapes the whole plan to fit and so fills more of the parent
 uv run xexeclab pov-backtest --plan-input data/sample_ticks.ndjson \
                              --input data/sample_ticks_next.ndjson \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
@@ -392,10 +393,16 @@ This is a **market-data and execution-analytics** project, not a trading system.
   model*; a `forecast_cost_bps` of zero means the forecast matched the session,
   not that execution was free. Sessions are aligned by bucket position, so two
   captures must trade in the same buckets or the comparison is refused.
-  The `capped` replay caps each bucket against the volume that bucket
+  Both capped executions cap each bucket against the volume that bucket
   *actually* traded, which a live algorithm only approximates while the bucket
-  is still open, and it carries excess forward only — never back — so its
-  `unfilled_qty` is an upper bound on what a real desk would leave behind.
+  is still open. The `capped` replay carries excess forward only — never back —
+  so its `unfilled_qty` is an upper bound on what a real desk would leave
+  behind. The `spread` is the other bound: it re-shapes the plan over every
+  bucket at once, which needs the whole session's volume up front, so its
+  `unfilled_qty` is the least any capped execution could miss. A live desk sits
+  between the two, and neither is the *cheap* plan — pinning a bucket at the cap
+  moves participation away from the oracle, so read either `impact_bps` against
+  `oracle_impact_bps` as usual.
 - **`xexeclab pov-forecast` is a weighted average, not a volume model.** It pools
   the share profiles of the sessions you pass, with no seasonality and no regime
   detection, and the bundled history is two three-second sessions — enough to
