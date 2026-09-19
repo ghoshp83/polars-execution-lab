@@ -184,7 +184,8 @@ uv run xexeclab pov-backtest --plan-input data/sample_ticks.ndjson \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
 
 # ...and forecast from more than one session: plan on the pooled volume profile
-# of the history, scored against the most recent session alone and the oracle
+# of the history, scored against the most recent session alone and the oracle --
+# both plans also reported under the cap, deferred and re-shaped, as pov-backtest
 uv run xexeclab pov-forecast --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
                              --input data/sample_ticks_third.ndjson \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
@@ -413,6 +414,15 @@ This is a **market-data and execution-analytics** project, not a trading system.
   drifting at all; `improvement_bps` is the number to search it with, and it
   compares the pool only with the most recent session used alone. It can be
   negative: a session that repeats the last one is forecast worse by any pool.
+  It is also an **uncapped** comparison, so it can credit a pool for volume the
+  cap would never have let it take: `forecast_capped` and `naive_capped` report
+  both plans held inside the cap, deferred and re-shaped, and are where that
+  credit has to survive. On the bundled history the cap is slack and the two
+  executions are inert; tighten it to `--cap 0.14` and the naive plan starts
+  breaching while the pooled one does not, so the 0.39 bps `improvement_bps`
+  becomes 0.02 bps under the replay. Under the reshape the shortfall stops
+  depending on the forecast at all -- water-filling fills the whole parent
+  whenever the session traded `parent_qty / cap`, whatever shape the plan had.
   Every history session must trade in the same buckets as the execution session,
   so sessions with a gap are refused rather than filled in.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
