@@ -993,17 +993,7 @@ def pov_backtest(
     oracle_participation, oracle_impact = _oracle(parent_qty, exec_total, coef_bps, perm_coef_bps)
     exec_bucket_volume = exec_profile["volume"].to_list()
     exec_bucket_vwap = exec_profile["vwap"].to_list()
-    capped = _capped_replay(
-        plan_share,
-        exec_bucket_volume,
-        exec_bucket_vwap,
-        parent_qty,
-        cap,
-        coef_bps,
-        perm_coef_bps,
-        session,
-    )
-    spread = _spread_plan(
+    executed = _capped_execution(
         plan_share,
         exec_bucket_volume,
         exec_bucket_vwap,
@@ -1038,8 +1028,8 @@ def pov_backtest(
         "oracle_impact_bps": _r8(oracle_impact),
         "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
         "forecast_cost_bps": score["forecast_cost_bps"],
-        "capped": capped,
-        "spread": spread,
+        "capped": executed["capped"],
+        "spread": executed["spread"],
         "schedule": priced["schedule"],
     }
 
@@ -1158,6 +1148,24 @@ def _spread_plan(
     }
 
 
+def _capped_execution(
+    plan_share: list[float],
+    volume: list[float],
+    vwap: list[float],
+    parent_qty: float,
+    cap: float,
+    coef_bps: float,
+    perm_coef_bps: float,
+    session: float,
+) -> dict:
+    """Both ways of staying inside the cap, over one allocation: the deferring
+    replay and the re-shaping spread. Their ``unfilled_qty`` bracket what a
+    capped desk must miss, so neither is reported without the other. Mirrors the
+    Rust ``capped_execution`` (see ``CappedExecution`` for the fields)."""
+    args = (plan_share, volume, vwap, parent_qty, cap, coef_bps, perm_coef_bps, session)
+    return {"capped": _capped_replay(*args), "spread": _spread_plan(*args)}
+
+
 def pov_forecast(
     history: list[pl.DataFrame],
     exec_df: pl.DataFrame,
@@ -1183,6 +1191,14 @@ def pov_forecast(
     ``0`` disables the decay and pools every session equally, and a half-life far
     below one drives the weight onto the last session, where the forecast is the
     naive one.
+
+    Both plans are also reported as a capped desk would have run them, through
+    the same pair of executions ``pov_backtest`` uses. ``improvement_bps``
+    compares the *uncapped* allocations, so it can credit a forecast for volume
+    the cap would never have let it take; the capped executions are what that
+    credit survives. The spread fills the whole parent whenever
+    ``parent_qty <= cap * exec_volume`` whatever shape the forecast has, so under
+    the reshape the shortfall belongs to the session, not to the forecast.
 
     ``improvement_bps`` (``naive - forecast`` impact) has no sign guarantee:
     when the session repeats the last one, pooling only adds error. The shares
@@ -1240,6 +1256,17 @@ def pov_forecast(
     args = (exec_slots, exec_profile, exec_total, parent_qty, coef_bps, perm_coef_bps)
     forecast = _price_plan(forecast_share, *args)
     naive = _price_plan(naive_share, *args)
+    capped_args = (
+        exec_profile["volume"].to_list(),
+        exec_profile["vwap"].to_list(),
+        parent_qty,
+        cap,
+        coef_bps,
+        perm_coef_bps,
+        session,
+    )
+    forecast_capped = _capped_execution(forecast_share, *capped_args)
+    naive_capped = _capped_execution(naive_share, *capped_args)
     return {
         "product": product,
         "bucket_ns": bucket_ns,
@@ -1255,6 +1282,8 @@ def pov_forecast(
         "session_vwap": session,
         "forecast": _score(forecast, session, cap, oracle_impact),
         "naive": _score(naive, session, cap, oracle_impact),
+        "forecast_capped": forecast_capped,
+        "naive_capped": naive_capped,
         "oracle_participation": _r8(oracle_participation),
         "oracle_impact_bps": _r8(oracle_impact),
         "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
