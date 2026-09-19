@@ -355,6 +355,54 @@ fn spread_plan(
     }
 }
 
+/// **Both ways of staying inside the cap, for one allocation.**
+///
+/// [`CappedReplay`] defers the excess and [`SpreadPlan`] re-shapes around it, so
+/// their `unfilled_qty` bracket what a capped desk must miss: the replay from
+/// above, the spread from below. Anywhere an allocation is reported, both are
+/// reported, because either alone reads as the answer.
+#[derive(Debug, Serialize)]
+pub struct CappedExecution {
+    pub capped: CappedReplay,
+    pub spread: SpreadPlan,
+}
+
+/// Run both capped executions over the same allocation and session.
+#[allow(clippy::too_many_arguments)]
+fn capped_execution(
+    plan_share: &[f64],
+    volume: &[f64],
+    vwap: &[f64],
+    parent_qty: f64,
+    cap: f64,
+    coef_bps: f64,
+    perm_coef_bps: f64,
+    session: f64,
+) -> CappedExecution {
+    CappedExecution {
+        capped: capped_replay(
+            plan_share,
+            volume,
+            vwap,
+            parent_qty,
+            cap,
+            coef_bps,
+            perm_coef_bps,
+            session,
+        ),
+        spread: spread_plan(
+            plan_share,
+            volume,
+            vwap,
+            parent_qty,
+            cap,
+            coef_bps,
+            perm_coef_bps,
+            session,
+        ),
+    }
+}
+
 /// How one allocation fared against the execution session: the fields a
 /// [`PovBacktest`] reports for its single plan, for each plan a
 /// [`PovForecast`] compares.
@@ -390,6 +438,15 @@ pub struct PlanScore {
 /// merely noisy wants a long one, so the number is a parameter and
 /// `improvement_bps` is how a desk would choose it.
 ///
+/// Both plans are also reported as a capped desk would have run them, through
+/// the same pair of executions [`PovBacktest`] uses — deferring and re-shaping.
+/// `improvement_bps` compares the *uncapped* allocations, so it can credit a
+/// forecast for volume the cap would never have let it take; the capped
+/// executions are what that credit survives. The spread fills the whole parent
+/// whenever `parent_qty <= cap * exec_volume`, whatever shape the forecast has,
+/// so under the reshape the shortfall is a property of the session and not of
+/// the forecast at all.
+///
 /// `improvement_bps` is `naive.impact_bps - forecast.impact_bps`. Unlike
 /// `forecast_cost_bps` it has no sign guarantee: when the session repeats the
 /// last one, pooling only adds error, and the number goes negative. It is
@@ -415,6 +472,10 @@ pub struct PovForecast {
     pub forecast: PlanScore,
     /// The plan built on the most recent history session alone.
     pub naive: PlanScore,
+    /// The pooled plan held inside the cap, both ways.
+    pub forecast_capped: CappedExecution,
+    /// The naive plan held inside the cap, both ways, for the same comparison.
+    pub naive_capped: CappedExecution,
     pub oracle_participation: f64,
     pub oracle_impact_bps: f64,
     pub oracle_feasible: bool,
@@ -689,17 +750,7 @@ pub fn pov_backtest(
         oracle(parent_qty, exec_total, coef_bps, perm_coef_bps);
     let exec_bucket_volume = column_f64(&exec_profile, "volume")?;
     let exec_bucket_vwap = column_f64(&exec_profile, "vwap")?;
-    let capped = capped_replay(
-        &plan_share,
-        &exec_bucket_volume,
-        &exec_bucket_vwap,
-        parent_qty,
-        cap,
-        coef_bps,
-        perm_coef_bps,
-        session,
-    );
-    let spread = spread_plan(
+    let executed = capped_execution(
         &plan_share,
         &exec_bucket_volume,
         &exec_bucket_vwap,
@@ -741,8 +792,8 @@ pub fn pov_backtest(
         oracle_impact_bps: r8(oracle_impact),
         oracle_feasible: r8(oracle_participation) <= r8(cap),
         forecast_cost_bps: score.forecast_cost_bps,
-        capped,
-        spread,
+        capped: executed.capped,
+        spread: executed.spread,
         schedule: priced.schedule,
     })
 }
@@ -821,6 +872,8 @@ pub fn pov_forecast(
         })
         .collect();
     let naive_share = shares[shares.len() - 1].clone();
+    let forecast_share_kept = forecast_share.clone();
+    let naive_share_kept = naive_share.clone();
 
     let session = crate::execution::session_vwap(exec)?;
     let (oracle_participation, oracle_impact) =
@@ -845,6 +898,28 @@ pub fn pov_forecast(
     )?;
     let forecast_score = score(&forecast, session, cap, oracle_impact);
     let naive_score = score(&naive, session, cap, oracle_impact);
+    let exec_bucket_volume = column_f64(&exec_profile, "volume")?;
+    let exec_bucket_vwap = column_f64(&exec_profile, "vwap")?;
+    let forecast_capped = capped_execution(
+        &forecast_share_kept,
+        &exec_bucket_volume,
+        &exec_bucket_vwap,
+        parent_qty,
+        cap,
+        coef_bps,
+        perm_coef_bps,
+        session,
+    );
+    let naive_capped = capped_execution(
+        &naive_share_kept,
+        &exec_bucket_volume,
+        &exec_bucket_vwap,
+        parent_qty,
+        cap,
+        coef_bps,
+        perm_coef_bps,
+        session,
+    );
 
     Ok(PovForecast {
         product,
@@ -861,6 +936,8 @@ pub fn pov_forecast(
         session_vwap: session,
         forecast: forecast_score,
         naive: naive_score,
+        forecast_capped,
+        naive_capped,
         oracle_participation: r8(oracle_participation),
         oracle_impact_bps: r8(oracle_impact),
         oracle_feasible: r8(oracle_participation) <= r8(cap),
