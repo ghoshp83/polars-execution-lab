@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.27.0] - 2026-09-19
+
+### Added
+- **`pov-forecast` reports both capped executions, for both plans it prices.**
+  Since v0.26.0 `pov-backtest` has shown what a desk that respects the cap would
+  have got, two ways: a `capped` replay that defers the excess and a `spread`
+  that re-shapes the plan to fit. `pov-forecast` showed neither, so a pooled plan
+  could come back `feasible: false` with nothing said about what staying inside
+  the cap would have cost. `forecast_capped` and `naive_capped` now carry both,
+  computed by the same two functions the backtest uses, so no command can charge
+  the same allocation differently.
+- **Four tests each side.** The single-history collapse now has to hold with the
+  cap binding. The reshape completes for two forecasts that disagree about every
+  slot, so under it the shortfall is a property of the session; a cap the session
+  cannot fill misses the same half either way; and the forward carry is what
+  still charges a forecast for its shape. 127 Rust, 191 Python.
+
+### Changed
+- **The README says what `improvement_bps` does not price.** It compares the
+  *uncapped* allocations, so it can credit a pool for volume the cap would never
+  have let it take. On the bundled history the cap is slack and both executions
+  are inert; at `--cap 0.14` the naive plan breaches where the pooled one does
+  not, and the 0.39 bps improvement becomes 0.02 bps under the replay.
+- **GitHub Actions off deprecated Node 20.** `actions/checkout` v4 → v5 and
+  `actions/setup-python` v5 → v6 in both workflows; GitHub was already
+  force-running them on Node 24 and warning on every run.
+
 ## [0.26.0] - 2026-09-18
 
 ### Added
