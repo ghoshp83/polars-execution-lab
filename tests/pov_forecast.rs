@@ -231,3 +231,85 @@ fn history_of_another_product_is_refused() {
         "history capture 1 is ETH-USD but the execution capture is BTC-USD"
     );
 }
+
+#[test]
+fn a_single_history_session_capped_is_the_backtest_capped() {
+    let fc = pov_forecast(&[lumpy()], &reshaped(), BUCKET, 1.0, 0.5, 10.0, 2.0, FLAT).unwrap();
+    let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 0.5, 10.0, 2.0).unwrap();
+    // The collapse has to hold under the cap too, or the two commands would be
+    // charging the same allocation differently the moment the cap binds.
+    assert_eq!(fc.forecast_capped.capped.sizes, bt.capped.sizes);
+    assert_eq!(fc.forecast_capped.capped.impact_bps, bt.capped.impact_bps);
+    assert_eq!(fc.forecast_capped.spread.sizes, bt.spread.sizes);
+    assert_eq!(fc.forecast_capped.spread.impact_bps, bt.spread.impact_bps);
+    // One session is its own naive baseline, capped executions included.
+    assert_eq!(fc.naive_capped.capped.sizes, fc.forecast_capped.capped.sizes);
+}
+
+#[test]
+fn the_reshape_makes_the_shortfall_a_property_of_the_session() {
+    // The session traded 10 and the cap admits half of it, so the whole parent
+    // fits. Water-filling therefore completes whatever shape the forecast has:
+    // two forecasts that disagree about every slot still miss nothing.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.5,
+        10.0,
+        2.0,
+        FLAT,
+    )
+    .unwrap();
+    assert!(fc.forecast_capped.spread.completed);
+    assert!(fc.naive_capped.spread.completed);
+    assert_eq!(fc.forecast_capped.spread.filled_qty, 1.0);
+    assert_eq!(fc.naive_capped.spread.filled_qty, 1.0);
+    assert_ne!(fc.forecast_capped.spread.sizes, fc.naive_capped.spread.sizes);
+}
+
+#[test]
+fn a_cap_the_session_cannot_fill_misses_the_same_under_either_forecast() {
+    // cap * exec_volume is 0.5 against a parent of 1.0, so no allocation can
+    // fill more than half -- and the reshape misses exactly the other half.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.05,
+        10.0,
+        2.0,
+        FLAT,
+    )
+    .unwrap();
+    assert_eq!(fc.forecast_capped.spread.unfilled_qty, 0.5);
+    assert_eq!(fc.naive_capped.spread.unfilled_qty, 0.5);
+    assert_eq!(fc.forecast_capped.spread.sizes, fc.naive_capped.spread.sizes);
+}
+
+#[test]
+fn deferring_still_charges_the_forecast_for_its_shape() {
+    // The reshape hides the difference between the two forecasts; the forward
+    // carry does not. The naive plan puts 0.6 into the thinnest slot and cannot
+    // recover it before the close, while the pooled one clears.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.2,
+        10.0,
+        2.0,
+        FLAT,
+    )
+    .unwrap();
+    assert_eq!(fc.naive_capped.capped.unfilled_qty, 0.1);
+    assert!(!fc.naive_capped.capped.completed);
+    assert_eq!(fc.forecast_capped.capped.unfilled_qty, 0.0);
+    assert!(fc.forecast_capped.capped.completed);
+    // Deferring can only ever miss more than re-shaping, which is the bracket.
+    assert!(fc.naive_capped.capped.unfilled_qty >= fc.naive_capped.spread.unfilled_qty);
+    assert!(fc.forecast_capped.capped.unfilled_qty >= fc.forecast_capped.spread.unfilled_qty);
+}

@@ -164,3 +164,56 @@ def test_the_bundled_history_forecasts_the_third_session():
     assert fc["forecast"]["profile_distance"] < fc["naive"]["profile_distance"]
     assert fc["improvement_bps"] > 0.0
     assert fc["forecast"]["forecast_cost_bps"] >= 0.0
+
+
+def test_a_single_history_session_capped_is_the_backtest_capped():
+    fc = pov_forecast([_lumpy()], _reshaped(), BUCKET, 1.0, 0.5, 10.0, 2.0, 0.0)
+    bt = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 0.5, 10.0, 2.0)
+    # The collapse has to hold under the cap too, or the two commands would be
+    # charging the same allocation differently the moment the cap binds.
+    assert fc["forecast_capped"]["capped"]["sizes"] == bt["capped"]["sizes"]
+    assert fc["forecast_capped"]["capped"]["impact_bps"] == bt["capped"]["impact_bps"]
+    assert fc["forecast_capped"]["spread"]["sizes"] == bt["spread"]["sizes"]
+    assert fc["forecast_capped"]["spread"]["impact_bps"] == bt["spread"]["impact_bps"]
+    # One session is its own naive baseline, capped executions included.
+    assert fc["naive_capped"]["capped"]["sizes"] == fc["forecast_capped"]["capped"]["sizes"]
+
+
+def test_the_reshape_makes_the_shortfall_a_property_of_the_session():
+    # The session traded 10 and the cap admits half of it, so the whole parent
+    # fits. Water-filling therefore completes whatever shape the forecast has:
+    # two forecasts that disagree about every slot still miss nothing.
+    fc = pov_forecast([_blended(), _lumpy()], _reshaped(), BUCKET, 1.0, 0.5, 10.0, 2.0, 0.0)
+    assert fc["forecast_capped"]["spread"]["completed"]
+    assert fc["naive_capped"]["spread"]["completed"]
+    assert fc["forecast_capped"]["spread"]["filled_qty"] == 1.0
+    assert fc["naive_capped"]["spread"]["filled_qty"] == 1.0
+    assert fc["forecast_capped"]["spread"]["sizes"] != fc["naive_capped"]["spread"]["sizes"]
+
+
+def test_a_cap_the_session_cannot_fill_misses_the_same_under_either_forecast():
+    # cap * exec_volume is 0.5 against a parent of 1.0, so no allocation can
+    # fill more than half -- and the reshape misses exactly the other half.
+    fc = pov_forecast([_blended(), _lumpy()], _reshaped(), BUCKET, 1.0, 0.05, 10.0, 2.0, 0.0)
+    assert fc["forecast_capped"]["spread"]["unfilled_qty"] == 0.5
+    assert fc["naive_capped"]["spread"]["unfilled_qty"] == 0.5
+    assert fc["forecast_capped"]["spread"]["sizes"] == fc["naive_capped"]["spread"]["sizes"]
+
+
+def test_deferring_still_charges_the_forecast_for_its_shape():
+    # The reshape hides the difference between the two forecasts; the forward
+    # carry does not. The naive plan puts 0.6 into the thinnest slot and cannot
+    # recover it before the close, while the pooled one clears.
+    fc = pov_forecast([_blended(), _lumpy()], _reshaped(), BUCKET, 1.0, 0.2, 10.0, 2.0, 0.0)
+    assert fc["naive_capped"]["capped"]["unfilled_qty"] == 0.1
+    assert not fc["naive_capped"]["capped"]["completed"]
+    assert fc["forecast_capped"]["capped"]["unfilled_qty"] == 0.0
+    assert fc["forecast_capped"]["capped"]["completed"]
+    # Deferring can only ever miss more than re-shaping, which is the bracket.
+    assert (
+        fc["naive_capped"]["capped"]["unfilled_qty"] >= fc["naive_capped"]["spread"]["unfilled_qty"]
+    )
+    assert (
+        fc["forecast_capped"]["capped"]["unfilled_qty"]
+        >= fc["forecast_capped"]["spread"]["unfilled_qty"]
+    )
