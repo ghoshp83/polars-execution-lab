@@ -243,7 +243,10 @@ fn a_single_history_session_capped_is_the_backtest_capped() {
     assert_eq!(fc.forecast_capped.spread.sizes, bt.spread.sizes);
     assert_eq!(fc.forecast_capped.spread.impact_bps, bt.spread.impact_bps);
     // One session is its own naive baseline, capped executions included.
-    assert_eq!(fc.naive_capped.capped.sizes, fc.forecast_capped.capped.sizes);
+    assert_eq!(
+        fc.naive_capped.capped.sizes,
+        fc.forecast_capped.capped.sizes
+    );
 }
 
 #[test]
@@ -266,7 +269,10 @@ fn the_reshape_makes_the_shortfall_a_property_of_the_session() {
     assert!(fc.naive_capped.spread.completed);
     assert_eq!(fc.forecast_capped.spread.filled_qty, 1.0);
     assert_eq!(fc.naive_capped.spread.filled_qty, 1.0);
-    assert_ne!(fc.forecast_capped.spread.sizes, fc.naive_capped.spread.sizes);
+    assert_ne!(
+        fc.forecast_capped.spread.sizes,
+        fc.naive_capped.spread.sizes
+    );
 }
 
 #[test]
@@ -286,7 +292,10 @@ fn a_cap_the_session_cannot_fill_misses_the_same_under_either_forecast() {
     .unwrap();
     assert_eq!(fc.forecast_capped.spread.unfilled_qty, 0.5);
     assert_eq!(fc.naive_capped.spread.unfilled_qty, 0.5);
-    assert_eq!(fc.forecast_capped.spread.sizes, fc.naive_capped.spread.sizes);
+    assert_eq!(
+        fc.forecast_capped.spread.sizes,
+        fc.naive_capped.spread.sizes
+    );
 }
 
 #[test]
