@@ -322,3 +322,112 @@ fn deferring_still_charges_the_forecast_for_its_shape() {
     assert!(fc.naive_capped.capped.unfilled_qty >= fc.naive_capped.spread.unfilled_qty);
     assert!(fc.forecast_capped.capped.unfilled_qty >= fc.forecast_capped.spread.unfilled_qty);
 }
+
+#[test]
+fn filled_impact_prices_the_quantity_that_actually_traded() {
+    // `impact_bps` is per unit of parent, so an execution the cap left short
+    // reports a smaller number for having traded less. `filled_impact_bps`
+    // divides by what filled instead, so it does not fall with the shortfall.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.2,
+        10.0,
+        2.0,
+        FLAT,
+    )
+    .unwrap();
+    // The pooled plan cleared, so there is nothing to re-base: the two agree.
+    assert!(fc.forecast_capped.capped.completed);
+    assert_eq!(
+        fc.forecast_capped.capped.filled_impact_bps,
+        fc.forecast_capped.capped.impact_bps
+    );
+    // The naive plan missed 0.1 of the parent, and that is exactly what made
+    // its `impact_bps` the smaller of the two numbers.
+    assert!(!fc.naive_capped.capped.completed);
+    assert!(fc.naive_capped.capped.filled_impact_bps > fc.naive_capped.capped.impact_bps);
+}
+
+#[test]
+fn the_capped_improvement_reports_what_the_cheaper_plan_did_not_fill() {
+    // Under the forward carry the naive plan misses 0.1 and the pooled one
+    // clears. Netting that into a single number would let a plan look better
+    // for trading less, so the shortfall is reported beside the improvement.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.2,
+        10.0,
+        2.0,
+        FLAT,
+    )
+    .unwrap();
+    let gain = &fc.capped_improvement.capped;
+    // Negative: the pooled plan missed *less* than the naive one.
+    assert_eq!(gain.shortfall_qty, -0.1);
+    assert!(!gain.like_for_like);
+    // The reshape fills the whole parent for either forecast, so there the same
+    // comparison is like for like and the shortfall term vanishes.
+    let spread = &fc.capped_improvement.spread;
+    assert_eq!(spread.shortfall_qty, 0.0);
+    assert!(spread.like_for_like);
+}
+
+#[test]
+fn a_slack_cap_leaves_the_capped_improvement_the_uncapped_one() {
+    // With the cap slack neither execution binds, both fill the whole parent,
+    // and `filled_impact_bps` is just the plan's own impact. The capped
+    // question then has to give back the uncapped answer.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        1.0,
+        10.0,
+        2.0,
+        FLAT,
+    )
+    .unwrap();
+    assert_eq!(fc.forecast_capped.capped.capped_slots, 0);
+    assert_eq!(fc.naive_capped.capped.capped_slots, 0);
+    assert_eq!(
+        fc.forecast_capped.capped.filled_impact_bps,
+        fc.forecast.impact_bps
+    );
+    assert_eq!(
+        fc.naive_capped.capped.filled_impact_bps,
+        fc.naive.impact_bps
+    );
+    assert!(fc.capped_improvement.capped.like_for_like);
+    // Equal up to the rounding, which lands differently on a difference of
+    // rounded numbers than on a rounded difference.
+    assert!((fc.capped_improvement.capped.improvement_bps - fc.improvement_bps).abs() <= 1e-8);
+}
+
+#[test]
+fn a_session_too_thin_for_the_parent_leaves_the_forecasts_nothing_to_win() {
+    // `cap * exec_volume` is 0.5 against a parent of 1.0, so the reshape fills
+    // exactly half whatever the forecast said. Both plans miss the same and
+    // trade the same, so pooling is worth nothing under the spread.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.05,
+        10.0,
+        2.0,
+        FLAT,
+    )
+    .unwrap();
+    let spread = &fc.capped_improvement.spread;
+    assert_eq!(spread.shortfall_qty, 0.0);
+    assert!(spread.like_for_like);
+    assert_eq!(spread.improvement_bps, 0.0);
+}
