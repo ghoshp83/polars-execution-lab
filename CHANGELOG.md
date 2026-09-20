@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.28.0] - 2026-09-20
+
+### Added
+- **A capped twin for `improvement_bps`.** v0.27.0 reported both capped
+  executions on `pov-forecast` but left the headline comparison uncapped, because
+  the executions had no figure that could be subtracted: their `impact_bps` is
+  per unit of *parent*, so an execution the cap left short reports a smaller
+  number for having traded less, and the difference would have rewarded missing
+  the order. `filled_impact_bps` on `CappedReplay` and `SpreadPlan` re-bases that
+  impact onto the quantity that actually filled, and `capped_improvement` uses it
+  to ask the pooling question inside the cap, once per execution: an
+  `improvement_bps` per unit traded, a `shortfall_qty` for what the pooled plan
+  missed that the naive one did not, and `like_for_like` when that shortfall is
+  zero. The two are reported side by side rather than netted, because basis
+  points and unfilled quantity are different currencies.
+- Four tests each side (131 Rust, 195 Python, 18 of them cross-language
+  equivalence): that `filled_impact_bps` does not fall with the shortfall, that
+  the capped comparison reports rather than absorbs a plan that filled less, that
+  a slack cap gives the uncapped answer back, and that a session too thin for the
+  parent leaves the forecasts nothing to win.
+
+### Changed
+- The `pov-forecast` limitation in the README now carries the capped comparison
+  and its measured numbers. On the bundled history at `--cap 0.14` the 0.39 bps
+  uncapped `improvement_bps` is worth 0.02 bps under the replay and 0.11 under
+  the reshape, both `like_for_like` — the two executions disagree by a factor of
+  five about what the same pooling bought, which is why neither is reported alone.
+
 ## [0.27.0] - 2026-09-19
 
 ### Added
