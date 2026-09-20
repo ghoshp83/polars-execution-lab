@@ -185,7 +185,8 @@ uv run xexeclab pov-backtest --plan-input data/sample_ticks.ndjson \
 
 # ...and forecast from more than one session: plan on the pooled volume profile
 # of the history, scored against the most recent session alone and the oracle --
-# both plans also reported under the cap, deferred and re-shaped, as pov-backtest
+# both plans also reported under the cap, deferred and re-shaped, as pov-backtest,
+# and `capped_improvement` re-prices what pooling was worth inside that cap
 uv run xexeclab pov-forecast --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
                              --input data/sample_ticks_third.ndjson \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
@@ -417,10 +418,18 @@ This is a **market-data and execution-analytics** project, not a trading system.
   It is also an **uncapped** comparison, so it can credit a pool for volume the
   cap would never have let it take: `forecast_capped` and `naive_capped` report
   both plans held inside the cap, deferred and re-shaped, and are where that
-  credit has to survive. On the bundled history the cap is slack and the two
-  executions are inert; tighten it to `--cap 0.14` and the naive plan starts
-  breaching while the pooled one does not, so the 0.39 bps `improvement_bps`
-  becomes 0.02 bps under the replay. Under the reshape the shortfall stops
+  credit has to survive. `capped_improvement` asks the same question inside the
+  cap, once per execution, comparing each plan's `filled_impact_bps` — impact per
+  unit *filled*, so an execution the cap left short cannot look cheap for having
+  traded less — and reporting the quantity it missed as a separate
+  `shortfall_qty` rather than netting the two into one number. On the bundled
+  history the cap is slack and the two executions are inert; tighten it to
+  `--cap 0.14` and the naive plan starts breaching while the pooled one does not,
+  so the 0.39 bps `improvement_bps` becomes **0.02 bps under the replay and 0.11
+  under the reshape**, both `like_for_like` because everything still filled. That
+  the two disagree by a factor of five on what the same pooling was worth is the
+  reason both executions are reported and neither is called the answer. Under
+  the reshape the shortfall stops
   depending on the forecast at all -- water-filling fills the whole parent
   whenever the session traded `parent_qty / cap`, whatever shape the plan had.
   Every history session must trade in the same buckets as the execution session,
