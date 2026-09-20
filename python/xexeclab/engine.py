@@ -29,6 +29,20 @@ def _r8(x: float) -> float:
     return -(math.floor(-x * 1e8 + 0.5) / 1e8)
 
 
+def _filled_impact(impact: float, parent_qty: float, filled: float) -> float:
+    """Re-base a parent-weighted impact onto the quantity that actually filled.
+
+    The capped executions weight each slot by ``fill / parent_qty``, so a slot
+    the cap kept empty contributes nothing and the total falls with the
+    shortfall. Dividing by the filled fraction undoes exactly that. ``0`` when
+    nothing filled, rather than a NaN the two engines would serialise
+    differently. Mirrors the Rust ``filled_impact``.
+    """
+    if filled > 0.0:
+        return _r8(impact * parent_qty / filled)
+    return 0.0
+
+
 def read_ticks(path: str | Path) -> pl.DataFrame:
     """Read canonical ticks from a replay file, sorted by time.
 
@@ -1074,6 +1088,7 @@ def _capped_replay(
         "price": _r8(price),
         "tracking_bps": _r8((price - session) / session * 1e4),
         "impact_bps": _r8(impact),
+        "filled_impact_bps": _filled_impact(impact, parent_qty, filled),
         "max_participation": _r8(max_p),
         "sizes": sizes,
     }
@@ -1143,6 +1158,7 @@ def _spread_plan(
         "price": _r8(price),
         "tracking_bps": _r8((price - session) / session * 1e4),
         "impact_bps": _r8(impact),
+        "filled_impact_bps": _filled_impact(impact, parent_qty, filled),
         "max_participation": _r8(max_p),
         "sizes": reported,
     }
@@ -1164,6 +1180,27 @@ def _capped_execution(
     Rust ``capped_execution`` (see ``CappedExecution`` for the fields)."""
     args = (plan_share, volume, vwap, parent_qty, cap, coef_bps, perm_coef_bps, session)
     return {"capped": _capped_replay(*args), "spread": _spread_plan(*args)}
+
+
+def _capped_gain(forecast: dict, naive: dict) -> dict:
+    """What pooling was worth under one capped execution: the improvement per
+    unit *filled*, and the quantity the pooled plan missed that the naive one
+    did not, kept separate. Mirrors the Rust ``CappedGain``."""
+    shortfall = _r8(forecast["unfilled_qty"] - naive["unfilled_qty"])
+    return {
+        "improvement_bps": _r8(naive["filled_impact_bps"] - forecast["filled_impact_bps"]),
+        "shortfall_qty": shortfall,
+        "like_for_like": shortfall == 0.0,
+    }
+
+
+def _capped_improvement(forecast: dict, naive: dict) -> dict:
+    """Compare the pooled and naive plans under each capped execution. Mirrors
+    the Rust ``capped_improvement``."""
+    return {
+        "capped": _capped_gain(forecast["capped"], naive["capped"]),
+        "spread": _capped_gain(forecast["spread"], naive["spread"]),
+    }
 
 
 def pov_forecast(
@@ -1199,6 +1236,13 @@ def pov_forecast(
     credit survives. The spread fills the whole parent whenever
     ``parent_qty <= cap * exec_volume`` whatever shape the forecast has, so under
     the reshape the shortfall belongs to the session, not to the forecast.
+
+    ``capped_improvement`` asks the ``improvement_bps`` question again inside the
+    cap, once per execution. It cannot be the same subtraction: the executions'
+    ``impact_bps`` is per unit of parent, so an execution the cap left short
+    looks cheaper for having traded less. It compares ``filled_impact_bps``
+    instead and reports ``shortfall_qty`` beside it, because a plan that is
+    cheaper per unit only because it missed more of the order is not better.
 
     ``improvement_bps`` (``naive - forecast`` impact) has no sign guarantee:
     when the session repeats the last one, pooling only adds error. The shares
@@ -1284,6 +1328,7 @@ def pov_forecast(
         "naive": _score(naive, session, cap, oracle_impact),
         "forecast_capped": forecast_capped,
         "naive_capped": naive_capped,
+        "capped_improvement": _capped_improvement(forecast_capped, naive_capped),
         "oracle_participation": _r8(oracle_participation),
         "oracle_impact_bps": _r8(oracle_impact),
         "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
