@@ -9,6 +9,21 @@ fn r8(x: f64) -> f64 {
     (x * 1e8).round() / 1e8
 }
 
+/// Re-base a parent-weighted impact onto the quantity that actually filled.
+///
+/// The capped executions accumulate `impact` with weights `fill / parent_qty`,
+/// so a slot the cap kept empty contributes nothing and the total falls with the
+/// shortfall. Dividing by the filled fraction undoes exactly that, leaving the
+/// cost of the quantity that traded. `0` when nothing filled, rather than a NaN
+/// the two engines would serialise differently.
+fn filled_impact(impact: f64, parent_qty: f64, filled: f64) -> f64 {
+    if filled > 0.0 {
+        r8(impact * parent_qty / filled)
+    } else {
+        0.0
+    }
+}
+
 /// One bucket of a participation-of-volume plan.
 #[derive(Debug, Serialize)]
 pub struct PovSlice {
@@ -173,7 +188,9 @@ pub struct PovBacktest {
 /// unfilled; `unfilled_qty` reports it instead of forcing it through.
 ///
 /// `impact_bps` is per unit of *parent*, like [`PovBacktest::impact_bps`], so
-/// an unfilled remainder lowers it; read it with `completed`.
+/// an unfilled remainder lowers it; read it with `completed`. To compare two
+/// executions that filled different quantities, read `filled_impact_bps`
+/// instead, which divides by what was actually filled.
 #[derive(Debug, Serialize)]
 pub struct CappedReplay {
     pub filled_qty: f64,
@@ -186,6 +203,12 @@ pub struct CappedReplay {
     pub price: f64,
     pub tracking_bps: f64,
     pub impact_bps: f64,
+    /// `impact_bps` per unit *filled* rather than per unit of parent: the cost
+    /// of the quantity that actually traded. Unlike `impact_bps` it does not
+    /// fall just because the cap left a remainder behind, so it is the figure
+    /// two executions with different `filled_qty` can be compared on. `0` when
+    /// nothing filled.
+    pub filled_impact_bps: f64,
     pub max_participation: f64,
     /// Filled size per slot.
     pub sizes: Vec<f64>,
@@ -233,6 +256,7 @@ fn capped_replay(
         price: r8(price),
         tracking_bps: r8((price - session) / session * 1e4),
         impact_bps: r8(impact),
+        filled_impact_bps: filled_impact(impact, parent_qty, filled),
         max_participation: r8(max_p),
         sizes,
     }
@@ -270,6 +294,12 @@ pub struct SpreadPlan {
     pub price: f64,
     pub tracking_bps: f64,
     pub impact_bps: f64,
+    /// `impact_bps` per unit *filled* rather than per unit of parent: the cost
+    /// of the quantity that actually traded. Unlike `impact_bps` it does not
+    /// fall just because the cap left a remainder behind, so it is the figure
+    /// two executions with different `filled_qty` can be compared on. `0` when
+    /// nothing filled.
+    pub filled_impact_bps: f64,
     pub max_participation: f64,
     /// Filled size per slot.
     pub sizes: Vec<f64>,
@@ -350,6 +380,7 @@ fn spread_plan(
         price: r8(price),
         tracking_bps: r8((price - session) / session * 1e4),
         impact_bps: r8(impact),
+        filled_impact_bps: filled_impact(impact, parent_qty, filled),
         max_participation: r8(max_p),
         sizes: reported,
     }
@@ -403,6 +434,54 @@ fn capped_execution(
     }
 }
 
+/// **What pooling was worth under one capped execution.**
+///
+/// `PovForecast::improvement_bps` compares the two *uncapped* allocations, and
+/// the capped executions did not have a twin for it, because `impact_bps` is
+/// per unit of parent: an execution the cap left short reports a smaller number
+/// for having traded less, so subtracting one from the other rewards missing
+/// the order. `filled_impact_bps` removes that, and the quantity each execution
+/// missed is reported beside it rather than folded into it — the two are
+/// different currencies and a desk trades them off itself.
+#[derive(Debug, Serialize)]
+pub struct CappedGain {
+    /// `naive.filled_impact_bps - forecast.filled_impact_bps`: what pooling
+    /// bought per unit actually traded, or cost. Like `improvement_bps` it has
+    /// no sign guarantee.
+    pub improvement_bps: f64,
+    /// `forecast.unfilled_qty - naive.unfilled_qty`: quantity the pooled plan
+    /// missed that the naive one did not. Positive means part of any
+    /// `improvement_bps` above was bought by filling less.
+    pub shortfall_qty: f64,
+    /// Both executions filled the same quantity, so `shortfall_qty` is zero and
+    /// `improvement_bps` is the whole comparison.
+    pub like_for_like: bool,
+}
+
+/// [`CappedGain`] under each of the two capped executions, paired the way
+/// [`CappedExecution`] pairs the executions themselves.
+#[derive(Debug, Serialize)]
+pub struct CappedImprovement {
+    pub capped: CappedGain,
+    pub spread: CappedGain,
+}
+
+/// Compare the pooled and naive plans under each capped execution.
+fn capped_improvement(forecast: &CappedExecution, naive: &CappedExecution) -> CappedImprovement {
+    CappedImprovement {
+        capped: CappedGain {
+            improvement_bps: r8(naive.capped.filled_impact_bps - forecast.capped.filled_impact_bps),
+            shortfall_qty: r8(forecast.capped.unfilled_qty - naive.capped.unfilled_qty),
+            like_for_like: r8(forecast.capped.unfilled_qty - naive.capped.unfilled_qty) == 0.0,
+        },
+        spread: CappedGain {
+            improvement_bps: r8(naive.spread.filled_impact_bps - forecast.spread.filled_impact_bps),
+            shortfall_qty: r8(forecast.spread.unfilled_qty - naive.spread.unfilled_qty),
+            like_for_like: r8(forecast.spread.unfilled_qty - naive.spread.unfilled_qty) == 0.0,
+        },
+    }
+}
+
 /// How one allocation fared against the execution session: the fields a
 /// [`PovBacktest`] reports for its single plan, for each plan a
 /// [`PovForecast`] compares.
@@ -447,6 +526,13 @@ pub struct PlanScore {
 /// so under the reshape the shortfall is a property of the session and not of
 /// the forecast at all.
 ///
+/// `capped_improvement` asks the `improvement_bps` question again inside the
+/// cap, once per execution. It cannot be the same subtraction: the executions'
+/// `impact_bps` is per unit of parent, so an execution the cap left short looks
+/// cheaper for having traded less. It compares `filled_impact_bps` instead and
+/// reports `shortfall_qty` separately, because a plan that is cheaper per unit
+/// only because it missed more of the order is not a better plan.
+///
 /// `improvement_bps` is `naive.impact_bps - forecast.impact_bps`. Unlike
 /// `forecast_cost_bps` it has no sign guarantee: when the session repeats the
 /// last one, pooling only adds error, and the number goes negative. It is
@@ -476,6 +562,9 @@ pub struct PovForecast {
     pub forecast_capped: CappedExecution,
     /// The naive plan held inside the cap, both ways, for the same comparison.
     pub naive_capped: CappedExecution,
+    /// `improvement_bps` re-asked inside the cap, once per execution: what
+    /// pooling was worth per unit actually traded, and what it missed.
+    pub capped_improvement: CappedImprovement,
     pub oracle_participation: f64,
     pub oracle_impact_bps: f64,
     pub oracle_feasible: bool,
@@ -936,6 +1025,7 @@ pub fn pov_forecast(
         session_vwap: session,
         forecast: forecast_score,
         naive: naive_score,
+        capped_improvement: capped_improvement(&forecast_capped, &naive_capped),
         forecast_capped,
         naive_capped,
         oracle_participation: r8(oracle_participation),
