@@ -24,7 +24,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--shortfall-bps N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -32,6 +32,12 @@ fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
         .map(|s| s.parse())
         .transpose()?
         .unwrap_or(default))
+}
+
+/// Parse a `--key value` float that has no default: absent means absent, and the
+/// report says so rather than standing in a zero.
+fn arg_opt_f64(args: &[String], key: &str) -> Result<Option<f64>> {
+    Ok(arg_value(args, key).map(|s| s.parse()).transpose()?)
 }
 
 fn main() -> Result<()> {
@@ -356,6 +362,7 @@ fn main() -> Result<()> {
                 arg_f64(&args, "--coef-bps", 10.0)?,
                 arg_f64(&args, "--perm-coef-bps", 0.0)?,
                 arg_f64(&args, "--half-life", 0.0)?,
+                arg_opt_f64(&args, "--shortfall-bps")?,
             )?;
             println!("{}", serde_json::to_string(&report)?);
         }

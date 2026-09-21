@@ -443,6 +443,12 @@ fn capped_execution(
 /// the order. `filled_impact_bps` removes that, and the quantity each execution
 /// missed is reported beside it rather than folded into it — the two are
 /// different currencies and a desk trades them off itself.
+///
+/// A desk that *has* a rate for the trade-off can say so, and `net_bps` then
+/// charges the shortfall at it. The rate is an input, never a measurement: the
+/// cost of not filling an order is a property of the order and the mandate
+/// behind it, not of any session this engine has seen. Left unsupplied,
+/// `net_bps` is `null` and the two numbers stay apart.
 #[derive(Debug, Serialize)]
 pub struct CappedGain {
     /// `naive.filled_impact_bps - forecast.filled_impact_bps`: what pooling
@@ -456,6 +462,12 @@ pub struct CappedGain {
     /// Both executions filled the same quantity, so `shortfall_qty` is zero and
     /// `improvement_bps` is the whole comparison.
     pub like_for_like: bool,
+    /// `improvement_bps` with the shortfall charged at the rate the caller
+    /// supplied: `improvement_bps - shortfall_qty / parent_qty * shortfall_bps`.
+    /// `null` when no rate was given, because without one the two quantities do
+    /// not convert and the engine has nothing to net. Equal to
+    /// `improvement_bps` whenever `like_for_like`.
+    pub net_bps: Option<f64>,
 }
 
 /// [`CappedGain`] under each of the two capped executions, paired the way
@@ -466,19 +478,52 @@ pub struct CappedImprovement {
     pub spread: CappedGain,
 }
 
+/// One [`CappedGain`], from the two executions' filled impact and unfilled
+/// quantity. `shortfall_bps` is the caller's price for missing one unit of the
+/// parent; without it `net_bps` is `None` rather than a number the engine
+/// invented an exchange rate for.
+fn capped_gain(
+    forecast_impact: f64,
+    naive_impact: f64,
+    forecast_unfilled: f64,
+    naive_unfilled: f64,
+    parent_qty: f64,
+    shortfall_bps: Option<f64>,
+) -> CappedGain {
+    let improvement = r8(naive_impact - forecast_impact);
+    let shortfall = r8(forecast_unfilled - naive_unfilled);
+    CappedGain {
+        improvement_bps: improvement,
+        shortfall_qty: shortfall,
+        like_for_like: shortfall == 0.0,
+        net_bps: shortfall_bps.map(|rate| r8(improvement - shortfall / parent_qty * rate)),
+    }
+}
+
 /// Compare the pooled and naive plans under each capped execution.
-fn capped_improvement(forecast: &CappedExecution, naive: &CappedExecution) -> CappedImprovement {
+fn capped_improvement(
+    forecast: &CappedExecution,
+    naive: &CappedExecution,
+    parent_qty: f64,
+    shortfall_bps: Option<f64>,
+) -> CappedImprovement {
     CappedImprovement {
-        capped: CappedGain {
-            improvement_bps: r8(naive.capped.filled_impact_bps - forecast.capped.filled_impact_bps),
-            shortfall_qty: r8(forecast.capped.unfilled_qty - naive.capped.unfilled_qty),
-            like_for_like: r8(forecast.capped.unfilled_qty - naive.capped.unfilled_qty) == 0.0,
-        },
-        spread: CappedGain {
-            improvement_bps: r8(naive.spread.filled_impact_bps - forecast.spread.filled_impact_bps),
-            shortfall_qty: r8(forecast.spread.unfilled_qty - naive.spread.unfilled_qty),
-            like_for_like: r8(forecast.spread.unfilled_qty - naive.spread.unfilled_qty) == 0.0,
-        },
+        capped: capped_gain(
+            forecast.capped.filled_impact_bps,
+            naive.capped.filled_impact_bps,
+            forecast.capped.unfilled_qty,
+            naive.capped.unfilled_qty,
+            parent_qty,
+            shortfall_bps,
+        ),
+        spread: capped_gain(
+            forecast.spread.filled_impact_bps,
+            naive.spread.filled_impact_bps,
+            forecast.spread.unfilled_qty,
+            naive.spread.unfilled_qty,
+            parent_qty,
+            shortfall_bps,
+        ),
     }
 }
 
@@ -533,6 +578,12 @@ pub struct PlanScore {
 /// reports `shortfall_qty` separately, because a plan that is cheaper per unit
 /// only because it missed more of the order is not a better plan.
 ///
+/// `shortfall_bps` is the one place a caller can collapse that pair into a
+/// single number: the price, in basis points of the parent, of missing one unit
+/// of it. Supply it and each gain also reports `net_bps`; leave it out and the
+/// field is `null`. The engine cannot supply it, because nothing in a volume
+/// capture says what the unfilled remainder costs.
+///
 /// `improvement_bps` is `naive.impact_bps - forecast.impact_bps`. Unlike
 /// `forecast_cost_bps` it has no sign guarantee: when the session repeats the
 /// last one, pooling only adds error, and the number goes negative. It is
@@ -550,6 +601,9 @@ pub struct PovForecast {
     pub weights: Vec<f64>,
     pub parent_qty: f64,
     pub cap: f64,
+    /// The caller's price for missing one unit of the parent, echoed back;
+    /// `null` when none was given. Drives `capped_improvement.*.net_bps`.
+    pub shortfall_bps: Option<f64>,
     pub coef_bps: f64,
     pub perm_coef_bps: f64,
     pub exec_volume: f64,
@@ -909,12 +963,20 @@ pub fn pov_forecast(
     coef_bps: f64,
     perm_coef_bps: f64,
     half_life: f64,
+    shortfall_bps: Option<f64>,
 ) -> Result<PovForecast> {
     validate(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)?;
     if !half_life.is_finite() || half_life < 0.0 {
         return Err(anyhow!(
             "half_life must be a non-negative finite number, got {half_life}"
         ));
+    }
+    if let Some(rate) = shortfall_bps {
+        if !rate.is_finite() || rate < 0.0 {
+            return Err(anyhow!(
+                "shortfall_bps must be a non-negative finite number, got {rate}"
+            ));
+        }
     }
     if history.is_empty() {
         return Err(anyhow!("need at least one history capture"));
@@ -1019,13 +1081,19 @@ pub fn pov_forecast(
         weights: weights.iter().map(|w| r8(*w)).collect(),
         parent_qty: r8(parent_qty),
         cap: r8(cap),
+        shortfall_bps: shortfall_bps.map(r8),
         coef_bps: r8(coef_bps),
         perm_coef_bps: r8(perm_coef_bps),
         exec_volume: r8(exec_total),
         session_vwap: session,
         forecast: forecast_score,
         naive: naive_score,
-        capped_improvement: capped_improvement(&forecast_capped, &naive_capped),
+        capped_improvement: capped_improvement(
+            &forecast_capped,
+            &naive_capped,
+            parent_qty,
+            shortfall_bps,
+        ),
         forecast_capped,
         naive_capped,
         oracle_participation: r8(oracle_participation),
