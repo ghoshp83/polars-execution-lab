@@ -7,6 +7,9 @@ const BUCKET: i64 = 1_000_000_000;
 const HOUR: i64 = 3_600 * BUCKET;
 /// Pool every session equally: the forecast v0.19 made before the decay existed.
 const FLAT: f64 = 0.0;
+/// No price for the unfilled remainder, so `net_bps` stays `None`: the default,
+/// and what every test that is not about the netting itself asks for.
+const NO_PENALTY: Option<f64> = None;
 
 fn tick(ts_ns: i64, price: f64, size: f64) -> Tick {
     Tick {
@@ -45,7 +48,18 @@ fn blended() -> Vec<Tick> {
 
 #[test]
 fn one_history_session_is_the_backtest() {
-    let fc = pov_forecast(&[lumpy()], &reshaped(), BUCKET, 1.0, 1.0, 10.0, 2.0, FLAT).unwrap();
+    let fc = pov_forecast(
+        &[lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        1.0,
+        10.0,
+        2.0,
+        FLAT,
+        NO_PENALTY,
+    )
+    .unwrap();
     let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 1.0, 10.0, 2.0).unwrap();
     // An average of one session is that session, so the pooled forecast must
     // collapse to v0.18's backtest -- and to its own naive baseline.
@@ -70,6 +84,7 @@ fn averaging_opposite_sessions_recovers_a_blended_session() {
         10.0,
         2.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     // The session looks like the average of its history, so the average is the
@@ -94,6 +109,7 @@ fn a_session_does_not_outvote_the_others_by_trading_more() {
         10.0,
         0.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     // Ten times the volume, the same shape as `reshaped`: shares are averaged,
@@ -113,6 +129,7 @@ fn the_average_can_lose_to_the_most_recent_session() {
         10.0,
         0.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     // When the session repeats the last one exactly, pooling only adds error.
@@ -133,6 +150,7 @@ fn a_half_life_of_one_session_halves_the_weight_each_step_back() {
         10.0,
         0.0,
         1.0,
+        NO_PENALTY,
     )
     .unwrap();
     // Raw weights 0.25 / 0.5 / 1.0 over 1.75: the newest session weighs four
@@ -156,6 +174,7 @@ fn a_short_half_life_converges_on_the_naive_forecast() {
         10.0,
         0.0,
         0.01,
+        NO_PENALTY,
     )
     .unwrap();
     assert_eq!(fc.weights, vec![0.0, 1.0]);
@@ -170,8 +189,14 @@ fn recency_weighting_wins_when_the_profile_has_drifted() {
     // recent shape: leaning on the recent sessions beats pooling all three.
     let history = [lumpy(), reshaped(), reshaped()];
     let exec = session(3 * HOUR, [6.0, 1.0, 3.0]);
-    let flat = pov_forecast(&history, &exec, BUCKET, 1.0, 1.0, 10.0, 0.0, FLAT).unwrap();
-    let decayed = pov_forecast(&history, &exec, BUCKET, 1.0, 1.0, 10.0, 0.0, 0.5).unwrap();
+    let flat = pov_forecast(
+        &history, &exec, BUCKET, 1.0, 1.0, 10.0, 0.0, FLAT, NO_PENALTY,
+    )
+    .unwrap();
+    let decayed = pov_forecast(
+        &history, &exec, BUCKET, 1.0, 1.0, 10.0, 0.0, 0.5, NO_PENALTY,
+    )
+    .unwrap();
     assert!(decayed.forecast.forecast_cost_bps < flat.forecast.forecast_cost_bps);
     assert!(decayed.forecast.profile_distance < flat.forecast.profile_distance);
     // The naive baseline is the same session either way, so a smaller cost
@@ -181,7 +206,18 @@ fn recency_weighting_wins_when_the_profile_has_drifted() {
 
 #[test]
 fn a_negative_half_life_is_refused() {
-    let err = pov_forecast(&[lumpy()], &blended(), BUCKET, 1.0, 1.0, 10.0, 0.0, -1.0).unwrap_err();
+    let err = pov_forecast(
+        &[lumpy()],
+        &blended(),
+        BUCKET,
+        1.0,
+        1.0,
+        10.0,
+        0.0,
+        -1.0,
+        NO_PENALTY,
+    )
+    .unwrap_err();
     assert_eq!(
         err.to_string(),
         "half_life must be a non-negative finite number, got -1"
@@ -190,7 +226,18 @@ fn a_negative_half_life_is_refused() {
 
 #[test]
 fn no_history_is_refused() {
-    let err = pov_forecast(&[], &blended(), BUCKET, 1.0, 1.0, 10.0, 0.0, FLAT).unwrap_err();
+    let err = pov_forecast(
+        &[],
+        &blended(),
+        BUCKET,
+        1.0,
+        1.0,
+        10.0,
+        0.0,
+        FLAT,
+        NO_PENALTY,
+    )
+    .unwrap_err();
     assert_eq!(err.to_string(), "need at least one history capture");
 }
 
@@ -205,6 +252,7 @@ fn a_bad_history_capture_is_named_by_position() {
         10.0,
         0.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap_err();
     assert_eq!(err.to_string(), "history capture 2: no ticks");
@@ -213,7 +261,18 @@ fn a_bad_history_capture_is_named_by_position() {
 #[test]
 fn history_covering_different_buckets_is_refused() {
     let gappy = vec![tick(HOUR, 100.0, 6.0), tick(HOUR + 2 * BUCKET, 102.0, 3.0)];
-    let err = pov_forecast(&[gappy], &blended(), BUCKET, 1.0, 1.0, 10.0, 0.0, FLAT).unwrap_err();
+    let err = pov_forecast(
+        &[gappy],
+        &blended(),
+        BUCKET,
+        1.0,
+        1.0,
+        10.0,
+        0.0,
+        FLAT,
+        NO_PENALTY,
+    )
+    .unwrap_err();
     assert!(err
         .to_string()
         .starts_with("history capture 1 covers different buckets"));
@@ -225,7 +284,18 @@ fn history_of_another_product_is_refused() {
     for t in &mut other {
         t.product = "ETH-USD".to_string();
     }
-    let err = pov_forecast(&[other], &blended(), BUCKET, 1.0, 1.0, 10.0, 0.0, FLAT).unwrap_err();
+    let err = pov_forecast(
+        &[other],
+        &blended(),
+        BUCKET,
+        1.0,
+        1.0,
+        10.0,
+        0.0,
+        FLAT,
+        NO_PENALTY,
+    )
+    .unwrap_err();
     assert_eq!(
         err.to_string(),
         "history capture 1 is ETH-USD but the execution capture is BTC-USD"
@@ -234,7 +304,18 @@ fn history_of_another_product_is_refused() {
 
 #[test]
 fn a_single_history_session_capped_is_the_backtest_capped() {
-    let fc = pov_forecast(&[lumpy()], &reshaped(), BUCKET, 1.0, 0.5, 10.0, 2.0, FLAT).unwrap();
+    let fc = pov_forecast(
+        &[lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.5,
+        10.0,
+        2.0,
+        FLAT,
+        NO_PENALTY,
+    )
+    .unwrap();
     let bt = pov_backtest(&lumpy(), &reshaped(), BUCKET, 1.0, 0.5, 10.0, 2.0).unwrap();
     // The collapse has to hold under the cap too, or the two commands would be
     // charging the same allocation differently the moment the cap binds.
@@ -263,6 +344,7 @@ fn the_reshape_makes_the_shortfall_a_property_of_the_session() {
         10.0,
         2.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     assert!(fc.forecast_capped.spread.completed);
@@ -288,6 +370,7 @@ fn a_cap_the_session_cannot_fill_misses_the_same_under_either_forecast() {
         10.0,
         2.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     assert_eq!(fc.forecast_capped.spread.unfilled_qty, 0.5);
@@ -312,6 +395,7 @@ fn deferring_still_charges_the_forecast_for_its_shape() {
         10.0,
         2.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     assert_eq!(fc.naive_capped.capped.unfilled_qty, 0.1);
@@ -337,6 +421,7 @@ fn filled_impact_prices_the_quantity_that_actually_traded() {
         10.0,
         2.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     // The pooled plan cleared, so there is nothing to re-base: the two agree.
@@ -365,6 +450,7 @@ fn the_capped_improvement_reports_what_the_cheaper_plan_did_not_fill() {
         10.0,
         2.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     let gain = &fc.capped_improvement.capped;
@@ -392,6 +478,7 @@ fn a_slack_cap_leaves_the_capped_improvement_the_uncapped_one() {
         10.0,
         2.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     assert_eq!(fc.forecast_capped.capped.capped_slots, 0);
@@ -424,10 +511,109 @@ fn a_session_too_thin_for_the_parent_leaves_the_forecasts_nothing_to_win() {
         10.0,
         2.0,
         FLAT,
+        NO_PENALTY,
     )
     .unwrap();
     let spread = &fc.capped_improvement.spread;
     assert_eq!(spread.shortfall_qty, 0.0);
     assert!(spread.like_for_like);
     assert_eq!(spread.improvement_bps, 0.0);
+}
+
+#[test]
+fn without_a_price_for_the_remainder_nothing_is_netted() {
+    // The default. `improvement_bps` is in basis points and `shortfall_qty` is
+    // in quantity; with no rate between them the engine reports both and nets
+    // neither, rather than standing a zero in for a number it was not given.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.2,
+        10.0,
+        2.0,
+        FLAT,
+        NO_PENALTY,
+    )
+    .unwrap();
+    assert_eq!(fc.shortfall_bps, None);
+    assert_eq!(fc.capped_improvement.capped.net_bps, None);
+    assert_eq!(fc.capped_improvement.spread.net_bps, None);
+}
+
+#[test]
+fn a_price_for_the_remainder_charges_the_shortfall() {
+    // Under the forward carry the naive plan misses 0.1 of a parent of 1.0 and
+    // the pooled one clears, so the pooled plan is *credited* a tenth of the
+    // rate -- the shortfall is negative and the charge runs the other way.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.2,
+        10.0,
+        2.0,
+        FLAT,
+        Some(50.0),
+    )
+    .unwrap();
+    assert_eq!(fc.shortfall_bps, Some(50.0));
+    let gain = &fc.capped_improvement.capped;
+    assert_eq!(gain.shortfall_qty, -0.1);
+    assert!(!gain.like_for_like);
+    let expected = gain.improvement_bps + 0.1 * 50.0;
+    assert!((gain.net_bps.unwrap() - expected).abs() <= 1e-8);
+    // The reshape filled the whole parent under both plans, so there is nothing
+    // to charge and the rate cannot move the comparison at all.
+    let spread = &fc.capped_improvement.spread;
+    assert!(spread.like_for_like);
+    assert_eq!(spread.net_bps, Some(spread.improvement_bps));
+}
+
+#[test]
+fn a_rate_of_zero_is_not_the_same_as_no_rate() {
+    // A desk that has decided the remainder is free has said something, and it
+    // is not what silence says. The number is reported; it just equals the
+    // improvement.
+    let fc = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.2,
+        10.0,
+        2.0,
+        FLAT,
+        Some(0.0),
+    )
+    .unwrap();
+    assert_eq!(fc.shortfall_bps, Some(0.0));
+    let gain = &fc.capped_improvement.capped;
+    assert_ne!(gain.shortfall_qty, 0.0);
+    assert_eq!(gain.net_bps, Some(gain.improvement_bps));
+}
+
+#[test]
+fn a_negative_price_for_the_remainder_is_refused() {
+    // A negative rate pays the plan for missing the order, which is the one
+    // reading `net_bps` exists to rule out.
+    let err = pov_forecast(
+        &[blended(), lumpy()],
+        &reshaped(),
+        BUCKET,
+        1.0,
+        0.2,
+        10.0,
+        2.0,
+        FLAT,
+        Some(-1.0),
+    )
+    .unwrap_err()
+    .to_string();
+    assert_eq!(
+        err,
+        "shortfall_bps must be a non-negative finite number, got -1"
+    );
 }
