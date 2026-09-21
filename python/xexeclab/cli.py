@@ -189,6 +189,7 @@ def cmd_pov_forecast(a: argparse.Namespace) -> None:
                 a.coef_bps,
                 a.perm_coef_bps,
                 a.half_life,
+                a.shortfall_bps,
             )
         )
     )
@@ -588,6 +589,12 @@ def main(argv: list[str] | None = None) -> None:
         type=float,
         default=0.0,
         help="sessions over which a session's weight halves (0 = pool them equally)",
+    )
+    pfc.add_argument(
+        "--shortfall-bps",
+        type=float,
+        default=None,
+        help="cost in bps of missing one unit of the parent (omit to leave net_bps null)",
     )
     pfc.set_defaults(fn=cmd_pov_forecast)
 

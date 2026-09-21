@@ -1182,24 +1182,38 @@ def _capped_execution(
     return {"capped": _capped_replay(*args), "spread": _spread_plan(*args)}
 
 
-def _capped_gain(forecast: dict, naive: dict) -> dict:
+def _capped_gain(
+    forecast: dict, naive: dict, parent_qty: float, shortfall_bps: float | None
+) -> dict:
     """What pooling was worth under one capped execution: the improvement per
     unit *filled*, and the quantity the pooled plan missed that the naive one
-    did not, kept separate. Mirrors the Rust ``CappedGain``."""
+    did not, kept separate.
+
+    ``shortfall_bps`` is the caller's price for missing one unit of the parent.
+    Given one, ``net_bps`` charges the shortfall at it; without one the field is
+    ``None``, because the engine has no exchange rate of its own between basis
+    points and quantity. Mirrors the Rust ``capped_gain``."""
+    improvement = _r8(naive["filled_impact_bps"] - forecast["filled_impact_bps"])
     shortfall = _r8(forecast["unfilled_qty"] - naive["unfilled_qty"])
+    net = None
+    if shortfall_bps is not None:
+        net = _r8(improvement - shortfall / parent_qty * shortfall_bps)
     return {
-        "improvement_bps": _r8(naive["filled_impact_bps"] - forecast["filled_impact_bps"]),
+        "improvement_bps": improvement,
         "shortfall_qty": shortfall,
         "like_for_like": shortfall == 0.0,
+        "net_bps": net,
     }
 
 
-def _capped_improvement(forecast: dict, naive: dict) -> dict:
+def _capped_improvement(
+    forecast: dict, naive: dict, parent_qty: float, shortfall_bps: float | None
+) -> dict:
     """Compare the pooled and naive plans under each capped execution. Mirrors
     the Rust ``capped_improvement``."""
     return {
-        "capped": _capped_gain(forecast["capped"], naive["capped"]),
-        "spread": _capped_gain(forecast["spread"], naive["spread"]),
+        "capped": _capped_gain(forecast["capped"], naive["capped"], parent_qty, shortfall_bps),
+        "spread": _capped_gain(forecast["spread"], naive["spread"], parent_qty, shortfall_bps),
     }
 
 
@@ -1212,6 +1226,7 @@ def pov_forecast(
     coef_bps: float,
     perm_coef_bps: float = 0.0,
     half_life: float = 0.0,
+    shortfall_bps: float | None = None,
 ) -> dict:
     """A volume forecast pooled from several sessions, scored out of sample.
 
@@ -1244,6 +1259,12 @@ def pov_forecast(
     instead and reports ``shortfall_qty`` beside it, because a plan that is
     cheaper per unit only because it missed more of the order is not better.
 
+    ``shortfall_bps`` is the one way to collapse that pair into a single number:
+    the price, in basis points of the parent, of missing one unit of it. Supply
+    it and each gain also reports ``net_bps``; leave it out and the field is
+    ``None``. The engine cannot supply it -- nothing in a volume capture says
+    what the unfilled remainder costs.
+
     ``improvement_bps`` (``naive - forecast`` impact) has no sign guarantee:
     when the session repeats the last one, pooling only adds error. The shares
     are summed in an explicit loop, session by session, because the built-in
@@ -1254,6 +1275,8 @@ def pov_forecast(
     _validate_pov(bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps)
     if not math.isfinite(half_life) or half_life < 0:
         raise ValueError(f"half_life must be a non-negative finite number, got {half_life}")
+    if shortfall_bps is not None and (not math.isfinite(shortfall_bps) or shortfall_bps < 0):
+        raise ValueError(f"shortfall_bps must be a non-negative finite number, got {shortfall_bps}")
     if not history:
         raise ValueError("need at least one history capture")
     profiles = []
@@ -1320,6 +1343,7 @@ def pov_forecast(
         "weights": [_r8(w) for w in weights],
         "parent_qty": _r8(parent_qty),
         "cap": _r8(cap),
+        "shortfall_bps": None if shortfall_bps is None else _r8(shortfall_bps),
         "coef_bps": _r8(coef_bps),
         "perm_coef_bps": _r8(perm_coef_bps),
         "exec_volume": _r8(exec_total),
@@ -1328,7 +1352,9 @@ def pov_forecast(
         "naive": _score(naive, session, cap, oracle_impact),
         "forecast_capped": forecast_capped,
         "naive_capped": naive_capped,
-        "capped_improvement": _capped_improvement(forecast_capped, naive_capped),
+        "capped_improvement": _capped_improvement(
+            forecast_capped, naive_capped, parent_qty, shortfall_bps
+        ),
         "oracle_participation": _r8(oracle_participation),
         "oracle_impact_bps": _r8(oracle_impact),
         "oracle_feasible": _r8(oracle_participation) <= _r8(cap),
