@@ -695,6 +695,64 @@ def test_rust_and_python_recency_weighted_forecasts_are_identical():
     assert rust["forecast"]["forecast_cost_bps"] >= 0.0
 
 
+def test_rust_and_python_priced_shortfalls_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The nineteenth equivalence test, and the first over a field that can be
+    # absent. `net_bps` is `Option<f64>` in Rust and `float | None` in Python,
+    # and the two agree only if serde's `null` and `json.dumps(None)` line up as
+    # well as the arithmetic does. Both are checked: the rate is supplied here,
+    # and the test above ran the same captures without one.
+    shortfall_bps = "40"
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-forecast",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE}",
+            "--input",
+            THIRD_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap",
+            str(POV_PLAN["cap"]),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+            "--shortfall-bps",
+            shortfall_bps,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = pov_forecast(
+        [read_ticks(SAMPLE), read_ticks(NEXT_SAMPLE)],
+        read_ticks(THIRD_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        POV_PLAN["cap"],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+        0.0,
+        float(shortfall_bps),
+    )
+
+    assert rust == py
+
+    # The rate must have reached the report, or this is the null case again.
+    assert rust["shortfall_bps"] == 40.0
+    for execution in ("capped", "spread"):
+        assert rust["capped_improvement"][execution]["net_bps"] is not None
+
+
 def test_rust_and_python_streamed_sessions_are_identical():
     binary = _find_binary()
     if not binary:
