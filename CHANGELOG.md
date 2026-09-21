@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.29.0] - 2026-09-21
+
+### Added
+- **A price for the quantity a plan misses, supplied by the caller.** v0.28.0
+  reported `improvement_bps` and `shortfall_qty` side by side and refused to net
+  them, because basis points and unfilled quantity do not convert. They convert
+  once someone says what missing a unit of the parent costs, and that is a
+  property of the order and its mandate, not of any session the engine has seen.
+  `pov-forecast --shortfall-bps` takes that rate; each `CappedGain` then also
+  reports `net_bps` — `improvement_bps - shortfall_qty / parent_qty *
+  shortfall_bps` — and the rate is echoed back as `shortfall_bps` on the report.
+  Omitted, both fields are `null` and nothing is netted. A rate of `0` is a
+  different statement from no rate at all and the report keeps them apart. This
+  is the first field in the engine that can be absent.
+- Four tests each side and a nineteenth cross-language equivalence test — the
+  first over an optional field, so serde's `null` and `json.dumps(None)` are
+  checked to agree as well as the arithmetic does.
+
+### Changed
+- The `pov-forecast` limitation in the README now says why the engine will not
+  rank the two capped executions for you, what supplying a rate does and does not
+  buy, and that **the bundled history does not exercise it**: at every cap the
+  pooled and naive plans miss the same quantity, so `shortfall_qty` is zero and
+  `net_bps` equals `improvement_bps` there. The tests carry the non-zero case.
+- 135 Rust tests and 200 Python (19 of them cross-language equivalence).
+
 ## [0.28.0] - 2026-09-20
 
 ### Added
