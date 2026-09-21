@@ -197,6 +197,13 @@ uv run xexeclab pov-forecast --history data/sample_ticks.ndjson,data/sample_tick
                              --input data/sample_ticks_third.ndjson --half-life 1.5 \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
 
+# ...and, if the desk can price it, say what missing a unit of the parent costs:
+# `net_bps` then charges each capped comparison for the quantity it did not fill.
+# Omit the flag and `net_bps` is null -- the engine has no rate of its own.
+uv run xexeclab pov-forecast --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
+                             --input data/sample_ticks_third.ndjson --shortfall-bps 40 \
+                             --parent-qty 0.2 --cap 0.14 --coef-bps 25 --perm-coef-bps 5
+
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
 uv run xexeclab stream  --input data/sample_ticks.ndjson --chunk-rows 4
@@ -432,6 +439,18 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the reshape the shortfall stops
   depending on the forecast at all -- water-filling fills the whole parent
   whenever the session traded `parent_qty / cap`, whatever shape the plan had.
+  Ranking the two executions on one number needs a price for the quantity a plan
+  misses, and **nothing in a volume capture contains one** — the cost of an
+  unfilled remainder belongs to the order and the mandate behind it. So the
+  engine does not guess: pass `--shortfall-bps` and each comparison also reports
+  `net_bps`, the improvement with the shortfall charged at that rate; omit it and
+  `net_bps` is `null`. A rate of zero is a different statement from no rate at
+  all, and the report distinguishes them. This makes the two capped executions
+  comparable *under an assumption you supplied*, which is the only basis on which
+  they can be compared at all. **On the bundled history the rate changes
+  nothing**: at every cap the two plans miss the same quantity, so `shortfall_qty`
+  is zero, `like_for_like` is true and `net_bps` equals `improvement_bps`. The
+  netting is exercised by the test suite, not by the sample captures.
   Every history session must trade in the same buckets as the execution session,
   so sessions with a gap are refused rather than filled in.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
