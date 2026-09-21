@@ -277,3 +277,45 @@ def test_a_session_too_thin_for_the_parent_leaves_the_forecasts_nothing_to_win()
     assert spread["shortfall_qty"] == 0.0
     assert spread["like_for_like"]
     assert spread["improvement_bps"] == 0.0
+
+
+def test_without_a_price_for_the_remainder_nothing_is_netted():
+    # The default: improvement is in basis points and the shortfall is in
+    # quantity, and with no rate between them neither is folded into the other.
+    fc = pov_forecast([_blended(), _lumpy()], _reshaped(), BUCKET, 1.0, 0.2, 10.0, 2.0, 0.0)
+    assert fc["shortfall_bps"] is None
+    assert fc["capped_improvement"]["capped"]["net_bps"] is None
+    assert fc["capped_improvement"]["spread"]["net_bps"] is None
+
+
+def test_a_price_for_the_remainder_charges_the_shortfall():
+    # Under the forward carry the naive plan misses 0.1 of a parent of 1.0 and
+    # the pooled one clears, so the pooled plan is credited a tenth of the rate.
+    fc = pov_forecast([_blended(), _lumpy()], _reshaped(), BUCKET, 1.0, 0.2, 10.0, 2.0, 0.0, 50.0)
+    assert fc["shortfall_bps"] == 50.0
+    gain = fc["capped_improvement"]["capped"]
+    assert gain["shortfall_qty"] == -0.1
+    assert not gain["like_for_like"]
+    assert abs(gain["net_bps"] - (gain["improvement_bps"] + 0.1 * 50.0)) <= 1e-8
+    # The reshape filled the whole parent both ways, so the rate cannot move it.
+    spread = fc["capped_improvement"]["spread"]
+    assert spread["like_for_like"]
+    assert spread["net_bps"] == spread["improvement_bps"]
+
+
+def test_a_rate_of_zero_is_not_the_same_as_no_rate():
+    # Deciding the remainder is free is a statement, and not the one silence
+    # makes: the number is reported, it merely equals the improvement.
+    fc = pov_forecast([_blended(), _lumpy()], _reshaped(), BUCKET, 1.0, 0.2, 10.0, 2.0, 0.0, 0.0)
+    assert fc["shortfall_bps"] == 0.0
+    gain = fc["capped_improvement"]["capped"]
+    assert gain["shortfall_qty"] != 0.0
+    assert gain["net_bps"] == gain["improvement_bps"]
+
+
+def test_a_negative_price_for_the_remainder_is_refused():
+    # A negative rate would pay a plan for missing the order.
+    with pytest.raises(
+        ValueError, match="shortfall_bps must be a non-negative finite number, got -1"
+    ):
+        pov_forecast([_blended(), _lumpy()], _reshaped(), BUCKET, 1.0, 0.2, 10.0, 2.0, 0.0, -1.0)
