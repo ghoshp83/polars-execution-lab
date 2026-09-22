@@ -46,6 +46,25 @@ fn blended() -> Vec<Tick> {
     session(2 * HOUR, [3.5, 3.5, 3.0])
 }
 
+/// A session whose volume collapses after the first bucket. The forward carry
+/// can only push deferred quantity *later*, and later is where the volume is
+/// not, so both plans leave a remainder -- and, because the remainder depends on
+/// how much each plan got away in the first bucket, they leave different ones.
+/// That is the shape a breakeven rate needs: a shortfall to trade off.
+fn thin_tail() -> Vec<Tick> {
+    session(3 * HOUR, [10.0, 1.0, 0.6])
+}
+
+/// Two even buckets and a thin one, met with a cap tight enough to bind in the
+/// *even* buckets too. That is what it takes to get a genuine trade-off out of
+/// the deferral: where only the tail binds, the plan that gets more away early
+/// both misses less and pays less per unit filled, so one plan dominates and no
+/// rate is needed. Here a plan can stay under the cap early, pay less per unit
+/// for it, and miss more at the close.
+fn pinched() -> Vec<Tick> {
+    session(4 * HOUR, [1.0, 1.0, 0.02])
+}
+
 #[test]
 fn one_history_session_is_the_backtest() {
     let fc = pov_forecast(
@@ -616,4 +635,116 @@ fn a_negative_price_for_the_remainder_is_refused() {
         err,
         "shortfall_bps must be a non-negative finite number, got -1"
     );
+}
+
+#[test]
+fn the_breakeven_rate_nets_the_gain_to_zero() {
+    // The rate is a definition, not an estimate: charge the shortfall at it and
+    // the gain cancels exactly. That is what lets the engine report it without
+    // claiming to know what a missed unit is worth.
+    let plan = |rate| {
+        pov_forecast(
+            &[blended(), lumpy()],
+            &pinched(),
+            BUCKET,
+            1.0,
+            0.3,
+            10.0,
+            2.0,
+            FLAT,
+            rate,
+        )
+        .unwrap()
+    };
+    let gain = plan(NO_PENALTY);
+    let gain = &gain.capped_improvement.capped;
+    assert!(!gain.like_for_like);
+    let rate = gain
+        .breakeven_bps
+        .expect("the plans miss different quantities and one is cheaper per unit");
+    let netted = plan(Some(rate));
+    assert!(netted.capped_improvement.capped.net_bps.unwrap().abs() <= 1e-8);
+}
+
+#[test]
+fn either_side_of_the_breakeven_the_verdict_is_opposite() {
+    // Which is the point of reporting it: a desk that cannot name a price for a
+    // missed unit can still say whether its price is above or below this one,
+    // and that is the whole decision.
+    let plan = |rate| {
+        pov_forecast(
+            &[blended(), lumpy()],
+            &pinched(),
+            BUCKET,
+            1.0,
+            0.3,
+            10.0,
+            2.0,
+            FLAT,
+            rate,
+        )
+        .unwrap()
+    };
+    let base = plan(NO_PENALTY);
+    let base = &base.capped_improvement.capped;
+    let rate = base.breakeven_bps.unwrap();
+    let cheap = plan(Some(rate / 2.0));
+    let dear = plan(Some(rate * 2.0));
+    let cheap = cheap.capped_improvement.capped.net_bps.unwrap();
+    let dear = dear.capped_improvement.capped.net_bps.unwrap();
+    // Below the breakeven the netting agrees with the per-unit comparison;
+    // above it, it reverses.
+    assert_eq!(cheap > 0.0, base.improvement_bps > 0.0);
+    assert!(cheap * dear < 0.0);
+}
+
+#[test]
+fn a_like_for_like_gain_has_no_breakeven_rate() {
+    // Nothing was missed, so no rate can change the answer and there is no
+    // threshold to report. `null` here means "the question does not arise", the
+    // same way `net_bps` means "you did not answer it".
+    let fc = pov_forecast(
+        &[lumpy(), reshaped()],
+        &thin_tail(),
+        BUCKET,
+        1.0,
+        0.2,
+        10.0,
+        2.0,
+        FLAT,
+        Some(50.0),
+    )
+    .unwrap();
+    // The reshape fits the whole parent into this session whatever the plan's
+    // shape, so both plans fill it and the shortfall is zero.
+    let spread = &fc.capped_improvement.spread;
+    assert!(spread.like_for_like);
+    assert_eq!(spread.breakeven_bps, None);
+    assert_eq!(spread.net_bps, Some(spread.improvement_bps));
+}
+
+#[test]
+fn a_plan_that_is_cheaper_and_misses_less_has_no_breakeven_rate() {
+    // The other `null`: here the two figures point the same way, so one plan
+    // wins outright and no non-negative rate can reverse it. Reporting a
+    // negative "breakeven" would be inventing a rate that pays for missing the
+    // order -- exactly what `net_bps` refuses to do.
+    let fc = pov_forecast(
+        &[reshaped(), lumpy()],
+        &thin_tail(),
+        BUCKET,
+        1.0,
+        0.2,
+        10.0,
+        2.0,
+        FLAT,
+        Some(500.0),
+    )
+    .unwrap();
+    let gain = &fc.capped_improvement.capped;
+    assert!(gain.shortfall_qty < 0.0);
+    assert!(gain.improvement_bps > 0.0);
+    assert_eq!(gain.breakeven_bps, None);
+    // ...and no rate, however large, takes the verdict away from it.
+    assert!(gain.net_bps.unwrap() > gain.improvement_bps);
 }
