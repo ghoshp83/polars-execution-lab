@@ -48,6 +48,11 @@ NEXT_SAMPLE = "data/sample_ticks_next.ndjson"
 # A third session whose shape sits between the first two: the one a forecast
 # pooled from both has to meet.
 THIRD_SAMPLE = "data/sample_ticks_third.ndjson"
+# A fourth session whose volume collapses after the first second. Under a cap the
+# forward carry can only push quantity into the two thin buckets, so the deferral
+# leaves a remainder and the two plans leave *different* remainders -- the
+# bundled capture the shortfall fields need to be visible outside the tests.
+THIN_SAMPLE = "data/sample_ticks_thin.ndjson"
 QUOTE_SAMPLE = "data/sample_quotes.ndjson"
 BOOK_SAMPLE = "data/sample_book.ndjson"
 IMPACT_SAMPLE = "data/sample_impact.ndjson"
@@ -751,6 +756,69 @@ def test_rust_and_python_priced_shortfalls_are_identical():
     assert rust["shortfall_bps"] == 40.0
     for execution in ("capped", "spread"):
         assert rust["capped_improvement"][execution]["net_bps"] is not None
+
+
+def test_rust_and_python_thin_tail_shortfalls_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The twentieth equivalence test, and the first on a bundled capture that
+    # actually leaves a remainder: every other session here has the volume to
+    # absorb the parent, so `shortfall_qty` is zero and the netting fields are
+    # exercised only by the unit tests. Here the deferral misses quantity and the
+    # two plans miss different quantities, so `breakeven_bps` -- a division the
+    # engines must round identically -- has something to divide.
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-forecast",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE}",
+            "--input",
+            THIN_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap",
+            str(POV_PLAN["cap"]),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = pov_forecast(
+        [read_ticks(SAMPLE), read_ticks(NEXT_SAMPLE)],
+        read_ticks(THIN_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        POV_PLAN["cap"],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+
+    assert rust == py
+
+    # The capture must do the thing it was bundled for, or this is the
+    # like-for-like case under a longer name.
+    deferred = rust["capped_improvement"]["capped"]
+    assert rust["forecast_capped"]["capped"]["unfilled_qty"] > 0.0
+    assert rust["naive_capped"]["capped"]["unfilled_qty"] > 0.0
+    assert deferred["shortfall_qty"] != 0.0
+    assert not deferred["like_for_like"]
+    # No rate was supplied, so nothing is netted -- but the threshold a rate
+    # would have to clear is reported anyway.
+    assert deferred["net_bps"] is None
+    # The reshape still fills the whole parent, so its arm has no trade-off.
+    assert rust["capped_improvement"]["spread"]["like_for_like"]
+    assert rust["capped_improvement"]["spread"]["breakeven_bps"] is None
 
 
 def test_rust_and_python_streamed_sessions_are_identical():
