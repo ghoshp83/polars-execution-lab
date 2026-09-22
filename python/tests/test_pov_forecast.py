@@ -53,6 +53,20 @@ def _blended() -> pl.DataFrame:
     return _session(2 * HOUR, [3.5, 3.5, 3.0])
 
 
+def _thin_tail() -> pl.DataFrame:
+    """A session whose volume collapses after the first bucket, so the forward
+    carry has nowhere later to put what the cap deferred and the two plans miss
+    different quantities."""
+    return _session(3 * HOUR, [10.0, 1.0, 0.6])
+
+
+def _pinched() -> pl.DataFrame:
+    """Two even buckets and a thin one, met with a cap tight enough to bind in
+    the even buckets too -- what it takes to get a genuine trade-off out of the
+    deferral rather than one plan dominating."""
+    return _session(4 * HOUR, [1.0, 1.0, 0.02])
+
+
 def test_one_history_session_is_the_backtest():
     fc = pov_forecast([_lumpy()], _reshaped(), BUCKET, 1.0, 1.0, 10.0, 2.0)
     bt = pov_backtest(_lumpy(), _reshaped(), BUCKET, 1.0, 1.0, 10.0, 2.0)
@@ -319,3 +333,55 @@ def test_a_negative_price_for_the_remainder_is_refused():
         ValueError, match="shortfall_bps must be a non-negative finite number, got -1"
     ):
         pov_forecast([_blended(), _lumpy()], _reshaped(), BUCKET, 1.0, 0.2, 10.0, 2.0, 0.0, -1.0)
+
+
+def _pinched_plan(rate: float | None = None) -> dict:
+    return pov_forecast([_blended(), _lumpy()], _pinched(), BUCKET, 1.0, 0.3, 10.0, 2.0, 0.0, rate)
+
+
+def test_the_breakeven_rate_nets_the_gain_to_zero():
+    # A definition, not an estimate: charge the shortfall at this rate and the
+    # gain cancels exactly. That is what lets the engine report it without
+    # claiming to know what a missed unit is worth.
+    gain = _pinched_plan()["capped_improvement"]["capped"]
+    assert not gain["like_for_like"]
+    rate = gain["breakeven_bps"]
+    assert rate is not None
+    assert abs(_pinched_plan(rate)["capped_improvement"]["capped"]["net_bps"]) <= 1e-8
+
+
+def test_either_side_of_the_breakeven_the_verdict_is_opposite():
+    # The point of reporting it: a desk that cannot name a price for a missed
+    # unit can still say whether its price is above or below this one.
+    base = _pinched_plan()["capped_improvement"]["capped"]
+    rate = base["breakeven_bps"]
+    cheap = _pinched_plan(rate / 2.0)["capped_improvement"]["capped"]["net_bps"]
+    dear = _pinched_plan(rate * 2.0)["capped_improvement"]["capped"]["net_bps"]
+    assert (cheap > 0.0) == (base["improvement_bps"] > 0.0)
+    assert cheap * dear < 0.0
+
+
+def test_a_like_for_like_gain_has_no_breakeven_rate():
+    # Nothing was missed, so no rate can change the answer and there is no
+    # threshold to report. The reshape fits the whole parent into this session
+    # whatever shape the plan has.
+    spread = pov_forecast(
+        [_lumpy(), _reshaped()], _thin_tail(), BUCKET, 1.0, 0.2, 10.0, 2.0, 0.0, 50.0
+    )["capped_improvement"]["spread"]
+    assert spread["like_for_like"]
+    assert spread["breakeven_bps"] is None
+    assert spread["net_bps"] == spread["improvement_bps"]
+
+
+def test_a_plan_that_is_cheaper_and_misses_less_has_no_breakeven_rate():
+    # The other ``None``: the two figures point the same way, so one plan wins
+    # outright and no non-negative rate reverses it. A negative "breakeven"
+    # would be a rate that pays for missing the order.
+    fc = pov_forecast(
+        [_reshaped(), _lumpy()], _thin_tail(), BUCKET, 1.0, 0.2, 10.0, 2.0, 0.0, 500.0
+    )
+    gain = fc["capped_improvement"]["capped"]
+    assert gain["shortfall_qty"] < 0.0
+    assert gain["improvement_bps"] > 0.0
+    assert gain["breakeven_bps"] is None
+    assert gain["net_bps"] > gain["improvement_bps"]
