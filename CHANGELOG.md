@@ -4,6 +4,43 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.30.0] - 2026-09-22
+
+### Added
+- **`breakeven_bps`: the rate the engine can derive, instead of the one it
+  cannot.** v0.29.0 could net a gain against a shortfall only when the caller
+  supplied a price for the missed quantity, and nothing derives that price — so
+  with no rate, nothing ranked the two plans. Each `CappedGain` now also reports
+  `improvement_bps * parent_qty / shortfall_qty`: the rate at which the two
+  cancel. It is arithmetic on figures already reported, not a judgement about the
+  order, and it turns an unanswerable question ("what is a missed unit worth?")
+  into one a desk can answer about its own mandate ("is it worth more or less
+  than this?"). `null` when nothing was missed, and `null` when one plan is both
+  cheaper per unit filled and missed less, since no non-negative rate reverses
+  that.
+- **`data/sample_ticks_thin.ndjson`: the first bundled capture that leaves a
+  remainder.** Every other sample session has the volume to absorb the parent, so
+  `shortfall_qty` was zero throughout and the netting fields were exercised only
+  by tests — a gap v0.28.0 opened and v0.29.0 confirmed. This session's volume
+  collapses after the first second, so the forward carry has nowhere later to put
+  what the cap deferred. At `--cap 0.25` against the pooled history the pooled
+  plan is **0.40579986 bps cheaper per unit filled and misses 0.02276431 more**
+  of a 0.2 parent; the two tie at **3.56522873 bps**. Under the reshape the
+  comparison is exactly flat: water-filling pins both thin buckets at the cap
+  whatever shape the plan had, so the plans coincide and `improvement_bps` is 0.
+- Four tests each side and a twentieth cross-language equivalence test, the first
+  run on a capture where the two engines have a non-zero shortfall to divide.
+
+### Changed
+- The `pov-forecast` limitation in the README no longer says the bundled history
+  cannot exercise the shortfall — it now names the capture that does, and reports
+  the measured numbers above.
+
+### Notes
+- **Polars 2.0 is still not adoptable** and this release does not change that:
+  the Rust crate remains the binding constraint. The weekly `upstream` tripwire
+  is live and will go red the week both crates.io and PyPI ship a stable 2.0.
+
 ## [0.29.0] - 2026-09-21
 
 ### Added
