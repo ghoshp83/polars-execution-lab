@@ -449,6 +449,12 @@ fn capped_execution(
 /// cost of not filling an order is a property of the order and the mandate
 /// behind it, not of any session this engine has seen. Left unsupplied,
 /// `net_bps` is `null` and the two numbers stay apart.
+///
+/// A desk that has *no* rate is not left with nothing, though. `breakeven_bps`
+/// is the rate at which the two cancel, and it is derived, not assumed: it says
+/// what a missed unit would have to be worth for the verdict to flip, which is a
+/// question a desk can answer about its own mandate even when it cannot name a
+/// price outright.
 #[derive(Debug, Serialize)]
 pub struct CappedGain {
     /// `naive.filled_impact_bps - forecast.filled_impact_bps`: what pooling
@@ -468,6 +474,18 @@ pub struct CappedGain {
     /// not convert and the engine has nothing to net. Equal to
     /// `improvement_bps` whenever `like_for_like`.
     pub net_bps: Option<f64>,
+    /// The shortfall price at which `net_bps` would be exactly zero:
+    /// `improvement_bps * parent_qty / shortfall_qty`. This is the one thing the
+    /// engine *can* say about the trade-off without inventing a rate, because it
+    /// is arithmetic on the two figures already reported rather than a judgement
+    /// about the order: the plan that is cheaper per unit filled is the better
+    /// plan only while a missed unit is worth less than this.
+    ///
+    /// `null` when the question does not arise — either `shortfall_qty` is zero,
+    /// or the implied rate is not positive, which means the plan that is cheaper
+    /// per unit filled is also the one that missed less and no non-negative rate
+    /// can reverse that.
+    pub breakeven_bps: Option<f64>,
 }
 
 /// [`CappedGain`] under each of the two capped executions, paired the way
@@ -497,6 +515,25 @@ fn capped_gain(
         shortfall_qty: shortfall,
         like_for_like: shortfall == 0.0,
         net_bps: shortfall_bps.map(|rate| r8(improvement - shortfall / parent_qty * rate)),
+        breakeven_bps: breakeven(improvement, shortfall, parent_qty),
+    }
+}
+
+/// The rate at which the gain and the shortfall cancel, or `None` when no
+/// non-negative rate can make them cancel. Solving
+/// `improvement - shortfall / parent_qty * rate = 0` gives
+/// `improvement * parent_qty / shortfall`; a rate that is not positive means the
+/// two figures point the same way — one plan is both cheaper per unit filled and
+/// missed less — so there is nothing for a rate to trade off.
+fn breakeven(improvement: f64, shortfall: f64, parent_qty: f64) -> Option<f64> {
+    if shortfall == 0.0 {
+        return None;
+    }
+    let rate = r8(improvement * parent_qty / shortfall);
+    if rate > 0.0 {
+        Some(rate)
+    } else {
+        None
     }
 }
 
@@ -582,7 +619,9 @@ pub struct PlanScore {
 /// single number: the price, in basis points of the parent, of missing one unit
 /// of it. Supply it and each gain also reports `net_bps`; leave it out and the
 /// field is `null`. The engine cannot supply it, because nothing in a volume
-/// capture says what the unfilled remainder costs.
+/// capture says what the unfilled remainder costs. What it can supply is
+/// `breakeven_bps`: the rate at which the gain and the shortfall cancel, so a
+/// caller with no rate still gets the threshold its own would have to clear.
 ///
 /// `improvement_bps` is `naive.impact_bps - forecast.impact_bps`. Unlike
 /// `forecast_cost_bps` it has no sign guarantee: when the session repeats the
