@@ -204,6 +204,14 @@ uv run xexeclab pov-forecast --history data/sample_ticks.ndjson,data/sample_tick
                              --input data/sample_ticks_third.ndjson --shortfall-bps 40 \
                              --parent-qty 0.2 --cap 0.14 --coef-bps 25 --perm-coef-bps 5
 
+# ...and, if it cannot, read `breakeven_bps` instead: the rate at which the gain
+# and the missed quantity cancel. This session's volume collapses after the first
+# second, so the cap really does leave a remainder -- the pooled plan is 0.406 bps
+# cheaper per unit filled and misses 0.0228 more, and the two tie at 3.57 bps
+uv run xexeclab pov-forecast --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
+                             --input data/sample_ticks_thin.ndjson \
+                             --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
+
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
 uv run xexeclab stream  --input data/sample_ticks.ndjson --chunk-rows 4
@@ -447,10 +455,25 @@ This is a **market-data and execution-analytics** project, not a trading system.
   `net_bps` is `null`. A rate of zero is a different statement from no rate at
   all, and the report distinguishes them. This makes the two capped executions
   comparable *under an assumption you supplied*, which is the only basis on which
-  they can be compared at all. **On the bundled history the rate changes
-  nothing**: at every cap the two plans miss the same quantity, so `shortfall_qty`
-  is zero, `like_for_like` is true and `net_bps` equals `improvement_bps`. The
-  netting is exercised by the test suite, not by the sample captures.
+  they can be compared at all. A desk that cannot name a rate is not left with
+  nothing, though: `breakeven_bps` is the rate at which the gain and the
+  shortfall cancel, and it is **derived, not assumed** — it says what a missed
+  unit would have to be worth for the verdict to flip, which is a question a desk
+  can answer about its own mandate even when it cannot price the remainder
+  outright. It is `null` when the question does not arise: nothing was missed, or
+  one plan is both cheaper per unit filled and missed less, so no non-negative
+  rate could reverse it.
+  **`data/sample_ticks_thin.ndjson` is the session that makes this visible.** Its
+  volume collapses after the first second, so the deferral has nowhere later to
+  put what the cap held back. Against the pooled history at `--cap 0.25` the
+  pooled plan comes out **0.406 bps cheaper per unit filled while missing 0.0228
+  more** of a 0.2 parent, and `breakeven_bps` is **3.57**: price a missed unit
+  below that and the pooled plan wins, above it the naive one does. Under the
+  reshape the same comparison is exactly flat — water-filling pins both thin
+  buckets at the cap whatever shape the plan had, so the two plans become the
+  same plan and `improvement_bps` is zero. On the other bundled sessions the cap
+  never binds hard enough to leave a remainder at all, and the fields say so
+  rather than going quiet.
   Every history session must trade in the same buckets as the execution session,
   so sessions with a gap are refused rather than filled in.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
