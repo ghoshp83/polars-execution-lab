@@ -1192,7 +1192,8 @@ def _capped_gain(
     ``shortfall_bps`` is the caller's price for missing one unit of the parent.
     Given one, ``net_bps`` charges the shortfall at it; without one the field is
     ``None``, because the engine has no exchange rate of its own between basis
-    points and quantity. Mirrors the Rust ``capped_gain``."""
+    points and quantity. ``breakeven_bps`` is the rate at which the two would
+    cancel, which the engine *can* derive. Mirrors the Rust ``capped_gain``."""
     improvement = _r8(naive["filled_impact_bps"] - forecast["filled_impact_bps"])
     shortfall = _r8(forecast["unfilled_qty"] - naive["unfilled_qty"])
     net = None
@@ -1203,7 +1204,19 @@ def _capped_gain(
         "shortfall_qty": shortfall,
         "like_for_like": shortfall == 0.0,
         "net_bps": net,
+        "breakeven_bps": _breakeven(improvement, shortfall, parent_qty),
     }
+
+
+def _breakeven(improvement: float, shortfall: float, parent_qty: float) -> float | None:
+    """The rate at which the gain and the shortfall cancel, or ``None`` when no
+    non-negative rate can make them cancel -- one plan is then both cheaper per
+    unit filled and missed less, so there is nothing to trade off. Mirrors the
+    Rust ``breakeven``."""
+    if shortfall == 0.0:
+        return None
+    rate = _r8(improvement * parent_qty / shortfall)
+    return rate if rate > 0.0 else None
 
 
 def _capped_improvement(
@@ -1263,7 +1276,9 @@ def pov_forecast(
     the price, in basis points of the parent, of missing one unit of it. Supply
     it and each gain also reports ``net_bps``; leave it out and the field is
     ``None``. The engine cannot supply it -- nothing in a volume capture says
-    what the unfilled remainder costs.
+    what the unfilled remainder costs. What it can supply is ``breakeven_bps``:
+    the rate at which the gain and the shortfall cancel, so a caller with no
+    rate still gets the threshold its own would have to clear.
 
     ``improvement_bps`` (``naive - forecast`` impact) has no sign guarantee:
     when the session repeats the last one, pooling only adds error. The shares
