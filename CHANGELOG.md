@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.31.0] - 2026-09-23
+
+### Added
+- **`pov-sweep`: the breakeven rate as a shape, not a number.** v0.30.0 derived
+  `breakeven_bps` — what a missed unit would have to be worth for the verdict to
+  flip — but reported it at the one cap the run was given. The cap is a desk's
+  own risk parameter, not a property of the market, so a threshold quoted at a
+  single cap is quoted at an arbitrary point: two desks asking the same question
+  of the same session get answers that do not compare. The new command re-runs
+  `pov-forecast` across a grid of caps and lines the answers up, exactly as
+  `sensitivity` does for the impact coefficient. On the bundled thin capture at
+  `--cap-grid 0.05,0.1,0.15,0.2,0.25` the rate runs **7.72908423 bps at a 10% cap
+  down to 3.56522873 at 25%** — the v0.30.0 figure turns out to be the loosest
+  point of the ladder, and a desk reading only that understates its own bar by
+  more than a factor of two. New module `src/capsweep.rs` and `cap_sweep` in
+  `python/xexeclab/engine.py`, wired to both CLIs as `pov-sweep --cap-grid`.
+  It deliberately accepts no `--shortfall-bps`: a caller who has a rate wants
+  `net_bps` at their own cap, not a ladder.
+- **The dominance finding, promoted from a comment to a reported field.**
+  v0.30.0 recorded, in prose, that under the forward carry a plan which gets more
+  away early both misses less *and* pays less per unit filled — so where only a
+  thin tail binds, one plan dominates outright and no non-negative rate can
+  reverse it. That is now `dominated_points` on the sweep, beside
+  `like_for_like_points` and `traded_off_points`. The three counts **partition**
+  the grid, which is a property a test pins rather than a claim the docs make:
+  a reader can see at a glance how much of a ladder a rate actually decides.
+  `like_for_like_from_cap` reports the threshold above which the two plans stop
+  differing at all, scanned from the top of the grid down so it is a threshold
+  and not the first of several disconnected stretches.
+- Eight tests each side, and a twenty-first cross-language equivalence test. The
+  sweep is the first report whose shape depends on a comparison *across* runs
+  rather than one run's arithmetic, so the equivalence test pins the three counts
+  and not only the figures beneath them: a rounding difference too small to move
+  any single number could still move a point from one count to another.
+
+### Changed
+- README documents `pov-sweep` with a fourth usage block and extends the
+  `pov-forecast` limitation to say plainly that the v0.30.0 threshold was quoted
+  at one arbitrary cap.
+
+### Notes
+- Polars 2.0 is still not adoptable and this release does not change that. Both
+  tripwires were re-measured on 2026-09-23: the Rust crate's newest stable is
+  0.55.2 and the Python package's is 1.44.2, neither 2.0-ready. The weekly
+  advisory job remains the thing that will say when it changes.
+
 ## [0.30.0] - 2026-09-22
 
 ### Added
