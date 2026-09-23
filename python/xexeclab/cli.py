@@ -11,6 +11,7 @@ from .engine import (
     bars,
     calibrate_impact,
     calibrate_impact_robust,
+    cap_sweep,
     counterfactual,
     depth_metrics,
     impact_curve,
@@ -190,6 +191,24 @@ def cmd_pov_forecast(a: argparse.Namespace) -> None:
                 a.perm_coef_bps,
                 a.half_life,
                 a.shortfall_bps,
+            )
+        )
+    )
+
+
+def cmd_pov_sweep(a: argparse.Namespace) -> None:
+    grid = [float(s) for s in a.cap_grid.split(",")]
+    print(
+        json.dumps(
+            cap_sweep(
+                [read_ticks(p.strip()) for p in a.history.split(",")],
+                read_ticks(a.input),
+                a.bucket_ms * 1_000_000,
+                a.parent_qty,
+                grid,
+                a.coef_bps,
+                a.perm_coef_bps,
+                a.half_life,
             )
         )
     )
@@ -597,6 +616,42 @@ def main(argv: list[str] | None = None) -> None:
         help="cost in bps of missing one unit of the parent (omit to leave net_bps null)",
     )
     pfc.set_defaults(fn=cmd_pov_forecast)
+
+    psp = sub.add_parser(
+        "pov-sweep",
+        help="re-run pov-forecast across a grid of caps and line up the breakeven rate",
+    )
+    psp.add_argument(
+        "--history",
+        required=True,
+        help="comma-separated earlier captures, oldest first; the last is the naive forecast",
+    )
+    psp.add_argument("--input", required=True, help="the session the plans are executed against")
+    psp.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
+    psp.add_argument(
+        "--parent-qty", type=float, default=1.0, help="parent order size in base units"
+    )
+    psp.add_argument(
+        "--cap-grid",
+        default="0.1,0.2,0.3",
+        help="comma-separated, strictly increasing grid of caps, each in (0, 1]",
+    )
+    psp.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    psp.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    psp.add_argument(
+        "--half-life",
+        type=float,
+        default=0.0,
+        help="sessions over which a session's weight halves (0 = pool them equally)",
+    )
+    psp.set_defaults(fn=cmd_pov_sweep)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"
