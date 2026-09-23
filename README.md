@@ -212,6 +212,14 @@ uv run xexeclab pov-forecast --history data/sample_ticks.ndjson,data/sample_tick
                              --input data/sample_ticks_thin.ndjson \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
 
+# ...and read that rate as a shape rather than a number: the cap is the desk's own
+# parameter, so a threshold quoted at one cap is quoted at an arbitrary point.
+# Swept across the grid the bar runs 3.57 bps at a 25% cap up to 7.73 bps at 10% --
+# a desk that reads only the loosest point understates its own threshold twofold
+uv run xexeclab pov-sweep --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
+                          --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+                          --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
+
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
 uv run xexeclab stream  --input data/sample_ticks.ndjson --chunk-rows 4
@@ -474,6 +482,18 @@ This is a **market-data and execution-analytics** project, not a trading system.
   same plan and `improvement_bps` is zero. On the other bundled sessions the cap
   never binds hard enough to leave a remainder at all, and the fields say so
   rather than going quiet.
+  **That 3.57 is quoted at one cap, and the cap is yours, not the market's.**
+  `xexeclab pov-sweep` re-runs the whole comparison across a grid of caps so the
+  threshold can be read as a shape: on the same session it runs from **3.57 bps at
+  a 25% cap up to 7.73 at 10%**, so a desk that reads only the loosest point
+  understates its own bar by more than a factor of two. The sweep takes no
+  `--shortfall-bps` — a desk that *has* a rate wants `net_bps` at its own cap, not
+  a ladder. It also counts what it could not price: `dominated_points` is the caps
+  at which a shortfall exists and yet **no** non-negative rate reverses the
+  verdict, because under the forward carry a plan that gets more away early both
+  misses less *and* pays less per unit filled. That is a property of the carry,
+  not a gap in the report, and the three counts partition the grid so a reader can
+  see at a glance how much of it a rate actually decides.
   Every history session must trade in the same buckets as the execution session,
   so sessions with a gap are refused rather than filled in.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
