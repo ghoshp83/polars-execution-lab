@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use xexec::calibrate::{calibrate_impact, calibrate_impact_robust};
+use xexec::capsweep::cap_sweep;
 use xexec::counterfactual::counterfactual;
 use xexec::curve::sweep_curve;
 use xexec::depth::{depth_metrics, queue_metrics};
@@ -24,7 +25,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--shortfall-bps N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|pov-sweep|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--shortfall-bps N] [--cap-grid N,N,N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -363,6 +364,33 @@ fn main() -> Result<()> {
                 arg_f64(&args, "--perm-coef-bps", 0.0)?,
                 arg_f64(&args, "--half-life", 0.0)?,
                 arg_opt_f64(&args, "--shortfall-bps")?,
+            )?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        // `pov-sweep` asks the `pov-forecast` question at a ladder of caps
+        // instead of one, so the breakeven rate can be read as a shape. It
+        // takes no `--shortfall-bps`: a caller who has a rate wants `net_bps`
+        // at their own cap, not a sweep.
+        "pov-sweep" => {
+            let history = arg_value(&args, "--history")
+                .ok_or_else(|| anyhow!("--history required\n{USAGE}"))?
+                .split(',')
+                .map(|p| read_ticks(p.trim()))
+                .collect::<Result<Vec<_>>>()?;
+            let cap_grid: Vec<f64> = arg_value(&args, "--cap-grid")
+                .unwrap_or_else(|| "0.1,0.2,0.3".to_string())
+                .split(',')
+                .map(|s| s.trim().parse::<f64>())
+                .collect::<Result<_, _>>()?;
+            let report = cap_sweep(
+                &history,
+                &ticks,
+                bucket_ns,
+                arg_f64(&args, "--parent-qty", 1.0)?,
+                &cap_grid,
+                arg_f64(&args, "--coef-bps", 10.0)?,
+                arg_f64(&args, "--perm-coef-bps", 0.0)?,
+                arg_f64(&args, "--half-life", 0.0)?,
             )?;
             println!("{}", serde_json::to_string(&report)?);
         }
