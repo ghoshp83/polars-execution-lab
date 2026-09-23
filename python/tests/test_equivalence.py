@@ -14,6 +14,7 @@ import pytest
 from xexeclab.engine import (
     calibrate_impact,
     calibrate_impact_robust,
+    cap_sweep,
     counterfactual,
     depth_metrics,
     impact_curve,
@@ -965,3 +966,59 @@ def test_rust_and_python_robust_calibration_fits_are_identical():
         check=True,
     )
     assert json.loads(ols.stdout)["coef_bps"] != rust["coef_bps"]
+
+
+def test_rust_and_python_cap_sweeps_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The twenty-first equivalence test. The sweep is the first report whose
+    # shape depends on a *comparison across runs* rather than on one run's
+    # arithmetic: `like_for_like_from_cap` is found by scanning the grid, and the
+    # three counts are decided by which branch each point fell down. A rounding
+    # difference too small to change any single number could still move a point
+    # from one count to another, so the counts are worth pinning across the two
+    # engines and not just the figures under them.
+    grid = "0.05,0.1,0.15,0.2,0.25"
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-sweep",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE}",
+            "--input",
+            THIN_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap-grid",
+            grid,
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = cap_sweep(
+        [read_ticks(SAMPLE), read_ticks(NEXT_SAMPLE)],
+        read_ticks(THIN_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        [float(v) for v in grid.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+
+    assert rust == py
+    # And the sweep is actually exercising the branches it reports, rather than
+    # agreeing trivially on a grid where nothing binds.
+    assert len(rust["points"]) == 5
+    assert rust["like_for_like_points"] + rust["dominated_points"] + rust["traded_off_points"] == 5
+    assert any(not p["like_for_like"] for p in rust["points"])
