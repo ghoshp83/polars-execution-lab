@@ -1378,6 +1378,147 @@ def pov_forecast(
     }
 
 
+def cap_sweep(
+    history: list[pl.DataFrame],
+    exec_df: pl.DataFrame,
+    bucket_ns: int,
+    parent_qty: float,
+    cap_grid: list[float],
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+    half_life: float = 0.0,
+) -> dict:
+    """The shape of the breakeven rate, not one number.
+
+    ``pov_forecast`` reports ``breakeven_bps`` -- what a missed unit would have
+    to be worth for the verdict to flip -- but only at the one cap it was run
+    with. The cap is a desk's own risk parameter, not a property of the market,
+    so a threshold quoted at a single cap is quoted at an arbitrary point: a desk
+    running at 15% of volume and one running at 30% ask the same question of the
+    same session and get answers that are not comparable. Re-running across a
+    grid of caps is what makes the number readable, exactly as ``sensitivity``
+    does for the impact coefficient.
+
+    Two things fall out that a single run cannot show.
+
+    1. **Where the cap stops mattering.** ``like_for_like_from_cap`` is the
+       smallest grid cap at or above which every point leaves the same quantity
+       unfilled. Above it the pooled and naive plans are directly comparable and
+       ``improvement_bps`` is the whole story; below it they are not.
+    2. **Where there is no trade-off to price at all.** ``dominated_points``
+       counts the caps at which a shortfall exists and yet no non-negative rate
+       reverses the verdict. That is a property of the forward carry, not a
+       degenerate case: a plan that gets more away early both misses less *and*
+       pays less per unit filled, because the extra fill lands in the
+       low-participation slots and raises their weight in the average. Where
+       only a thin tail binds, one plan dominates outright and a rate has
+       nothing to trade off; a genuine trade-off needs the cap to bind in the
+       *even* buckets too, which is what the low end of a grid reaches.
+
+    The three counts partition the grid: every point is ``like_for_like``,
+    ``dominated``, or has a ``breakeven_bps``, and never two at once.
+
+    There is deliberately no ``shortfall_bps``. The sweep exists for the caller
+    who has no rate -- one who had a rate would read ``net_bps`` at their own cap
+    and be done -- so accepting one would answer a question nobody holding this
+    report is asking.
+
+    Every point is the ``capped`` (forward-carry) arm. The ``spread`` arm fills
+    the whole parent whenever ``parent_qty <= cap * exec_volume`` whatever shape
+    the forecast has, so under the reshape the shortfall is a property of the
+    session and not of the forecast.
+
+    Mirrors ``cap_sweep`` in ``src/capsweep.rs`` operation for operation.
+    """
+    # One point is not a sweep, and an unsorted grid would make
+    # ``like_for_like_from_cap`` meaningless -- it reads the grid as an ordering.
+    if len(cap_grid) < 2:
+        raise ValueError(f"cap_grid needs at least 2 points, got {len(cap_grid)}")
+    for v in cap_grid:
+        if not math.isfinite(v) or v <= 0.0 or v > 1.0:
+            raise ValueError(f"cap_grid values must be in (0, 1], got {v}")
+    for a, b in zip(cap_grid, cap_grid[1:], strict=False):
+        if b <= a:
+            raise ValueError(f"cap_grid must be strictly increasing, got {a} then {b}")
+
+    points: list[dict] = []
+    product = ""
+    buckets = 0
+    sessions = 0
+    for c in cap_grid:
+        # No ``shortfall_bps``: the sweep is for the caller who has no rate.
+        r = pov_forecast(
+            history,
+            exec_df,
+            bucket_ns,
+            parent_qty,
+            c,
+            coef_bps,
+            perm_coef_bps,
+            half_life,
+            None,
+        )
+        gain = r["capped_improvement"]["capped"]
+        product = r["product"]
+        buckets = r["buckets"]
+        sessions = r["sessions"]
+        points.append(
+            {
+                "cap": _r8(c),
+                "forecast_unfilled_qty": r["forecast_capped"]["capped"]["unfilled_qty"],
+                "naive_unfilled_qty": r["naive_capped"]["capped"]["unfilled_qty"],
+                "improvement_bps": gain["improvement_bps"],
+                "shortfall_qty": gain["shortfall_qty"],
+                "like_for_like": gain["like_for_like"],
+                "breakeven_bps": gain["breakeven_bps"],
+                "dominated": not gain["like_for_like"] and gain["breakeven_bps"] is None,
+            }
+        )
+
+    like_for_like_points = sum(1 for p in points if p["like_for_like"])
+    dominated_points = sum(1 for p in points if p["dominated"])
+    traded_off_points = sum(1 for p in points if p["breakeven_bps"] is not None)
+
+    # The smallest cap from which the tail of the grid is like-for-like all the
+    # way up. Scanning backwards is what makes it a threshold rather than the
+    # first of several disconnected stretches.
+    like_for_like_from_cap: float | None = None
+    for p in reversed(points):
+        if not p["like_for_like"]:
+            break
+        like_for_like_from_cap = p["cap"]
+
+    rates = [p["breakeven_bps"] for p in points if p["breakeven_bps"] is not None]
+    if rates:
+        agg = pl.DataFrame({"breakeven_bps": rates}).select(
+            pl.col("breakeven_bps").min().alias("lo"),
+            pl.col("breakeven_bps").max().alias("hi"),
+        )
+        breakeven_min: float | None = _r8(float(agg["lo"][0]))
+        breakeven_max: float | None = _r8(float(agg["hi"][0]))
+    else:
+        breakeven_min = None
+        breakeven_max = None
+
+    return {
+        "product": product,
+        "bucket_ns": bucket_ns,
+        "buckets": buckets,
+        "sessions": sessions,
+        "half_life": _r8(half_life),
+        "parent_qty": _r8(parent_qty),
+        "coef_bps": _r8(coef_bps),
+        "perm_coef_bps": _r8(perm_coef_bps),
+        "points": points,
+        "like_for_like_points": like_for_like_points,
+        "dominated_points": dominated_points,
+        "traded_off_points": traded_off_points,
+        "like_for_like_from_cap": like_for_like_from_cap,
+        "breakeven_min_bps": breakeven_min,
+        "breakeven_max_bps": breakeven_max,
+    }
+
+
 def _pooling_weights(sessions: int, half_life: float) -> list[float]:
     """The weight each history session carries, oldest first, summing to one.
 
