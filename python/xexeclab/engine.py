@@ -1519,6 +1519,146 @@ def cap_sweep(
     }
 
 
+def hl_sweep(
+    history: list[pl.DataFrame],
+    exec_df: pl.DataFrame,
+    bucket_ns: int,
+    parent_qty: float,
+    cap: float,
+    half_life_grid: list[float],
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """Is the gain from pooling a property of the sessions, or of a number I picked?
+
+    ``cap_sweep`` sweeps the cap, which is a parameter the desk *owns*: a desk
+    knows it runs at 15% of volume, it just has no way to compare that answer
+    with another desk's. ``half_life`` is not like that. Nobody knows how fast a
+    market forgets its own volume profile, nothing in this repo fits it, and it
+    is passed in because it has to be passed in. A verdict quoted at one
+    half-life is therefore quoted at a guess, and the only honest thing to do
+    with a guess is to show what happens when it is wrong.
+
+    The grid runs between two limits the report names rather than implies.
+
+    1. **A short half-life is the naive plan.** As ``half_life`` falls the weight
+       collapses onto the most recent session, ``newest_weight`` goes to one, the
+       pooled forecast becomes the plan it is being compared against, and
+       ``improvement_bps`` goes to zero. A sweep whose left-hand end is not near
+       zero has not been run short enough to see its own floor.
+    2. **A long half-life is the flat pool.** As ``half_life`` grows the weights
+       even out and the forecast converges on the equal-weight pooling that
+       ``half_life = 0`` computes directly. ``flat_improvement_bps`` is that
+       limit, run once and reported beside the grid so the reader can see which
+       end of it the grid is approaching.
+
+    Between those limits the number that matters is ``sign_stable``: whether
+    pooling was worth something at *every* half-life on the grid, or whether the
+    grid holds both a half-life at which pooling paid and one at which it cost.
+    A ``False`` there is not a defect in the sweep -- it is the finding. It says
+    the sign of the headline ``improvement_bps`` was decided by the guess and not
+    by the sessions, and a desk that read one run would have had no way to know.
+    ``improvement_span_bps`` puts a size on it: the width of the range a caller
+    would have landed anywhere inside, purely by choosing differently.
+
+    Like ``cap_sweep`` this takes no ``shortfall_bps``, and every point is the
+    ``capped`` (forward-carry) arm -- under the ``spread`` reshape the shortfall
+    is a property of the session rather than of the forecast, so it would not
+    respond to the parameter being swept.
+
+    Mirrors ``hl_sweep`` in ``src/hlsweep.rs`` operation for operation.
+    """
+    # One point is not a sweep, and the grid is read as an ordering: the report
+    # describes it as running from the naive end to the flat end.
+    if len(half_life_grid) < 2:
+        raise ValueError(f"half_life_grid needs at least 2 points, got {len(half_life_grid)}")
+    for v in half_life_grid:
+        # Zero is rejected rather than accepted as "no decay". ``pov_forecast``
+        # reads 0 as the equal-weight pool, which is the limit the *long* end of
+        # this grid approaches -- so admitting it would put the grid's right-hand
+        # limit at its left-hand end and invert the ordering the rest of the
+        # report depends on. It is reported as ``flat_improvement_bps`` instead.
+        if not math.isfinite(v) or v <= 0.0:
+            raise ValueError(
+                f"half_life_grid values must be positive and finite, got {v} "
+                "(0 means no decay and is reported as flat_improvement_bps)"
+            )
+    for a, b in zip(half_life_grid, half_life_grid[1:], strict=False):
+        if b <= a:
+            raise ValueError(f"half_life_grid must be strictly increasing, got {a} then {b}")
+
+    def run(hl: float) -> dict:
+        # No ``shortfall_bps``: the sweep is for the caller who has no rate.
+        return pov_forecast(
+            history, exec_df, bucket_ns, parent_qty, cap, coef_bps, perm_coef_bps, hl, None
+        )
+
+    points: list[dict] = []
+    product = ""
+    buckets = 0
+    sessions = 0
+    for hl in half_life_grid:
+        r = run(hl)
+        gain = r["capped_improvement"]["capped"]
+        product = r["product"]
+        buckets = r["buckets"]
+        sessions = r["sessions"]
+        points.append(
+            {
+                "half_life": _r8(hl),
+                "newest_weight": _r8(r["weights"][-1] if r["weights"] else 0.0),
+                "improvement_bps": gain["improvement_bps"],
+                "shortfall_qty": gain["shortfall_qty"],
+                "like_for_like": gain["like_for_like"],
+                "breakeven_bps": gain["breakeven_bps"],
+                "dominated": not gain["like_for_like"] and gain["breakeven_bps"] is None,
+            }
+        )
+
+    # The equal-weight pool, run once. This is the grid's long-half-life limit,
+    # not a grid point, so it is reported beside the points and not among them.
+    flat_improvement_bps = run(0.0)["capped_improvement"]["capped"]["improvement_bps"]
+
+    gains = [p["improvement_bps"] for p in points]
+    agg = pl.DataFrame({"improvement_bps": gains}).select(
+        pl.col("improvement_bps").min().alias("lo"),
+        pl.col("improvement_bps").max().alias("hi"),
+    )
+    improvement_min = _r8(float(agg["lo"][0]))
+    improvement_max = _r8(float(agg["hi"][0]))
+
+    # A zero does not flip a verdict, so only a strict sign on both sides counts
+    # as unstable.
+    sign_stable = not (any(v > 0.0 for v in gains) and any(v < 0.0 for v in gains))
+
+    # Smallest half-life first on a tie: the grid is increasing, so scanning
+    # forward with a strict comparison keeps the earliest of equal points.
+    def pick(want: float) -> float:
+        for p in points:
+            if p["improvement_bps"] == want:
+                return p["half_life"]
+        return 0.0
+
+    return {
+        "product": product,
+        "bucket_ns": bucket_ns,
+        "buckets": buckets,
+        "sessions": sessions,
+        "parent_qty": _r8(parent_qty),
+        "cap": _r8(cap),
+        "coef_bps": _r8(coef_bps),
+        "perm_coef_bps": _r8(perm_coef_bps),
+        "points": points,
+        "flat_improvement_bps": flat_improvement_bps,
+        "improvement_min_bps": improvement_min,
+        "improvement_max_bps": improvement_max,
+        "improvement_span_bps": _r8(improvement_max - improvement_min),
+        "sign_stable": sign_stable,
+        "best_half_life": pick(improvement_max),
+        "worst_half_life": pick(improvement_min),
+    }
+
+
 def _pooling_weights(sessions: int, half_life: float) -> list[float]:
     """The weight each history session carries, oldest first, summing to one.
 
