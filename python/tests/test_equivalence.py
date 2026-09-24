@@ -17,6 +17,7 @@ from xexeclab.engine import (
     cap_sweep,
     counterfactual,
     depth_metrics,
+    hl_sweep,
     impact_curve,
     optimal_schedule,
     pov_backtest,
@@ -1022,3 +1023,116 @@ def test_rust_and_python_cap_sweeps_are_identical():
     assert len(rust["points"]) == 5
     assert rust["like_for_like_points"] + rust["dominated_points"] + rust["traded_off_points"] == 5
     assert any(not p["like_for_like"] for p in rust["points"])
+
+
+def test_rust_and_python_half_life_sweeps_are_identical():
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    # The twenty-second, and the first whose report contains a value computed
+    # *off* the grid: `flat_improvement_bps` is a separate run at `half_life = 0`
+    # folded into the same report. A divergence there would not show up in any of
+    # the points, so agreeing on the points alone would not be enough.
+    grid = "0.25,0.5,1,2,4"
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-hl-sweep",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE}",
+            "--input",
+            THIN_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap",
+            str(POV_PLAN["cap"]),
+            "--half-life-grid",
+            grid,
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = hl_sweep(
+        [read_ticks(SAMPLE), read_ticks(NEXT_SAMPLE)],
+        read_ticks(THIN_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        POV_PLAN["cap"],
+        [float(v) for v in grid.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+
+    assert rust == py
+    # And this is the settings the README quotes, so the engines must agree on
+    # the finding as well as on the arithmetic: the sign of the gain is not
+    # stable across the grid, and the flat pool is the figure v0.30.0 published.
+    assert len(rust["points"]) == 5
+    assert rust["sign_stable"] is False
+    assert rust["flat_improvement_bps"] == 0.40579986
+
+
+def test_the_bundled_capture_reaches_a_dominated_cap():
+    """The gap v0.31.0 left open, closed and pinned.
+
+    v0.31.0 could report `dominated_points` but no *bundled* invocation reached
+    it -- the branch existed only inside the unit fixtures, which is exactly the
+    "true in the tests, invisible in the repo" gap v0.30.0 closed for the
+    shortfall. It turned out not to need a new capture at all, only a smaller
+    parent: halve the order the README already quotes and three of the five caps
+    stop having a rate to price. Both engines must agree on that, or the claim
+    holds in one language only.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    grid = "0.05,0.1,0.15,0.2,0.25"
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-sweep",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE}",
+            "--input",
+            THIN_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            "0.1",
+            "--cap-grid",
+            grid,
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    py = cap_sweep(
+        [read_ticks(SAMPLE), read_ticks(NEXT_SAMPLE)],
+        read_ticks(THIN_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        0.1,
+        [float(v) for v in grid.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+
+    assert rust == py
+    assert rust["dominated_points"] == 3
+    assert rust["traded_off_points"] == 2
