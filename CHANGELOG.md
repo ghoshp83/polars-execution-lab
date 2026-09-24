@@ -4,6 +4,66 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.32.0] - 2026-09-24
+
+### Added
+- **`pov-hl-sweep` — the other parameter, the one nobody owns.** `pov-sweep`
+  (v0.31.0) sweeps the participation cap, which a desk at least *chooses*.
+  `--half-life` is not like that: it sets how fast an older session's weight
+  decays in the pool, nothing in this repo fits it, nothing outside it measures
+  it, and it defaults to `0` because something had to. `src/hlsweep.rs` and
+  `hl_sweep` in `engine.py` re-run `pov-forecast` across a grid of half-lives at
+  a fixed cap and report whether the verdict survived the guess.
+- **The finding, and it lands on this project's own published numbers.** On the
+  exact settings the README has quoted since v0.30.0 — history
+  `sample_ticks,sample_ticks_next`, the thin capture, parent 0.2, cap 0.25, coef
+  25/5 — pooling is worth **+0.40579986 bps at the default half-life of 0** and
+  **−0.05410227 bps at a half-life of 0.25 sessions**. `sign_stable` is `false`
+  and `improvement_span_bps` is **0.4190375**, wider than the headline itself.
+  Two releases of figures were quoted at an unexamined default; the README now
+  says so.
+- **Both limits of the grid named and tested, not implied.** A short half-life
+  puts all the weight on the most recent session — which *is* the naive plan the
+  forecast is scored against — so `improvement_bps` goes to zero;
+  `newest_weight` reports the half-life in units a reader can act on. A long one
+  converges on the equal-weight pool, run once and reported beside the grid as
+  `flat_improvement_bps`. A test each side pins each limit.
+- **`half_life = 0` is refused inside the grid**, with the reason in the error:
+  `pov_forecast` reads `0` as the equal-weight pool, which is the limit the
+  *long* end of the grid approaches, so admitting it at the short end would
+  invert the ordering the rest of the report is written against.
+- **`best_half_life` is reported as the shape of the grid, not as a
+  recommendation.** It is fitted on the very session being scored; the doc
+  comment, the README and the docstring all say so rather than leaving a reader
+  to work it out.
+- Eight tests each side (`tests/hl_sweep.rs`, `python/tests/test_hl_sweep.py`)
+  and a **22nd** equivalence test — the first over a report containing a value
+  computed *off* the grid, so agreeing on the points alone would not catch a
+  divergence in `flat_improvement_bps`.
+
+### Fixed
+- **`dominated_points` is no longer invisible outside the unit tests.** v0.31.0
+  could report it but no *bundled* invocation reached it, which is the same
+  "true in the tests, absent from the repo" gap v0.30.0 closed for the
+  shortfall. It needed no new capture — only a smaller parent. Halving the order
+  the README already quotes to 0.1 turns **three of the five caps dominated**
+  (two still traded off): the pooled plan is dearer per unit filled *and* misses
+  more, so no non-negative rate reverses it. A **23rd** equivalence test pins
+  that across both engines, and the README says which regime the order size puts
+  a reader in.
+
+### Changed
+- README: a sixth `pov-*` usage block, the half-life limitation written out in
+  full, and the `dominated_points` paragraph corrected now that bundled data
+  reaches it.
+
+### Notes
+- **Polars 2.0 is still not adoptable**, and it is still the Rust crate that
+  binds. Re-measured 2026-09-24: `rust crate newest stable 0.55.2`,
+  `python package newest stable 1.44.2`, both `2.0 ready: False` — unchanged
+  since 2026-09-21. The weekly `upstream` tripwire goes red the week both
+  registries ship a stable 2.0; nothing here moves before then.
+
 ## [0.31.0] - 2026-09-23
 
 ### Added
