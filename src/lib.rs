@@ -12,6 +12,7 @@ pub mod counterfactual;
 pub mod curve;
 pub mod depth;
 pub mod execution;
+pub mod hlsweep;
 pub mod impact;
 pub mod model;
 pub mod pov;
