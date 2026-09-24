@@ -220,6 +220,15 @@ uv run xexeclab pov-sweep --history data/sample_ticks.ndjson,data/sample_ticks_n
                           --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
                           --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
 
+# ...then sweep the other parameter, the one nobody owns. The cap is the desk's
+# choice; the pooling half-life is a guess -- nothing in this repo fits it. On the
+# very settings above, pooling is worth +0.41 bps at the default half-life of 0
+# (equal weights) and **-0.05 bps at a half-life of 0.25 sessions**: sign_stable
+# comes back false, so the sign of the headline was decided by the default
+uv run xexeclab pov-hl-sweep --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
+                             --input data/sample_ticks_thin.ndjson --half-life-grid 0.25,0.5,1,2,4 \
+                             --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
+
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
 uv run xexeclab stream  --input data/sample_ticks.ndjson --chunk-rows 4
@@ -493,7 +502,25 @@ This is a **market-data and execution-analytics** project, not a trading system.
   verdict, because under the forward carry a plan that gets more away early both
   misses less *and* pays less per unit filled. That is a property of the carry,
   not a gap in the report, and the three counts partition the grid so a reader can
-  see at a glance how much of it a rate actually decides.
+  see at a glance how much of it a rate actually decides. Halve the parent to 0.1
+  on the same history and capture and **three of those five caps become
+  dominated**: the pooled plan is dearer per unit filled *and* misses more, and no
+  rate rescues it. The size of the order decides which regime you are in.
+- **Every number above is also quoted at a half-life, and that one is a guess.**
+  `--half-life` sets how fast an older session's weight decays in the pool.
+  Nothing in this repo fits it, nothing outside it measures it, and it defaults to
+  `0` — equal weights — because something had to. `xexeclab pov-hl-sweep` sweeps it
+  the way `pov-sweep` sweeps the cap, and on the same session as the `3.57`
+  example above the result is worth stating plainly: the pooled plan is **+0.41
+  bps at the default, and −0.05 bps at a half-life of 0.25 sessions**. The sign
+  flips inside the grid, so `sign_stable` is `false` and `improvement_span_bps` is
+  **0.42** — wider than the headline itself. The report names both limits rather
+  than leaving them to be inferred: a short half-life puts all the weight on the
+  most recent session, which *is* the naive plan, so `improvement_bps` goes to
+  zero; a long one converges on the equal-weight pool, reported beside the grid as
+  `flat_improvement_bps`. `best_half_life` is reported as the shape of the grid
+  and **not** as a recommendation — it is fitted on the very session being scored,
+  so trading it would be choosing the parameter with the answer already in hand.
   Every history session must trade in the same buckets as the execution session,
   so sessions with a gap are refused rather than filled in.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
