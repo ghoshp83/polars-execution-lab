@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,7 @@ from xexeclab.engine import (
     session_twap,
     session_vwap,
     shortfall,
+    stability,
     stream_session,
     summary,
     sweep_cost,
@@ -88,6 +90,19 @@ def _find_binary() -> str | None:
         if Path(candidate).exists():
             return candidate
     return shutil.which("xexec")
+
+
+def _defaulted_by_the_cli_only(rust: dict, py: dict) -> None:
+    """Strip the one key a binary run without ``--half-life`` and the engine must
+    disagree on, after checking that they do.
+
+    ``half_life_defaulted`` records whether a *caller* chose the half-life, which
+    only the CLI can know; the engine is always handed one and always says
+    ``False``. Asserting both values before dropping the key keeps the arithmetic
+    comparison exact without letting the flag go untested.
+    """
+    assert rust.pop("half_life_defaulted") is True
+    assert py.pop("half_life_defaulted") is False
 
 
 def test_rust_and_python_summaries_are_identical():
@@ -633,6 +648,7 @@ def test_rust_and_python_pooled_volume_forecasts_are_identical():
         POV_PLAN["perm_coef_bps"],
     )
 
+    _defaulted_by_the_cli_only(rust, py)
     assert rust == py
 
     # The pooled plan must differ from the naive one, or the engines agreed
@@ -752,6 +768,7 @@ def test_rust_and_python_priced_shortfalls_are_identical():
         float(shortfall_bps),
     )
 
+    _defaulted_by_the_cli_only(rust, py)
     assert rust == py
 
     # The rate must have reached the report, or this is the null case again.
@@ -806,6 +823,7 @@ def test_rust_and_python_thin_tail_shortfalls_are_identical():
         POV_PLAN["perm_coef_bps"],
     )
 
+    _defaulted_by_the_cli_only(rust, py)
     assert rust == py
 
     # The capture must do the thing it was bundled for, or this is the
@@ -1017,6 +1035,7 @@ def test_rust_and_python_cap_sweeps_are_identical():
         POV_PLAN["perm_coef_bps"],
     )
 
+    _defaulted_by_the_cli_only(rust, py)
     assert rust == py
     # And the sweep is actually exercising the branches it reports, rather than
     # agreeing trivially on a grid where nothing binds.
@@ -1133,6 +1152,134 @@ def test_the_bundled_capture_reaches_a_dominated_cap():
         POV_PLAN["perm_coef_bps"],
     )
 
+    _defaulted_by_the_cli_only(rust, py)
     assert rust == py
     assert rust["dominated_points"] == 3
     assert rust["traded_off_points"] == 2
+
+
+def test_both_clis_flag_a_half_life_nobody_chose():
+    """The twenty-fourth, and the first to run the *Python CLI* against the Rust
+    one rather than the Python engine.
+
+    ``half_life_defaulted`` is decided by the CLI -- only it can see whether
+    ``--half-life`` was typed -- so comparing the binary against the engine
+    cannot cover it: the engine always says ``False``. Both front ends must
+    raise the flag when the half-life is omitted, both must clear it when the
+    same value is passed explicitly, and nothing else in the report may move.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    args = [
+        "pov-forecast",
+        "--history",
+        f"{SAMPLE},{NEXT_SAMPLE}",
+        "--input",
+        THIN_SAMPLE,
+        "--bucket-ms",
+        str(BUCKET_MS),
+        "--parent-qty",
+        str(POV_PLAN["parent_qty"]),
+        "--cap",
+        str(POV_PLAN["cap"]),
+        "--coef-bps",
+        str(POV_PLAN["coef_bps"]),
+        "--perm-coef-bps",
+        str(POV_PLAN["perm_coef_bps"]),
+    ]
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+
+    def both(extra: list[str]) -> tuple[dict, dict]:
+        rust = subprocess.run([binary, *args, *extra], capture_output=True, text=True, check=True)
+        py = subprocess.run(
+            [sys.executable, "-m", "xexeclab.cli", *args, *extra],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        return json.loads(rust.stdout), json.loads(py.stdout)
+
+    rust_omitted, py_omitted = both([])
+    rust_given, py_given = both(["--half-life", "0"])
+
+    assert rust_omitted == py_omitted
+    assert rust_given == py_given
+    assert rust_omitted["half_life_defaulted"] is True
+    assert rust_given["half_life_defaulted"] is False
+    # The flag is the only difference: the same half-life was used either way.
+    rust_omitted.pop("half_life_defaulted")
+    rust_given.pop("half_life_defaulted")
+    assert rust_omitted == rust_given
+
+
+def test_rust_and_python_stability_grids_are_identical():
+    """The twenty-fifth: the cap ladder swept across the half-life.
+
+    Run on the settings the README quotes, it is also the finding: four of the
+    five caps keep their sign at every half-life, and the one that does not is
+    0.25 -- the cap the headline ``improvement_bps`` was quoted at. Its row must
+    be the half-life sweep the twenty-second test already pins, point for point.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    caps = "0.05,0.1,0.15,0.2,0.25"
+    hls = "0.25,0.5,1,2,4"
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-stability",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE}",
+            "--input",
+            THIN_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap-grid",
+            caps,
+            "--half-life-grid",
+            hls,
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    history = [read_ticks(SAMPLE), read_ticks(NEXT_SAMPLE)]
+    py = stability(
+        history,
+        read_ticks(THIN_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        [float(v) for v in caps.split(",")],
+        [float(v) for v in hls.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+
+    assert rust == py
+    assert rust["stable_caps"] == 4
+    assert rust["unstable_caps"] == 1
+    assert [r["cap"] for r in rust["rows"] if not r["sign_stable"]] == [POV_PLAN["cap"]]
+    single = hl_sweep(
+        history,
+        read_ticks(THIN_SAMPLE),
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        POV_PLAN["cap"],
+        [float(v) for v in hls.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+    assert rust["rows"][-1]["improvement_bps"] == [p["improvement_bps"] for p in single["points"]]
