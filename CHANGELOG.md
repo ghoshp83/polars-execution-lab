@@ -4,6 +4,56 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.33.0] - 2026-10-01
+
+### Added
+- **`half_life_defaulted` on `pov-forecast` and `pov-sweep`.** v0.32.0 showed
+  that the sign of `improvement_bps` can turn on the half-life, but only a reader
+  who ran `pov-hl-sweep` could see it; one who read a single `pov-forecast` still
+  had the v0.30.0 problem and no way to know it. Both reports now carry the flag,
+  `true` when `--half-life` was omitted and the CLI chose `0` on the reader's
+  behalf. It is `false` whenever a half-life is passed, **including an explicit
+  `0`**, because a deliberate choice and an omitted one must not look the same.
+  The library always reports `false`: every library caller passes a half-life,
+  and only the CLI can see whether one was typed.
+- **`pov-stability` — the cap ladder swept across the half-life.**
+  `pov-sweep` fixes the half-life and sweeps the cap; `pov-hl-sweep` does the
+  reverse. `src/stability.rs` and `stability` in `engine.py` run one half-life
+  sweep per cap and line the rows up, each row exactly the report
+  `pov-hl-sweep` prints at that cap. `stable_caps`, `unstable_caps` and
+  `all_sign_stable` summarise them.
+- **The finding.** On the settings the README has quoted since v0.30.0 (parent
+  0.2, coef 25/5, the thin capture), **four of five caps keep their sign at every
+  half-life; the one that does not is 0.25** — the cap the headline was quoted
+  at. At parent 0.1 every row is stable, but pooling pays at the 5% and 10% caps
+  and costs at 15% and above, at every half-life: stable is not positive, and
+  there the cap decides the sign rather than the guess.
+- **No best cell, by design and pinned by a test.** The largest gain over a cap
+  *and* a half-life on the session being scored is fitting with twice the freedom
+  `best_half_life` already warns about, and it would read as a recommendation
+  however it was labelled. A test on each side serialises the report and fails if
+  any `best`/`worst`/`optimal`/`argmax`/`recommend` field ever appears.
+- Seven tests each side for the grid (`tests/stability.rs`,
+  `python/tests/test_stability.py`), one more each side per report for the
+  library's `false`, and two equivalence tests: the **24th**, the first to run the
+  Python **CLI** against the Rust one (the flag lives in the CLI, so comparing the
+  binary against the engine could not cover it), and the **25th** over the grid on
+  the README's settings.
+
+### Changed
+- `--half-life` on the Python CLI's `pov-forecast` and `pov-sweep` now defaults
+  to unset rather than `0.0`, so omission can be told apart from a choice. The
+  value used is unchanged.
+- Five existing equivalence tests that run the binary without `--half-life` now
+  assert the flag differs from the engine's, as it should, before comparing the
+  rest exactly.
+- README: a seventh `pov-*` usage block and the stability finding beside the
+  half-life one.
+
+### Notes
+- **Polars 2.0 is still not adoptable**; re-measured 2026-10-01 with the
+  upstream tripwire.
+
 ## [0.32.0] - 2026-09-24
 
 ### Added
