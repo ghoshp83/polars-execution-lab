@@ -229,6 +229,14 @@ uv run xexeclab pov-hl-sweep --history data/sample_ticks.ndjson,data/sample_tick
                              --input data/sample_ticks_thin.ndjson --half-life-grid 0.25,0.5,1,2,4 \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
 
+# ...and sweep both at once: one half-life sweep per cap. Four of these five caps
+# keep their sign at every half-life; the one that does not is 0.25, the cap the
+# headline above was quoted at. The grid reports stability and never a best cell
+uv run xexeclab pov-stability --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
+                              --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+                              --half-life-grid 0.25,0.5,1,2,4 \
+                              --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
+
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
 uv run xexeclab stream  --input data/sample_ticks.ndjson --chunk-rows 4
@@ -521,6 +529,24 @@ This is a **market-data and execution-analytics** project, not a trading system.
   `flat_improvement_bps`. `best_half_life` is reported as the shape of the grid
   and **not** as a recommendation — it is fitted on the very session being scored,
   so trading it would be choosing the parameter with the answer already in hand.
+  A run that never mentions `--half-life` now says so: `pov-forecast` and
+  `pov-sweep` report **`half_life_defaulted: true`** when the flag was omitted, so
+  a reader who never runs a sweep can still see that every figure beside it was
+  quoted at a value nobody chose. It is `false` whenever a half-life is passed —
+  including an explicit `0` — and always `false` from the library, which cannot
+  know who chose its arguments.
+  `xexeclab pov-stability` asks the question of the whole cap ladder at once, one
+  half-life sweep per cap. On the same session **four of the five caps keep their
+  sign at every half-life, and the one that does not is 0.25** — the cap the
+  headline was quoted at, so the one unstable point on the ladder is the one the
+  numbers above happened to pick. Halve the parent to 0.1 and every row is stable,
+  but not every row agrees: pooling pays at the 5% and 10% caps and costs at 15%
+  and above, at every half-life. Stable is not the same as positive, and there the
+  cap decides the sign rather than the guess. The grid has **no best cell**, by
+  design and pinned by a test: picking the largest gain over a cap *and* a
+  half-life on the session being scored is fitting with twice the freedom
+  `best_half_life` already warns about, and it would read as a recommendation
+  however it was labelled.
   Every history session must trade in the same buckets as the execution session,
   so sessions with a gap are refused rather than filled in.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
