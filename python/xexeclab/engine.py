@@ -1355,6 +1355,8 @@ def pov_forecast(
         "buckets": n,
         "sessions": len(history),
         "half_life": _r8(half_life),
+        # Always False here: only the CLI knows whether --half-life was given.
+        "half_life_defaulted": False,
         "weights": [_r8(w) for w in weights],
         "parent_qty": _r8(parent_qty),
         "cap": _r8(cap),
@@ -1506,6 +1508,7 @@ def cap_sweep(
         "buckets": buckets,
         "sessions": sessions,
         "half_life": _r8(half_life),
+        "half_life_defaulted": False,
         "parent_qty": _r8(parent_qty),
         "coef_bps": _r8(coef_bps),
         "perm_coef_bps": _r8(perm_coef_bps),
@@ -1656,6 +1659,92 @@ def hl_sweep(
         "sign_stable": sign_stable,
         "best_half_life": pick(improvement_max),
         "worst_half_life": pick(improvement_min),
+    }
+
+
+def stability(
+    history: list[pl.DataFrame],
+    exec_df: pl.DataFrame,
+    bucket_ns: int,
+    parent_qty: float,
+    cap_grid: list[float],
+    half_life_grid: list[float],
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """Does the cap ladder survive the half-life?
+
+    ``cap_sweep`` fixes the half-life and sweeps the cap; ``hl_sweep`` fixes the
+    cap and sweeps the half-life. A reader who wants to know whether a verdict
+    read off the cap ladder would hold at a different half-life has had to run
+    one half-life sweep per cap by hand. This runs them all, one row per cap,
+    every row exactly the ``hl_sweep`` report ``pov-hl-sweep`` would print at
+    that cap.
+
+    The question is the one ``sign_stable`` asks, asked of every cap at once:
+    ``stable_caps`` counts the rows on which pooling paid at every half-life or
+    cost at every half-life, ``unstable_caps`` the rows on which the half-life
+    decided. ``all_sign_stable`` is the one-word answer.
+
+    **There is deliberately no best cell.** A two-parameter grid scored on the
+    session it is fitted to is the place a report stops describing and starts
+    fitting: the cell with the largest ``improvement_bps`` is a cap *and* a
+    half-life chosen with the answer already in hand, with twice the freedom
+    ``best_half_life`` already warns about. That field is a one-dimensional
+    shape; its two-dimensional twin would read as a recommendation however it
+    was documented, so it is not computed. A test pins its absence.
+
+    Like both sweeps it takes no ``shortfall_bps``, and every cell is the
+    ``capped`` (forward-carry) arm.
+
+    Mirrors ``stability`` in ``src/stability.rs`` operation for operation.
+    """
+    # The same rules as ``cap_sweep``, so a grid one command accepts the other
+    # does too. The half-life grid is validated by ``hl_sweep`` itself.
+    if len(cap_grid) < 2:
+        raise ValueError(f"cap_grid needs at least 2 points, got {len(cap_grid)}")
+    for v in cap_grid:
+        if not math.isfinite(v) or v <= 0.0 or v > 1.0:
+            raise ValueError(f"cap_grid values must be in (0, 1], got {v}")
+    for a, b in zip(cap_grid, cap_grid[1:], strict=False):
+        if b <= a:
+            raise ValueError(f"cap_grid must be strictly increasing, got {a} then {b}")
+
+    rows: list[dict] = []
+    product = ""
+    buckets = 0
+    sessions = 0
+    for c in cap_grid:
+        s = hl_sweep(
+            history, exec_df, bucket_ns, parent_qty, c, half_life_grid, coef_bps, perm_coef_bps
+        )
+        product = s["product"]
+        buckets = s["buckets"]
+        sessions = s["sessions"]
+        rows.append(
+            {
+                "cap": s["cap"],
+                "improvement_bps": [p["improvement_bps"] for p in s["points"]],
+                "flat_improvement_bps": s["flat_improvement_bps"],
+                "improvement_span_bps": s["improvement_span_bps"],
+                "sign_stable": s["sign_stable"],
+            }
+        )
+
+    stable_caps = sum(1 for r in rows if r["sign_stable"])
+    return {
+        "product": product,
+        "bucket_ns": bucket_ns,
+        "buckets": buckets,
+        "sessions": sessions,
+        "parent_qty": _r8(parent_qty),
+        "coef_bps": _r8(coef_bps),
+        "perm_coef_bps": _r8(perm_coef_bps),
+        "half_lives": [_r8(h) for h in half_life_grid],
+        "rows": rows,
+        "stable_caps": stable_caps,
+        "unstable_caps": len(rows) - stable_caps,
+        "all_sign_stable": stable_caps == len(rows),
     }
 
 
