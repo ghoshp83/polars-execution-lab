@@ -21,5 +21,6 @@ pub mod replay;
 pub mod schedule;
 pub mod sensitivity;
 pub mod shortfall;
+pub mod stability;
 pub mod stream;
 pub mod sweep;
