@@ -80,6 +80,11 @@ pub struct CapSweepReport {
     /// History sessions pooled into the forecast.
     pub sessions: usize,
     pub half_life: f64,
+    /// True when `--half-life` was omitted and the CLI chose it. The whole
+    /// ladder is then quoted at one unexamined half-life; see
+    /// [`crate::pov::PovForecast::half_life_defaulted`]. Always `false` from the
+    /// library.
+    pub half_life_defaulted: bool,
     pub parent_qty: f64,
     pub coef_bps: f64,
     pub perm_coef_bps: f64,
@@ -211,6 +216,7 @@ pub fn cap_sweep(
         buckets,
         sessions,
         half_life: r8(half_life),
+        half_life_defaulted: false,
         parent_qty: r8(parent_qty),
         coef_bps: r8(coef_bps),
         perm_coef_bps: r8(perm_coef_bps),

@@ -636,6 +636,13 @@ pub struct PovForecast {
     pub sessions: usize,
     /// Sessions over which a session's weight halves; `0` means no decay.
     pub half_life: f64,
+    /// True when nobody chose `half_life`: the CLI filled it in because
+    /// `--half-life` was omitted. Every figure in this report is then quoted at
+    /// a value the reader may not know was picked, and [`crate::hlsweep`] has
+    /// shown the sign of `improvement_bps` can turn on it. Always `false` from
+    /// the library, where every caller passes a half-life explicitly; it is the
+    /// CLI that knows whether one was given.
+    pub half_life_defaulted: bool,
     /// The weight each history session carried, oldest first; sums to one.
     pub weights: Vec<f64>,
     pub parent_qty: f64,
@@ -1117,6 +1124,7 @@ pub fn pov_forecast(
         buckets: n,
         sessions: history.len(),
         half_life: r8(half_life),
+        half_life_defaulted: false,
         weights: weights.iter().map(|w| r8(*w)).collect(),
         parent_qty: r8(parent_qty),
         cap: r8(cap),
