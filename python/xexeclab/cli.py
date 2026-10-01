@@ -32,6 +32,7 @@ from .engine import (
     session_twap,
     session_vwap,
     shortfall,
+    stability,
     stream_session,
     summary,
     sweep_cost,
@@ -180,39 +181,36 @@ def cmd_pov_backtest(a: argparse.Namespace) -> None:
 
 
 def cmd_pov_forecast(a: argparse.Namespace) -> None:
-    print(
-        json.dumps(
-            pov_forecast(
-                [read_ticks(p.strip()) for p in a.history.split(",")],
-                read_ticks(a.input),
-                a.bucket_ms * 1_000_000,
-                a.parent_qty,
-                a.cap,
-                a.coef_bps,
-                a.perm_coef_bps,
-                a.half_life,
-                a.shortfall_bps,
-            )
-        )
+    out = pov_forecast(
+        [read_ticks(p.strip()) for p in a.history.split(",")],
+        read_ticks(a.input),
+        a.bucket_ms * 1_000_000,
+        a.parent_qty,
+        a.cap,
+        a.coef_bps,
+        a.perm_coef_bps,
+        0.0 if a.half_life is None else a.half_life,
+        a.shortfall_bps,
     )
+    # Only the CLI knows whether the half-life was a choice or a default.
+    out["half_life_defaulted"] = a.half_life is None
+    print(json.dumps(out))
 
 
 def cmd_pov_sweep(a: argparse.Namespace) -> None:
     grid = [float(s) for s in a.cap_grid.split(",")]
-    print(
-        json.dumps(
-            cap_sweep(
-                [read_ticks(p.strip()) for p in a.history.split(",")],
-                read_ticks(a.input),
-                a.bucket_ms * 1_000_000,
-                a.parent_qty,
-                grid,
-                a.coef_bps,
-                a.perm_coef_bps,
-                a.half_life,
-            )
-        )
+    out = cap_sweep(
+        [read_ticks(p.strip()) for p in a.history.split(",")],
+        read_ticks(a.input),
+        a.bucket_ms * 1_000_000,
+        a.parent_qty,
+        grid,
+        a.coef_bps,
+        a.perm_coef_bps,
+        0.0 if a.half_life is None else a.half_life,
     )
+    out["half_life_defaulted"] = a.half_life is None
+    print(json.dumps(out))
 
 
 def cmd_pov_hl_sweep(a: argparse.Namespace) -> None:
@@ -226,6 +224,23 @@ def cmd_pov_hl_sweep(a: argparse.Namespace) -> None:
                 a.parent_qty,
                 a.cap,
                 grid,
+                a.coef_bps,
+                a.perm_coef_bps,
+            )
+        )
+    )
+
+
+def cmd_pov_stability(a: argparse.Namespace) -> None:
+    print(
+        json.dumps(
+            stability(
+                [read_ticks(p.strip()) for p in a.history.split(",")],
+                read_ticks(a.input),
+                a.bucket_ms * 1_000_000,
+                a.parent_qty,
+                [float(s) for s in a.cap_grid.split(",")],
+                [float(s) for s in a.half_life_grid.split(",")],
                 a.coef_bps,
                 a.perm_coef_bps,
             )
@@ -625,8 +640,9 @@ def main(argv: list[str] | None = None) -> None:
     pfc.add_argument(
         "--half-life",
         type=float,
-        default=0.0,
-        help="sessions over which a session's weight halves (0 = pool them equally)",
+        default=None,
+        help="sessions over which a session's weight halves (0 = pool them equally; "
+        "omitted = 0, flagged as half_life_defaulted)",
     )
     pfc.add_argument(
         "--shortfall-bps",
@@ -667,8 +683,9 @@ def main(argv: list[str] | None = None) -> None:
     psp.add_argument(
         "--half-life",
         type=float,
-        default=0.0,
-        help="sessions over which a session's weight halves (0 = pool them equally)",
+        default=None,
+        help="sessions over which a session's weight halves (0 = pool them equally; "
+        "omitted = 0, flagged as half_life_defaulted)",
     )
     psp.set_defaults(fn=cmd_pov_sweep)
 
@@ -704,6 +721,41 @@ def main(argv: list[str] | None = None) -> None:
         help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
     )
     phs.set_defaults(fn=cmd_pov_hl_sweep)
+
+    pst = sub.add_parser(
+        "pov-stability",
+        help="run pov-hl-sweep at every cap on a grid; reports stability, never a best cell",
+    )
+    pst.add_argument(
+        "--history",
+        required=True,
+        help="comma-separated earlier captures, oldest first; the last is the naive forecast",
+    )
+    pst.add_argument("--input", required=True, help="the session the plans are executed against")
+    pst.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
+    pst.add_argument(
+        "--parent-qty", type=float, default=1.0, help="parent order size in base units"
+    )
+    pst.add_argument(
+        "--cap-grid",
+        default="0.1,0.2,0.3",
+        help="comma-separated, strictly increasing grid of caps, each in (0, 1]",
+    )
+    pst.add_argument(
+        "--half-life-grid",
+        default="0.25,0.5,1,2,4",
+        help="comma-separated, strictly increasing grid of half-lives, each > 0",
+    )
+    pst.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    pst.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    pst.set_defaults(fn=cmd_pov_stability)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"
