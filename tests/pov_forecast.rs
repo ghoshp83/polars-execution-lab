@@ -748,3 +748,27 @@ fn a_plan_that_is_cheaper_and_misses_less_has_no_breakeven_rate() {
     // ...and no rate, however large, takes the verdict away from it.
     assert!(gain.net_bps.unwrap() > gain.improvement_bps);
 }
+
+/// The library never claims a half-life was defaulted, even at `0`: every
+/// library caller passes one, so the choice was theirs. Only the CLI, which can
+/// see whether `--half-life` was typed, may set the flag — and if the engine
+/// set it on a value instead, a deliberate `0` and an omitted one would be
+/// indistinguishable, which is the confusion the flag exists to remove.
+#[test]
+fn the_library_never_reports_a_defaulted_half_life() {
+    for hl in [FLAT, 1.0] {
+        let fc = pov_forecast(
+            &[blended(), lumpy()],
+            &thin_tail(),
+            BUCKET,
+            1.0,
+            0.3,
+            10.0,
+            2.0,
+            hl,
+            NO_PENALTY,
+        )
+        .unwrap();
+        assert!(!fc.half_life_defaulted, "half-life {hl}");
+    }
+}

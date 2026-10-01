@@ -385,3 +385,13 @@ def test_a_plan_that_is_cheaper_and_misses_less_has_no_breakeven_rate():
     assert gain["improvement_bps"] > 0.0
     assert gain["breakeven_bps"] is None
     assert gain["net_bps"] > gain["improvement_bps"]
+
+
+@pytest.mark.parametrize("hl", [0.0, 1.0])
+def test_the_library_never_reports_a_defaulted_half_life(hl):
+    """Every library caller passes a half-life, so the choice was theirs -- even at
+    0. Only the CLI can see whether ``--half-life`` was typed; if the engine set
+    the flag on a value instead, a deliberate 0 and an omitted one would look the
+    same, which is the confusion the flag exists to remove."""
+    fc = pov_forecast([_blended(), _lumpy()], _thin_tail(), BUCKET, 1.0, 0.3, 10.0, 2.0, hl, None)
+    assert fc["half_life_defaulted"] is False

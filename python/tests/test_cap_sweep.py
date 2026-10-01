@@ -172,3 +172,12 @@ def test_a_cap_outside_the_unit_interval_is_refused(grid):
     """A cap is a share of volume; outside ``(0, 1]`` it is not one."""
     with pytest.raises(ValueError, match=r"in \(0, 1\]"):
         cap_sweep([_blended(), _lumpy()], _thin_tail(), BUCKET, 1.0, grid, 10.0, 2.0, FLAT)
+
+
+def test_the_library_never_reports_a_defaulted_half_life():
+    """As for ``pov_forecast``: the library cannot know whether its caller chose
+    the half-life, so it never says the caller did not. The CLI sets the flag."""
+    sweep = cap_sweep(
+        [_blended(), _lumpy()], _thin_tail(), BUCKET, 1.0, [0.2, 0.3], 10.0, 2.0, FLAT
+    )
+    assert sweep["half_life_defaulted"] is False

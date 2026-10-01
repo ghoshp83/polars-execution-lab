@@ -260,3 +260,21 @@ fn a_cap_outside_the_unit_interval_is_refused() {
         assert!(err.contains("in (0, 1]"), "{err}");
     }
 }
+
+/// As for `pov_forecast`: the library cannot know whether its caller chose the
+/// half-life, so it never says the caller did not. The CLI sets the flag.
+#[test]
+fn the_library_never_reports_a_defaulted_half_life() {
+    let sweep = cap_sweep(
+        &[blended(), lumpy()],
+        &thin_tail(),
+        BUCKET,
+        1.0,
+        &[0.2, 0.3],
+        10.0,
+        2.0,
+        FLAT,
+    )
+    .unwrap();
+    assert!(!sweep.half_life_defaulted);
+}
