@@ -263,3 +263,33 @@ fn a_half_life_of_zero_or_less_is_refused() {
         assert!(err.contains("flat_improvement_bps"), "{err}");
     }
 }
+
+/// A cap tight enough to bind both plans in every bucket leaves nothing for the
+/// half-life to act on: every point and the flat pool are exactly zero, and
+/// `sign_stable` is true only because there is no sign. `inert` says so. A
+/// cap that lets the plans differ is not inert, even where it is sign-stable.
+#[test]
+fn a_cap_that_binds_both_plans_alike_is_inert() {
+    let run = |cap: f64| {
+        hl_sweep(
+            &[blended(), lumpy()],
+            &thin_tail(),
+            BUCKET,
+            1.0,
+            cap,
+            &[0.25, 0.5, 1.0, 2.0, 4.0],
+            25.0,
+            5.0,
+        )
+        .unwrap()
+    };
+    let tight = run(0.01);
+    assert!(tight.inert);
+    assert!(tight.sign_stable);
+    assert!(tight.points.iter().all(|p| p.improvement_bps == 0.0));
+    assert_eq!(tight.flat_improvement_bps, 0.0);
+
+    let loose = run(0.3);
+    assert!(loose.sign_stable);
+    assert!(!loose.inert, "{:?}", loose.points);
+}

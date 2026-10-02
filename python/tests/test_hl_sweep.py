@@ -184,3 +184,32 @@ def test_a_half_life_of_zero_or_less_is_refused(grid):
     refused, and ``flat_improvement_bps`` is where that case is reported."""
     with pytest.raises(ValueError, match="positive and finite"):
         hl_sweep([_blended(), _lumpy()], _thin_tail(), BUCKET, 1.0, 0.3, grid, 10.0, 2.0)
+
+
+def test_a_cap_that_binds_both_plans_alike_is_inert():
+    """A cap tight enough to bind both plans in every bucket leaves nothing for
+    the half-life to act on: every point and the flat pool are exactly zero, and
+    ``sign_stable`` is true only because there is no sign. ``inert`` says so. A
+    cap that lets the plans differ is not inert, even where it is sign-stable."""
+
+    def run(cap: float) -> dict:
+        return hl_sweep(
+            [_blended(), _lumpy()],
+            _thin_tail(),
+            BUCKET,
+            1.0,
+            cap,
+            [0.25, 0.5, 1.0, 2.0, 4.0],
+            25.0,
+            5.0,
+        )
+
+    tight = run(0.01)
+    assert tight["inert"] is True
+    assert tight["sign_stable"] is True
+    assert all(p["improvement_bps"] == 0.0 for p in tight["points"])
+    assert tight["flat_improvement_bps"] == 0.0
+
+    loose = run(0.3)
+    assert loose["sign_stable"] is True
+    assert loose["inert"] is False, loose["points"]
