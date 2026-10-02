@@ -21,6 +21,9 @@ pub struct StabilityRow {
     pub improvement_span_bps: f64,
     /// False when this cap's row holds both a gain and a loss.
     pub sign_stable: bool,
+    /// True when pooling changed nothing at this cap, at any half-life or in
+    /// the flat pool. See [`crate::hlsweep::HlSweepReport::inert`].
+    pub inert: bool,
 }
 
 /// **Does the cap ladder survive the half-life?**
@@ -35,7 +38,11 @@ pub struct StabilityRow {
 /// The question is the one `sign_stable` asks, asked of every cap at once:
 /// `stable_caps` counts the rows on which pooling paid at every half-life or
 /// cost at every half-life, `unstable_caps` the rows on which the half-life
-/// decided. `all_sign_stable` is the one-word answer to the heading.
+/// decided, and `inert_caps` the rows on which pooling changed nothing at all
+/// -- the cap bound both plans identically. The three partition the grid.
+/// `all_sign_stable` is the one-word answer to the heading: no row was decided
+/// by the half-life. An inert row does not make it false, but it is not
+/// counted as evidence for it either.
 ///
 /// **There is deliberately no best cell.** A two-parameter grid scored on the
 /// session it is fitted to is the place a report stops describing and starts
@@ -61,6 +68,7 @@ pub struct StabilityReport {
     /// The half-life grid every row is swept across, in order.
     pub half_lives: Vec<f64>,
     pub rows: Vec<StabilityRow>,
+    pub inert_caps: usize,
     pub stable_caps: usize,
     pub unstable_caps: usize,
     pub all_sign_stable: bool,
@@ -128,10 +136,15 @@ pub fn stability(
             flat_improvement_bps: s.flat_improvement_bps,
             improvement_span_bps: s.improvement_span_bps,
             sign_stable: s.sign_stable,
+            inert: s.inert,
         });
     }
 
-    let stable_caps = rows.iter().filter(|r| r.sign_stable).count();
+    // The three counts partition the grid: an inert row is sign-stable only
+    // because it has no sign, so it is counted on its own and not as stable.
+    let inert_caps = rows.iter().filter(|r| r.inert).count();
+    let stable_caps = rows.iter().filter(|r| r.sign_stable && !r.inert).count();
+    let unstable_caps = rows.iter().filter(|r| !r.sign_stable).count();
     Ok(StabilityReport {
         product,
         bucket_ns,
@@ -141,9 +154,10 @@ pub fn stability(
         coef_bps: r8(coef_bps),
         perm_coef_bps: r8(perm_coef_bps),
         half_lives: hl_grid.iter().map(|h| r8(*h)).collect(),
-        unstable_caps: rows.len() - stable_caps,
-        all_sign_stable: stable_caps == rows.len(),
+        all_sign_stable: unstable_caps == 0,
+        inert_caps,
         stable_caps,
+        unstable_caps,
         rows,
     })
 }
