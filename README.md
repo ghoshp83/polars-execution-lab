@@ -536,10 +536,15 @@ This is a **market-data and execution-analytics** project, not a trading system.
   including an explicit `0` — and always `false` from the library, which cannot
   know who chose its arguments.
   `xexeclab pov-stability` asks the question of the whole cap ladder at once, one
-  half-life sweep per cap. On the same session **four of the five caps keep their
-  sign at every half-life, and the one that does not is 0.25** — the cap the
-  headline was quoted at, so the one unstable point on the ladder is the one the
-  numbers above happened to pick. Halve the parent to 0.1 and every row is stable,
+  half-life sweep per cap. On the same session **three of the five caps keep their
+  sign at every half-life, one is inert, and the one that flips is 0.25** — the
+  cap the headline was quoted at, so the one unstable point on the ladder is the
+  one the numbers above happened to pick. The inert cap is 5%: it binds both plans
+  alike, every cell is exactly zero, and pooling does nothing there at all. Such a
+  row is sign-stable only because it has no sign, so `pov-hl-sweep` and every grid
+  row flag it **`inert`**, and `pov-stability` counts it in **`inert_caps`** rather
+  than `stable_caps` — the three counts partition the grid, and a cap at which
+  pooling did nothing never vouches for pooling. Halve the parent to 0.1 and every row is stable,
   but not every row agrees: pooling pays at the 5% and 10% caps and costs at 15%
   and above, at every half-life. Stable is not the same as positive, and there the
   cap decides the sign rather than the guess. The grid has **no best cell**, by
