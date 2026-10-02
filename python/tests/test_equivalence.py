@@ -1269,7 +1269,11 @@ def test_rust_and_python_stability_grids_are_identical():
     )
 
     assert rust == py
-    assert rust["stable_caps"] == 4
+    # The tightest cap binds both plans alike: it is inert, not a fourth stable
+    # cap, so only three caps actually vouch for pooling.
+    assert rust["inert_caps"] == 1
+    assert [r["cap"] for r in rust["rows"] if r["inert"]] == [0.05]
+    assert rust["stable_caps"] == 3
     assert rust["unstable_caps"] == 1
     assert [r["cap"] for r in rust["rows"] if not r["sign_stable"]] == [POV_PLAN["cap"]]
     single = hl_sweep(
