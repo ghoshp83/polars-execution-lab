@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.34.0] - 2026-10-02
+
+### Added
+- **`inert` on `pov-hl-sweep` and on every `pov-stability` row.** v0.33.0 counted
+  a row as stable whenever its sign never flipped, and a row that is exactly zero
+  at every half-life never flips. That is the weakest kind of stable: the cap
+  binds both plans in every bucket, they trade identically, and the half-life has
+  nothing to act on. `inert` is `true` when every grid point **and** the flat pool
+  improve by exactly zero. `sign_stable` is unchanged, so an inert row still
+  reports it `true`; the new flag says why.
+- **`inert_caps` on `pov-stability`.** The grid now reports three counts that
+  partition it, the way `pov-sweep`'s like-for-like / dominated / traded-off
+  counts do: `inert_caps`, `stable_caps`, `unstable_caps`. A test on each side
+  uses a fixture with one row of each kind and fails if any row is booked twice.
+- **The finding, corrected.** v0.33.0 reported that four of five caps keep their
+  sign at the README's settings. One of the four is the 5% cap, which is inert:
+  **three caps vouch for pooling, one is inert, and 0.25 is still the one that
+  flips.** The same 1% cap that is inert on a test fixture at parent 1.0 is not
+  inert at parent 0.6, so the flag is read off the run, never off the cap value.
+- Two tests each side for the grid, one each side for `hl_sweep`; the 25th
+  equivalence test now pins `inert_caps == 1` at cap 0.05 and `stable_caps == 3`.
+
+### Changed
+- **`stable_caps` no longer counts inert rows.** It was `rows where sign_stable`;
+  it is now `rows where sign_stable and not inert`. On the README's settings it
+  drops from 4 to 3. `unstable_caps` and `all_sign_stable` are unchanged in
+  meaning: an inert row does not make `all_sign_stable` false, but it is no
+  longer counted as evidence for it.
+
+### Notes
+- Polars 2.0 re-measured on 2026-10-02 with `python -m xexeclab.upstream`: still
+  not released on either registry, so adoption stays blocked upstream.
+
 ## [0.33.0] - 2026-10-01
 
 ### Added
