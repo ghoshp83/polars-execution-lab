@@ -1633,6 +1633,8 @@ def hl_sweep(
     # A zero does not flip a verdict, so only a strict sign on both sides counts
     # as unstable.
     sign_stable = not (any(v > 0.0 for v in gains) and any(v < 0.0 for v in gains))
+    # Stable for want of a sign is not the same finding as stable, so say so.
+    inert = flat_improvement_bps == 0.0 and all(v == 0.0 for v in gains)
 
     # Smallest half-life first on a tie: the grid is increasing, so scanning
     # forward with a strict comparison keeps the earliest of equal points.
@@ -1657,6 +1659,7 @@ def hl_sweep(
         "improvement_max_bps": improvement_max,
         "improvement_span_bps": _r8(improvement_max - improvement_min),
         "sign_stable": sign_stable,
+        "inert": inert,
         "best_half_life": pick(improvement_max),
         "worst_half_life": pick(improvement_min),
     }
@@ -1684,7 +1687,11 @@ def stability(
     The question is the one ``sign_stable`` asks, asked of every cap at once:
     ``stable_caps`` counts the rows on which pooling paid at every half-life or
     cost at every half-life, ``unstable_caps`` the rows on which the half-life
-    decided. ``all_sign_stable`` is the one-word answer.
+    decided, and ``inert_caps`` the rows on which pooling changed nothing at
+    all -- the cap bound both plans identically. The three partition the grid.
+    ``all_sign_stable`` is the one-word answer: no row was decided by the
+    half-life. An inert row does not make it false, but it is not counted as
+    evidence for it either.
 
     **There is deliberately no best cell.** A two-parameter grid scored on the
     session it is fitted to is the place a report stops describing and starts
@@ -1728,10 +1735,15 @@ def stability(
                 "flat_improvement_bps": s["flat_improvement_bps"],
                 "improvement_span_bps": s["improvement_span_bps"],
                 "sign_stable": s["sign_stable"],
+                "inert": s["inert"],
             }
         )
 
-    stable_caps = sum(1 for r in rows if r["sign_stable"])
+    # The three counts partition the grid: an inert row is sign-stable only
+    # because it has no sign, so it is counted on its own and not as stable.
+    inert_caps = sum(1 for r in rows if r["inert"])
+    stable_caps = sum(1 for r in rows if r["sign_stable"] and not r["inert"])
+    unstable_caps = sum(1 for r in rows if not r["sign_stable"])
     return {
         "product": product,
         "bucket_ns": bucket_ns,
@@ -1742,9 +1754,10 @@ def stability(
         "perm_coef_bps": _r8(perm_coef_bps),
         "half_lives": [_r8(h) for h in half_life_grid],
         "rows": rows,
+        "inert_caps": inert_caps,
         "stable_caps": stable_caps,
-        "unstable_caps": len(rows) - stable_caps,
-        "all_sign_stable": stable_caps == len(rows),
+        "unstable_caps": unstable_caps,
+        "all_sign_stable": unstable_caps == 0,
     }
 
 
