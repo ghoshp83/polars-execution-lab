@@ -92,6 +92,11 @@ pub struct HlSweepReport {
     /// False when the grid holds both a half-life at which pooling paid and one
     /// at which it cost. See [`HlSweepReport`].
     pub sign_stable: bool,
+    /// True when every grid point *and* the flat pool improve by exactly zero:
+    /// the cap binds so hard that the pooled and naive plans trade the same, so
+    /// the half-life has nothing to act on. `sign_stable` is then true only
+    /// because there is no sign at all, and the row says nothing about pooling.
+    pub inert: bool,
     /// The grid half-life with the largest `improvement_bps`, smallest first on
     /// a tie. Reported as the shape of the grid, **not** as a recommendation:
     /// it is fitted on the very session being scored, so trading it would be
@@ -208,6 +213,8 @@ pub fn hl_sweep(
     // A zero does not flip a verdict, so only a strict sign on both sides counts
     // as unstable.
     let sign_stable = !(gains.iter().any(|v| *v > 0.0) && gains.iter().any(|v| *v < 0.0));
+    // Stable for want of a sign is not the same finding as stable, so say so.
+    let inert = flat_improvement_bps == 0.0 && gains.iter().all(|v| *v == 0.0);
 
     // Smallest half-life first on a tie: the grid is increasing, so scanning
     // forward with a strict comparison keeps the earliest of equal points.
@@ -236,5 +243,6 @@ pub fn hl_sweep(
         improvement_max_bps,
         improvement_span_bps: r8(improvement_max_bps - improvement_min_bps),
         sign_stable,
+        inert,
     })
 }
