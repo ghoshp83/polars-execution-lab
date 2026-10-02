@@ -76,6 +76,56 @@ def test_every_row_is_the_half_life_sweep_at_that_cap():
         assert row["flat_improvement_bps"] == s["flat_improvement_bps"]
         assert row["improvement_span_bps"] == s["improvement_span_bps"]
         assert row["sign_stable"] == s["sign_stable"]
+        assert row["inert"] == s["inert"]
+
+
+@pytest.mark.parametrize("parent", [1.0, 0.6])
+def test_a_cap_that_binds_both_plans_alike_is_inert_and_not_counted_stable(parent):
+    """**Stable for want of a sign is not stable.** At a 1% cap both plans are
+    bound in every bucket and trade identically, so every cell is exactly zero.
+    ``sign_stable`` is true there only because there is no sign at all; counting
+    that row in ``stable_caps`` would let a cap at which pooling did nothing vouch
+    for pooling. The same cap on a smaller parent is not inert, so the flag is
+    read off the run and not off the cap."""
+    grid = stability(
+        [_blended(), _lumpy()],
+        _thin_tail(),
+        BUCKET,
+        parent,
+        [0.01, 0.3, 0.5],
+        HALF_LIVES,
+        25.0,
+        5.0,
+    )
+    if parent == 0.6:
+        assert not grid["rows"][0]["inert"], grid["rows"][0]["improvement_bps"]
+        assert grid["inert_caps"] == 0
+        return
+    assert [r["inert"] for r in grid["rows"]] == [True, False, False]
+    row = grid["rows"][0]
+    assert all(v == 0.0 for v in row["improvement_bps"])
+    assert row["flat_improvement_bps"] == 0.0
+    assert row["sign_stable"], "an inert row has no sign to flip"
+    assert grid["inert_caps"] == 1
+    assert grid["stable_caps"] == 2
+    assert grid["unstable_caps"] == 0
+    assert grid["all_sign_stable"] is True
+
+
+def test_inert_stable_and_unstable_partition_the_grid():
+    """The three counts partition the grid, like ``cap_sweep``'s: every row lands
+    in exactly one. The fixture has one row of each kind, so a count that
+    double-books a row fails here."""
+    grid = stability(
+        [_blended(), _lumpy()], _pinched(), BUCKET, 1.0, [0.01, 0.3, 0.5], HALF_LIVES, 25.0, 5.0
+    )
+    assert (grid["inert_caps"], grid["stable_caps"], grid["unstable_caps"]) == (1, 1, 1), (
+        "the fixture no longer has one row of each kind"
+    )
+    for r in grid["rows"]:
+        kinds = [r["inert"], r["sign_stable"] and not r["inert"], not r["sign_stable"]]
+        assert sum(1 for k in kinds if k) == 1, f"cap {r['cap']}"
+    assert grid["all_sign_stable"] is False
 
 
 def test_a_ladder_that_is_stable_at_one_cap_and_not_another_is_reported_mixed():
@@ -91,9 +141,10 @@ def test_a_ladder_that_is_stable_at_one_cap_and_not_another_is_reported_mixed():
         "the fixture no longer splits, so it proves nothing: "
         f"{[r['improvement_bps'] for r in grid['rows']]}"
     )
+    assert grid["inert_caps"] == 0
     assert grid["stable_caps"] == 1
     assert grid["unstable_caps"] == 1
-    assert grid["stable_caps"] + grid["unstable_caps"] == len(grid["rows"])
+    assert grid["inert_caps"] + grid["stable_caps"] + grid["unstable_caps"] == len(grid["rows"])
     assert grid["all_sign_stable"] is False
 
 

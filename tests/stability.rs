@@ -85,7 +85,78 @@ fn every_row_is_the_half_life_sweep_at_that_cap() {
         assert_eq!(row.flat_improvement_bps, s.flat_improvement_bps);
         assert_eq!(row.improvement_span_bps, s.improvement_span_bps);
         assert_eq!(row.sign_stable, s.sign_stable);
+        assert_eq!(row.inert, s.inert);
     }
+}
+
+/// **Stable for want of a sign is not stable.** At a 1% cap both plans are
+/// bound in every bucket and trade identically, so every cell is exactly zero.
+/// `sign_stable` is true there only because there is no sign at all; counting
+/// that row in `stable_caps` would let a cap at which pooling did nothing
+/// vouch for pooling. The same cap on a smaller parent is not inert, so the
+/// flag is read off the run and not off the cap.
+#[test]
+fn a_cap_that_binds_both_plans_alike_is_inert_and_not_counted_stable() {
+    let run = |parent: f64| {
+        stability(
+            &[blended(), lumpy()],
+            &thin_tail(),
+            BUCKET,
+            parent,
+            &[0.01, 0.3, 0.5],
+            &HALF_LIVES,
+            25.0,
+            5.0,
+        )
+        .unwrap()
+    };
+    let grid = run(1.0);
+    let inert: Vec<bool> = grid.rows.iter().map(|r| r.inert).collect();
+    assert_eq!(inert, vec![true, false, false]);
+    let row = &grid.rows[0];
+    assert!(row.improvement_bps.iter().all(|v| *v == 0.0));
+    assert_eq!(row.flat_improvement_bps, 0.0);
+    assert!(row.sign_stable, "an inert row has no sign to flip");
+    assert_eq!(grid.inert_caps, 1);
+    assert_eq!(grid.stable_caps, 2);
+    assert_eq!(grid.unstable_caps, 0);
+    assert!(grid.all_sign_stable);
+
+    let smaller = run(0.6);
+    assert!(
+        !smaller.rows[0].inert,
+        "a 1% cap is not inert by itself: {:?}",
+        smaller.rows[0].improvement_bps
+    );
+    assert_eq!(smaller.inert_caps, 0);
+}
+
+/// The three counts partition the grid, like `cap_sweep`'s: every row lands in
+/// exactly one, so a reader who adds them up gets the grid back. The fixture
+/// has one row of each kind, so a count that double-books a row fails here.
+#[test]
+fn inert_stable_and_unstable_partition_the_grid() {
+    let grid = stability(
+        &[blended(), lumpy()],
+        &pinched(),
+        BUCKET,
+        1.0,
+        &[0.01, 0.3, 0.5],
+        &HALF_LIVES,
+        25.0,
+        5.0,
+    )
+    .unwrap();
+    assert_eq!(
+        (grid.inert_caps, grid.stable_caps, grid.unstable_caps),
+        (1, 1, 1),
+        "the fixture no longer has one row of each kind"
+    );
+    for r in &grid.rows {
+        let kinds = [r.inert, r.sign_stable && !r.inert, !r.sign_stable];
+        assert_eq!(kinds.iter().filter(|k| **k).count(), 1, "cap {}", r.cap);
+    }
+    assert!(!grid.all_sign_stable);
 }
 
 /// **The finding the grid exists for.** On the same sessions the half-life
@@ -116,14 +187,18 @@ fn a_ladder_that_is_stable_at_one_cap_and_not_another_is_reported_mixed() {
             .map(|r| &r.improvement_bps)
             .collect::<Vec<_>>()
     );
+    assert_eq!(grid.inert_caps, 0);
     assert_eq!(grid.stable_caps, 1);
     assert_eq!(grid.unstable_caps, 1);
-    assert_eq!(grid.stable_caps + grid.unstable_caps, grid.rows.len());
+    assert_eq!(
+        grid.inert_caps + grid.stable_caps + grid.unstable_caps,
+        grid.rows.len()
+    );
     assert!(!grid.all_sign_stable);
 }
 
 /// `all_sign_stable` is the one-word answer, so it has to be `true` when no row
-/// flipped — including the degenerate row where nothing moves at all.
+/// flipped.
 #[test]
 fn a_ladder_with_no_flip_is_all_sign_stable() {
     let grid = stability(
