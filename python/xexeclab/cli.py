@@ -15,6 +15,7 @@ from .engine import (
     counterfactual,
     depth_metrics,
     hl_sweep,
+    holdout,
     impact_curve,
     optimal_schedule,
     pov_backtest,
@@ -237,6 +238,25 @@ def cmd_pov_stability(a: argparse.Namespace) -> None:
             stability(
                 [read_ticks(p.strip()) for p in a.history.split(",")],
                 read_ticks(a.input),
+                a.bucket_ms * 1_000_000,
+                a.parent_qty,
+                [float(s) for s in a.cap_grid.split(",")],
+                [float(s) for s in a.half_life_grid.split(",")],
+                a.coef_bps,
+                a.perm_coef_bps,
+            )
+        )
+    )
+
+
+def cmd_pov_holdout(a: argparse.Namespace) -> None:
+    # The rotation is ``--history`` followed by ``--input``, so its last fold is
+    # ``pov-stability`` on the same line.
+    paths = [p.strip() for p in a.history.split(",")] + [a.input]
+    print(
+        json.dumps(
+            holdout(
+                [read_ticks(p) for p in paths],
                 a.bucket_ms * 1_000_000,
                 a.parent_qty,
                 [float(s) for s in a.cap_grid.split(",")],
@@ -756,6 +776,41 @@ def main(argv: list[str] | None = None) -> None:
         help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
     )
     pst.set_defaults(fn=cmd_pov_stability)
+
+    pho = sub.add_parser(
+        "pov-holdout",
+        help="run pov-stability once per session held out; reports agreement, never a best fold",
+    )
+    pho.add_argument(
+        "--history",
+        required=True,
+        help="comma-separated captures, oldest first; rotated together with --input",
+    )
+    pho.add_argument("--input", required=True, help="the last session of the rotation")
+    pho.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
+    pho.add_argument(
+        "--parent-qty", type=float, default=1.0, help="parent order size in base units"
+    )
+    pho.add_argument(
+        "--cap-grid",
+        default="0.1,0.2,0.3",
+        help="comma-separated, strictly increasing grid of caps, each in (0, 1]",
+    )
+    pho.add_argument(
+        "--half-life-grid",
+        default="0.25,0.5,1,2,4",
+        help="comma-separated, strictly increasing grid of half-lives, each > 0",
+    )
+    pho.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    pho.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    pho.set_defaults(fn=cmd_pov_holdout)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"
