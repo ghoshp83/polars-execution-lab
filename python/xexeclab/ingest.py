@@ -117,6 +117,7 @@ async def stream_coinbase(
     received = 0
     if log:
         log.emit("ingest_start", product=product, max_trades=max_trades)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         async with websockets.connect(COINBASE_WS, ping_interval=20) as ws:
             await ws.send(json.dumps(sub))
@@ -155,6 +156,7 @@ async def stream_coinbase_quotes(
     reconnects = 0
     if log:
         log.emit("quote_ingest_start", product=product, max_quotes=max_quotes)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         while received < max_quotes:
             try:
@@ -209,6 +211,7 @@ async def stream_coinbase_book(
     reconnects = 0
     if log:
         log.emit("book_ingest_start", product=product, max_snapshots=max_snapshots, levels=levels)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         while written < max_snapshots:
             # Reset on (re)connect: the fresh snapshot is the backfill.
@@ -268,6 +271,7 @@ def synthetic_book(
     mid = 60000.0
     ts = start_ns
     written = 0
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         for _ in range(n_snapshots):
             mid += rng.uniform(-15, 15)
@@ -299,6 +303,7 @@ def synthetic_quotes(
     rng = random.Random(seed)
     mid = 60000.0
     ts = start_ns
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         for _ in range(n):
             mid += rng.uniform(-15, 15)
@@ -348,6 +353,7 @@ def synthetic_calibration(
     """
     rng = random.Random(seed)
     ts = start_ns
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         for _ in range(n):
             ts += int(rng.uniform(0.05, 0.6) * 1e9)
@@ -378,6 +384,7 @@ def synthetic_ticks(
     rng = random.Random(seed)
     price = 60000.0
     ts = start_ns
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         for i in range(n):
             price += rng.uniform(-15, 15)

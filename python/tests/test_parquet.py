@@ -20,3 +20,13 @@ def test_parquet_round_trip_preserves_the_summary(tmp_path):
     after = summary(read_ticks(pq), "BTC-USD", BUCKET_NS)
     # A columnar re-encode must not change a single computed number.
     assert after == before
+
+
+def test_write_ticks_creates_a_missing_output_directory(tmp_path):
+    """A capture is usually written somewhere new. Failing on a missing parent
+    after the whole input was read loses the work for want of a ``mkdir``."""
+    df = read_ticks(SAMPLE)
+    for name in ("ticks.parquet", "ticks.ndjson"):
+        out = tmp_path / "captures" / "2024" / name
+        assert write_ticks(df, out) == df.height
+        assert read_ticks(out).height == df.height

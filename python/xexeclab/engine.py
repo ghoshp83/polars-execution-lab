@@ -96,6 +96,7 @@ def write_ticks(df: pl.DataFrame, path: str | Path) -> int:
     portable replay the Rust engine also reads. Returns the row count written.
     """
     p = str(path)
+    Path(p).parent.mkdir(parents=True, exist_ok=True)
     if p.endswith(".parquet"):
         df.write_parquet(p)
     else:

@@ -90,3 +90,14 @@ def test_book_levels_flattens_top_of_book_in_canonical_schema():
     assert [(r["level"], r["price"]) for r in bid_rows] == [(0, 100.0), (1, 99.0)]
     assert [(r["level"], r["price"]) for r in ask_rows] == [(0, 101.0), (1, 102.0)]
     assert all(r["ts_ns"] == 42 and r["product"] == "BTC-USD" for r in rows)
+
+
+def test_synthetic_ticks_creates_a_missing_output_directory(tmp_path):
+    """Every writer in this module opens its output the same way, and none of
+    them used to create the directory: a first run into ``captures/today/``
+    failed before a single row was written."""
+    from xexeclab.ingest import synthetic_ticks
+
+    out = tmp_path / "captures" / "today" / "ticks.ndjson"
+    assert synthetic_ticks(out, n=25) == 25
+    assert len(out.read_text().splitlines()) == 25
