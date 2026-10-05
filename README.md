@@ -229,13 +229,22 @@ uv run xexeclab pov-hl-sweep --history data/sample_ticks.ndjson,data/sample_tick
                              --input data/sample_ticks_thin.ndjson --half-life-grid 0.25,0.5,1,2,4 \
                              --parent-qty 0.2 --cap 0.25 --coef-bps 25 --perm-coef-bps 5
 
-# ...and sweep both at once: one half-life sweep per cap. Four of these five caps
-# keep their sign at every half-life; the one that does not is 0.25, the cap the
-# headline above was quoted at. The grid reports stability and never a best cell
+# ...and sweep both at once: one half-life sweep per cap. Three of these five caps
+# keep their sign at every half-life, one is inert, and the one that flips is
+# 0.25, the cap the headline above was quoted at. The grid reports stability and
+# never a best cell
 uv run xexeclab pov-stability --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
                               --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
                               --half-life-grid 0.25,0.5,1,2,4 \
                               --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
+
+# ...and run that grid once per session, each taking a turn as the one held out.
+# Same arguments; the last fold is the command above. Only three of the five caps
+# read the same in every fold, and one of those is the inert one
+uv run xexeclab pov-holdout --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson \
+                            --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+                            --half-life-grid 0.25,0.5,1,2,4 \
+                            --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
 
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
@@ -552,6 +561,28 @@ This is a **market-data and execution-analytics** project, not a trading system.
   half-life on the session being scored is fitting with twice the freedom
   `best_half_life` already warns about, and it would read as a recommendation
   however it was labelled.
+  **Every figure above was read off one held-out session, and that was a choice
+  too.** `xexeclab pov-holdout` runs the same grid once per session, each taking a
+  turn as the input while the others are the history, and reduces every cap in
+  every fold to one verdict: `inert`, `gain`, `loss` or `unstable`. The direction
+  is in the verdict because two folds can both be sign-stable and still disagree
+  on the sign. On the three captures used above, **only three of the five caps
+  read the same whichever one is held out, and one of those is the inert 5% cap**:
+  15% and 20% are a gain in every fold, while the gain at 10% and the instability
+  at 0.25 both belong to the single fold these numbers were quoted from — hold out
+  either other capture and 10% is inert and 0.25 is a plain gain. Rotate the
+  fourth bundled capture in as well and nothing but the inert cap agrees: held
+  out, the thin session reads pooling as a loss at every cap that binds. So the
+  defensible reading of this data is narrower than any single run suggested.
+  **This is a rotation, not a backtest**: a fold that holds out an early session
+  forecasts it from sessions that came after it, which no desk could do, so the
+  report says how much a verdict depends on the session it was read from and
+  nothing about what a plan would have earned. It reports a `consensus` per cap —
+  the shared verdict, or `mixed` — and deliberately **no pooled figure and no best
+  fold**: three or four sessions averaged into one number would read as an
+  estimate, and it is not one. It needs at least three sessions, and the order
+  they are given in matters, because the half-life weights the history by
+  recency.
   Every history session must trade in the same buckets as the execution session,
   so sessions with a gap are refused rather than filled in.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
