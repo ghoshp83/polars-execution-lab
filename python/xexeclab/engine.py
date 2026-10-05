@@ -1761,6 +1761,120 @@ def stability(
     }
 
 
+def _verdict(row: dict) -> str:
+    """What one cap's row says once its direction is read as well as its stability.
+
+    ``sign_stable`` alone cannot tell a row on which pooling paid at every
+    half-life from one on which it cost at every half-life: both are "stable".
+    Across folds that difference is the whole question, so the verdict names it.
+    """
+    if row["inert"]:
+        return "inert"
+    if not row["sign_stable"]:
+        return "unstable"
+    if any(v > 0.0 for v in row["improvement_bps"]):
+        return "gain"
+    if any(v < 0.0 for v in row["improvement_bps"]):
+        return "loss"
+    # Every grid point is zero but the row is not inert, so the flat pool is
+    # the only figure that moved and it carries the direction.
+    return "gain" if row["flat_improvement_bps"] > 0.0 else "loss"
+
+
+def holdout(
+    sessions: list[pl.DataFrame],
+    bucket_ns: int,
+    parent_qty: float,
+    cap_grid: list[float],
+    half_life_grid: list[float],
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """Does the verdict survive the choice of held-out session?
+
+    ``stability`` asks whether a cap's verdict survives the half-life, but it
+    asks it of one input session. Which session is held out is itself a choice
+    nobody fitted, and the grid has never been run with a different one. This
+    runs it once per session: each takes a turn as the input while the others,
+    in the order given, are the history. The fold that holds out the last
+    session is exactly the report ``pov-stability`` prints for the same
+    arguments.
+
+    Each fold reduces every cap to one verdict -- ``inert``, ``gain``, ``loss``
+    or ``unstable`` -- because two folds that are both sign-stable can still
+    disagree on which sign. ``consensus`` is the verdict a cap was given in
+    every fold, or ``mixed`` when the folds disagree; ``agreeing_caps`` counts
+    the caps that are not ``mixed``, and ``all_agree`` is the one-word answer. A
+    consensus of ``inert`` is agreement that nothing was measured, which is why
+    the verdict is reported and not just a flag.
+
+    **This is a rotation, not a backtest.** A fold that holds out an early
+    session forecasts it from sessions that came after it, which no desk could
+    have done. The rotation says how much the verdict depends on the session it
+    was read from; it does not say what any of these plans would have earned.
+
+    **There is deliberately no pooled figure and no best fold.** Averaging
+    ``improvement_bps`` across folds would turn a handful of sessions into one
+    number that reads as an estimate, and picking the fold with the kindest
+    verdict is the fitting ``stability`` already refuses. A test pins the
+    absence of both.
+
+    Mirrors ``holdout`` in ``src/holdout.rs`` operation for operation.
+    """
+    # Each fold pools the other sessions, and a pool of one is not a pool.
+    if len(sessions) < 3:
+        raise ValueError(f"holdout needs at least 3 sessions, got {len(sessions)}")
+
+    folds: list[dict] = []
+    grid: dict = {}
+    for held_out in range(len(sessions)):
+        history = [s for i, s in enumerate(sessions) if i != held_out]
+        grid = stability(
+            history,
+            sessions[held_out],
+            bucket_ns,
+            parent_qty,
+            cap_grid,
+            half_life_grid,
+            coef_bps,
+            perm_coef_bps,
+        )
+        folds.append(
+            {
+                "held_out": held_out,
+                "verdicts": [_verdict(r) for r in grid["rows"]],
+                "flat_improvement_bps": [r["flat_improvement_bps"] for r in grid["rows"]],
+                "inert_caps": grid["inert_caps"],
+                "stable_caps": grid["stable_caps"],
+                "unstable_caps": grid["unstable_caps"],
+            }
+        )
+
+    caps = [r["cap"] for r in grid["rows"]]
+    consensus = [
+        folds[0]["verdicts"][c]
+        if all(f["verdicts"][c] == folds[0]["verdicts"][c] for f in folds)
+        else "mixed"
+        for c in range(len(caps))
+    ]
+    agreeing_caps = sum(1 for v in consensus if v != "mixed")
+    return {
+        "product": grid["product"],
+        "bucket_ns": bucket_ns,
+        "buckets": grid["buckets"],
+        "sessions": len(sessions),
+        "parent_qty": grid["parent_qty"],
+        "coef_bps": grid["coef_bps"],
+        "perm_coef_bps": grid["perm_coef_bps"],
+        "caps": caps,
+        "half_lives": grid["half_lives"],
+        "folds": folds,
+        "consensus": consensus,
+        "agreeing_caps": agreeing_caps,
+        "all_agree": agreeing_caps == len(consensus),
+    }
+
+
 def _pooling_weights(sessions: int, half_life: float) -> list[float]:
     """The weight each history session carries, oldest first, summing to one.
 
