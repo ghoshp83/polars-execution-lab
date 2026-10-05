@@ -19,6 +19,7 @@ from xexeclab.engine import (
     counterfactual,
     depth_metrics,
     hl_sweep,
+    holdout,
     impact_curve,
     optimal_schedule,
     pov_backtest,
@@ -1218,10 +1219,11 @@ def test_both_clis_flag_a_half_life_nobody_chose():
 def test_rust_and_python_stability_grids_are_identical():
     """The twenty-fifth: the cap ladder swept across the half-life.
 
-    Run on the settings the README quotes, it is also the finding: four of the
-    five caps keep their sign at every half-life, and the one that does not is
-    0.25 -- the cap the headline ``improvement_bps`` was quoted at. Its row must
-    be the half-life sweep the twenty-second test already pins, point for point.
+    Run on the settings the README quotes, it is also the finding: three of the
+    five caps keep their sign at every half-life, one is inert, and the one that
+    flips is 0.25 -- the cap the headline ``improvement_bps`` was quoted at. Its
+    row must be the half-life sweep the twenty-second test already pins, point
+    for point.
     """
     binary = _find_binary()
     if not binary:
@@ -1287,3 +1289,87 @@ def test_rust_and_python_stability_grids_are_identical():
         POV_PLAN["perm_coef_bps"],
     )
     assert rust["rows"][-1]["improvement_bps"] == [p["improvement_bps"] for p in single["points"]]
+
+
+def test_rust_and_python_holdout_rotations_are_identical():
+    """The twenty-sixth: the stability grid run once per held-out session.
+
+    Run on the settings the README quotes, it is also the finding. Only three of
+    the five caps read the same whichever capture is held out, and one of those
+    is inert: the unstable 0.25 row and the gain at 0.1 both belong to the one
+    fold the README happened to quote. The last fold must be the grid the
+    twenty-fifth test pins.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    caps = "0.05,0.1,0.15,0.2,0.25"
+    hls = "0.25,0.5,1,2,4"
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-holdout",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE}",
+            "--input",
+            THIN_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap-grid",
+            caps,
+            "--half-life-grid",
+            hls,
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    sessions = [read_ticks(SAMPLE), read_ticks(NEXT_SAMPLE), read_ticks(THIN_SAMPLE)]
+    args = (
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        [float(v) for v in caps.split(",")],
+        [float(v) for v in hls.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+    py = holdout(sessions, *args)
+
+    assert rust == py
+    assert [f["verdicts"] for f in rust["folds"]] == [
+        ["inert", "inert", "gain", "gain", "gain"],
+        ["inert", "inert", "gain", "gain", "gain"],
+        ["inert", "gain", "gain", "gain", "unstable"],
+    ]
+    assert rust["consensus"] == ["inert", "mixed", "gain", "gain", "mixed"]
+    assert rust["agreeing_caps"] == 3
+    assert rust["all_agree"] is False
+    grid = stability(sessions[:2], sessions[2], *args)
+    last = rust["folds"][-1]
+    assert last["flat_improvement_bps"] == [r["flat_improvement_bps"] for r in grid["rows"]]
+    assert (last["inert_caps"], last["stable_caps"], last["unstable_caps"]) == (1, 3, 1)
+
+    # Rotate the fourth bundled capture in as well and the agreement is gone:
+    # held out, the thin session reads pooling as a loss at every cap that
+    # binds, so the only verdict all four folds share is the inert one.
+    four = holdout(
+        [
+            read_ticks(SAMPLE),
+            read_ticks(NEXT_SAMPLE),
+            read_ticks(THIRD_SAMPLE),
+            read_ticks(THIN_SAMPLE),
+        ],
+        *args,
+    )
+    assert four["folds"][-1]["verdicts"] == ["inert", "loss", "loss", "loss", "loss"]
+    assert four["consensus"] == ["inert", "mixed", "mixed", "mixed", "mixed"]
+    assert four["agreeing_caps"] == 1
