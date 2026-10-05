@@ -4,6 +4,51 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.35.0] - 2026-10-05
+
+### Added
+- **`pov-holdout` — the stability grid run once per held-out session.**
+  `pov-stability` asks whether a cap's verdict survives the half-life, but it has
+  only ever asked it of one input session, and which session is held out is a
+  choice nobody examined. `src/holdout.rs` and `holdout` in `engine.py` rotate
+  it: every session takes a turn as the input while the others, in the order
+  given, are the history. The command takes the same `--history` and `--input`
+  as `pov-stability` and rotates the two together, so its last fold is that
+  command's report.
+- **A verdict per cap per fold: `inert`, `gain`, `loss` or `unstable`.** The
+  direction is part of the verdict because `sign_stable` cannot tell a row on
+  which pooling always paid from one on which it always cost. A test on each
+  side uses a rotation in which no fold has an unstable cap and the folds still
+  disagree on the sign.
+- **`consensus`, `agreeing_caps`, `all_agree`.** `consensus` is the verdict every
+  fold gave a cap, or `mixed`. It is a verdict and not a flag so that agreement
+  on `inert` — agreement that nothing was measured — stays visible as such.
+- **The finding.** On the README's three captures only three of the five caps
+  read the same whichever one is held out, and one of those is the inert 5% cap.
+  The gain at 10% and the instability at 0.25 both belong to the single fold
+  every earlier release quoted. With the fourth bundled capture rotated in, the
+  inert cap is the only one all four folds agree on.
+- **No pooled figure and no best fold**, pinned by a test on each side. The
+  report is a rotation, not a backtest: early sessions are forecast from later
+  ones, so it measures dependence on the held-out session and nothing else.
+- Seven tests each side (`tests/holdout.rs`, `python/tests/test_holdout.py`) and
+  a 26th equivalence test that pins the rotation on the bundled captures.
+
+### Fixed
+- **Python writers create a missing output directory.** `convert`, the `synth-*`
+  commands and the `ingest-*` commands opened `--out` directly and failed on a
+  path whose parent did not exist — for `convert`, after the whole input had been
+  read. `write_ticks` and every writer in `ingest.py` now create the parent
+  first. One test each for the Parquet/NDJSON sink and the synthetic writer.
+- README: the `pov-stability` usage comment still said four of five caps keep
+  their sign. v0.34.0 corrected the prose and missed the comment; it now says
+  three, one inert. The 25th equivalence test's docstring had the same error.
+
+### Notes
+- Polars 2.0 re-measured on 2026-10-05 with `python -m xexeclab.upstream`: crate
+  0.55.2 and PyPI 1.44.2, no stable 2.0 on either registry, so adoption stays
+  blocked upstream.
+
 ## [0.34.0] - 2026-10-02
 
 ### Added
