@@ -38,6 +38,7 @@ from .engine import (
     summary,
     sweep_cost,
     sweep_curve,
+    walk_forward,
     write_ticks,
 )
 from .events import EventLog
@@ -256,6 +257,25 @@ def cmd_pov_holdout(a: argparse.Namespace) -> None:
     print(
         json.dumps(
             holdout(
+                [read_ticks(p) for p in paths],
+                a.bucket_ms * 1_000_000,
+                a.parent_qty,
+                [float(s) for s in a.cap_grid.split(",")],
+                [float(s) for s in a.half_life_grid.split(",")],
+                a.coef_bps,
+                a.perm_coef_bps,
+            )
+        )
+    )
+
+
+def cmd_pov_walkforward(a: argparse.Namespace) -> None:
+    # The walk is ``--history`` followed by ``--input``, oldest first, so its
+    # last fold is ``pov-stability`` on the same line.
+    paths = [p.strip() for p in a.history.split(",")] + [a.input]
+    print(
+        json.dumps(
+            walk_forward(
                 [read_ticks(p) for p in paths],
                 a.bucket_ms * 1_000_000,
                 a.parent_qty,
@@ -811,6 +831,41 @@ def main(argv: list[str] | None = None) -> None:
         help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
     )
     pho.set_defaults(fn=cmd_pov_holdout)
+
+    pwf = sub.add_parser(
+        "pov-walkforward",
+        help="run pov-stability on each session using only earlier ones; never a best fold",
+    )
+    pwf.add_argument(
+        "--history",
+        required=True,
+        help="comma-separated captures, oldest first and not overlapping in time",
+    )
+    pwf.add_argument("--input", required=True, help="the newest session of the walk")
+    pwf.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
+    pwf.add_argument(
+        "--parent-qty", type=float, default=1.0, help="parent order size in base units"
+    )
+    pwf.add_argument(
+        "--cap-grid",
+        default="0.1,0.2,0.3",
+        help="comma-separated, strictly increasing grid of caps, each in (0, 1]",
+    )
+    pwf.add_argument(
+        "--half-life-grid",
+        default="0.25,0.5,1,2,4",
+        help="comma-separated, strictly increasing grid of half-lives, each > 0",
+    )
+    pwf.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    pwf.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    pwf.set_defaults(fn=cmd_pov_walkforward)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"
