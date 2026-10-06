@@ -42,6 +42,7 @@ from xexeclab.engine import (
     summary,
     sweep_cost,
     sweep_curve,
+    walk_forward,
 )
 
 pytestmark = pytest.mark.equivalence
@@ -1373,3 +1374,96 @@ def test_rust_and_python_holdout_rotations_are_identical():
     assert four["folds"][-1]["verdicts"] == ["inert", "loss", "loss", "loss", "loss"]
     assert four["consensus"] == ["inert", "mixed", "mixed", "mixed", "mixed"]
     assert four["agreeing_caps"] == 1
+
+
+def test_rust_and_python_walk_forwards_are_identical():
+    """The twenty-seventh: the stability grid walked forward in time.
+
+    The rotation the twenty-sixth test pins forecasts early sessions from later
+    ones. Walked forward over the four bundled captures, each session read only
+    from the ones before it, the two steps share one verdict and it is the inert
+    one. And the third capture is where the future shows: the rotation called
+    the 0.15 cap a gain for it with the later thin session in the history; from
+    its own past that cap is unstable.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    caps = "0.05,0.1,0.15,0.2,0.25"
+    hls = "0.25,0.5,1,2,4"
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-walkforward",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE},{THIRD_SAMPLE}",
+            "--input",
+            THIN_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap-grid",
+            caps,
+            "--half-life-grid",
+            hls,
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    sessions = [
+        read_ticks(SAMPLE),
+        read_ticks(NEXT_SAMPLE),
+        read_ticks(THIRD_SAMPLE),
+        read_ticks(THIN_SAMPLE),
+    ]
+    args = (
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        [float(v) for v in caps.split(",")],
+        [float(v) for v in hls.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+    py = walk_forward(sessions, *args)
+
+    assert rust == py
+    assert [f["input"] for f in rust["folds"]] == [2, 3]
+    assert [f["verdicts"] for f in rust["folds"]] == [
+        ["inert", "inert", "unstable", "gain", "gain"],
+        ["inert", "loss", "loss", "loss", "loss"],
+    ]
+    assert rust["consensus"] == ["inert", "mixed", "mixed", "mixed", "mixed"]
+    assert rust["agreeing_caps"] == 1
+    assert rust["all_agree"] is False
+
+    rotation = holdout(sessions, *args)
+    assert rotation["folds"][2]["verdicts"] == ["inert", "inert", "gain", "gain", "gain"]
+    assert rotation["folds"][3]["verdicts"] == rust["folds"][1]["verdicts"]
+
+    # The bundled captures are a minute apart and in this order; given in any
+    # other, both engines refuse instead of forecasting from the future.
+    swapped = subprocess.run(
+        [
+            binary,
+            "pov-walkforward",
+            "--history",
+            f"{NEXT_SAMPLE},{SAMPLE},{THIRD_SAMPLE}",
+            "--input",
+            THIN_SAMPLE,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert swapped.returncode != 0
+    assert "time order" in swapped.stderr
+    with pytest.raises(ValueError, match="time order"):
+        walk_forward([sessions[1], sessions[0], sessions[2], sessions[3]], *args)
