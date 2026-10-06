@@ -8,7 +8,7 @@ use serde::Serialize;
 /// `sign_stable` alone cannot tell a row on which pooling paid at every
 /// half-life from one on which it cost at every half-life: both are "stable".
 /// Across folds that difference is the whole question, so the verdict names it.
-fn verdict(row: &StabilityRow) -> &'static str {
+pub(crate) fn verdict(row: &StabilityRow) -> &'static str {
     if row.inert {
         return "inert";
     }

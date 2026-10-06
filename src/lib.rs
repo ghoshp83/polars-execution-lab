@@ -25,3 +25,4 @@ pub mod shortfall;
 pub mod stability;
 pub mod stream;
 pub mod sweep;
+pub mod walkforward;
