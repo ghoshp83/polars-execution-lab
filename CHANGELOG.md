@@ -4,6 +4,68 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.36.0] - 2026-10-06
+
+### Added
+- **`pov-walkforward` — the stability grid walked forward in time.**
+  `pov-holdout` says of itself that it is a rotation and not a backtest: a fold
+  that holds out an early session forecasts it from later ones. `src/walkforward.rs`
+  and `walk_forward` in `engine.py` are the version a desk could have run.
+  Session `i` is the input and sessions `0..i` are the history, for every `i`
+  from 2 up. The command takes the same arguments as `pov-holdout`, and its last
+  fold is both `pov-stability`'s report and the rotation's last fold.
+- **The time order is checked, not assumed.** Each session must start after the
+  one before it ends; out-of-order or overlapping captures are refused by both
+  engines with the offending session named.
+- **The finding.** Over the four bundled captures the walk has two steps and the
+  only verdict they share is the inert 5% cap. It also shows what the rotation
+  borrowed: scoring the third capture, `pov-holdout` called the 15% cap a gain
+  with the later thin session in its history; from its own past that cap is
+  unstable.
+- **No pooled figure and no best step**, pinned by a test on each side. The
+  report also says plainly that its folds are not like for like — each pools one
+  more session than the last — and it needs at least four sessions, so that
+  there are two steps to compare.
+- Eight tests each side (`tests/walk_forward.rs`,
+  `python/tests/test_walk_forward.py`) and a 27th equivalence test that pins the
+  walk on the bundled captures and the refusal of a swapped order.
+- **Offline tests for the live collectors** (`python/tests/test_ingest_live.py`).
+  The three `stream_coinbase*` functions were the only untested code path; five
+  tests now drive them against a scripted feed: the target count, skipped
+  non-data messages, resume after a drop, the reconnect budget, and the book
+  being rebuilt from the fresh snapshot.
+
+### Fixed
+- **The trade collector reconnects.** `ingest` was documented alongside the
+  quote and book collectors as auto-reconnecting but had no reconnect at all: a
+  dropped connection ended the capture with an exception. It now resumes like
+  the other two, within the same `max_reconnects` budget, and logs
+  `ingest_reconnect`. A resumed capture skips the `last_match` the exchange
+  replays on resubscribe when that trade is already on disk, so a drop cannot
+  double a trade's volume.
+- **The event-log schema lists every event.** `events.py` documented three of
+  the twelve event names the collectors emit.
+- **README: CI runs three jobs**, not two — the advisory Polars 2.0 job has
+  existed since v0.21.0.
+
+### Changed
+- **The Python dependency is capped at `polars>=1.0,<2`.** Polars 2.0.0 was
+  published to PyPI on 2026-10-06. The pin had no upper bound and CI installed
+  `polars` unpinned, so the next run would have put the Python engine on 2.0
+  against a Rust binary built on the 0.55 crate — the cross-generation
+  comparison this project's equivalence claim rules out. `pyproject.toml` and
+  the CI install are capped; the advisory job now installs the stable 2.x
+  release in place of a release candidate.
+
+### Notes
+- `ingest_complete` gains a `reconnects` field, matching the quote and book
+  collectors.
+- Polars 2.0 re-measured on 2026-10-06 with `python -m xexeclab.upstream`: PyPI
+  2.0.0 (ready), crate 0.55.2 (not ready). Adoption stays blocked on the Rust
+  crate and the weekly watch stays green until it ships. Against 2.0.0 the
+  Python engine passes all 242 non-equivalence tests, and the 400,000-tick
+  fingerprint matches 1.43.2 bit for bit across 60,507 values.
+
 ## [0.35.0] - 2026-10-05
 
 ### Added
