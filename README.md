@@ -246,6 +246,15 @@ uv run xexeclab pov-holdout --history data/sample_ticks.ndjson,data/sample_ticks
                             --half-life-grid 0.25,0.5,1,2,4 \
                             --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
 
+# ...and the version a desk could have run: each session forecast only from the
+# ones before it. Captures oldest first -- the order is checked against their
+# timestamps. The two steps share one verdict, and it is the inert one
+uv run xexeclab pov-walkforward \
+    --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson,data/sample_ticks_third.ndjson \
+    --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+    --half-life-grid 0.25,0.5,1,2,4 \
+    --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
+
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
 uv run xexeclab stream  --input data/sample_ticks.ndjson --chunk-rows 4
@@ -300,14 +309,19 @@ XEXEC_BIN=target/release/xexec uv run pytest -m equivalence
 - **Cross-language equivalence** is enforced in CI, not just documented.
 - **Structured observability**: ingest emits a JSONL event log
   (`ingest_start` / `ingest_progress` / `ingest_complete`, and per-reconnect
-  `quote_ingest_reconnect` / `book_ingest_reconnect` when a live feed drops and
-  resumes) with a documented schema (see `python/xexeclab/events.py`).
-- **Resilient live capture**: the quote and L2-book collectors auto-reconnect to
-  the Coinbase feed and resume; on reconnect the book is re-seeded from a fresh
-  snapshot (backfill), and each reconnect is logged so discontinuities are visible.
+  `ingest_reconnect` / `quote_ingest_reconnect` / `book_ingest_reconnect` when a
+  live feed drops and resumes) with a documented schema (see
+  `python/xexeclab/events.py`).
+- **Resilient live capture**: the trade, quote and L2-book collectors
+  auto-reconnect to the Coinbase feed and resume. A resumed trade capture skips
+  the trade the exchange replays on resubscribe if it is already on disk; on
+  reconnect the book is re-seeded from a fresh snapshot (backfill); and each
+  reconnect is logged so discontinuities are visible. All three collectors are
+  tested offline against a scripted feed.
 - **Bar width is a parameter** (`--bucket-ms`); benchmarks scale to any horizon.
-- CI runs two jobs: Rust (`fmt` + `clippy -D warnings` + `test`) and Python
-  (`ruff` + `pytest` + the equivalence test that builds the Rust binary).
+- CI runs three jobs: Rust (`fmt` + `clippy -D warnings` + `test`), Python
+  (`ruff` + `pytest` + the equivalence tests that build the Rust binary), and an
+  advisory Python job on Polars 2.x.
 
 ## Evaluation
 
@@ -583,6 +597,22 @@ This is a **market-data and execution-analytics** project, not a trading system.
   estimate, and it is not one. It needs at least three sessions, and the order
   they are given in matters, because the half-life weights the history by
   recency.
+  **The backtest the rotation is not.** `xexeclab pov-walkforward` runs the same
+  grid on each session from the third on, with only the sessions before it as
+  the history, so no step reads a capture later than the one it scores. The
+  captures must be given oldest first and must not overlap, and that is checked
+  against their timestamps instead of taken on trust. Over the four bundled
+  captures that is two steps, and **the only verdict they share is the inert 5%
+  cap**: the third capture reads 20% and 25% as a gain and 15% as unstable, the
+  thin one reads every binding cap as a loss. It also shows what the rotation
+  borrowed. Scoring that same third capture, the rotation called 15% a gain —
+  with the *later* thin session pooled into its history. From its own past that
+  cap is unstable. **The steps are not like for like**: each pools one more
+  session than the one before, so a verdict that changes along the walk may be
+  the history growing and not the input differing, and the report does not
+  claim to tell the two apart. Two steps are also not a sample — four captures
+  is the minimum the command accepts, and it reports the same `consensus` with
+  the same refusal of a pooled figure or a best step.
   Every history session must trade in the same buckets as the execution session,
   so sessions with a gap are refused rather than filled in.
 - **`xexeclab stream` is bounded memory, not a distributed engine, and it only
@@ -597,16 +627,17 @@ This is a **market-data and execution-analytics** project, not a trading system.
   which sort for you. Only the session aggregates (`vwap`, `twap`, volume,
   notional, order flow) are streamed; every other command in this project still
   reads its whole replay into memory.
-- **Polars 2.0 is watched, not adopted.** Polars 2.0rc1 makes the streaming
+- **Polars 2.0 is watched, not adopted.** Polars 2.0 makes the streaming
   engine the default for every `LazyFrame` query, and the Python engine here
-  passes its whole test suite unchanged on it. An advisory CI job also runs
+  passes its whole test suite unchanged on 2.0.0. An advisory CI job also runs
   `python -m xexeclab.compat` on a 400,000-tick capture under both 1.x and 2.0
   and compares every result bit for bit against a recorded baseline; today they
   match exactly. That covers one synthetic capture and two engine entry points,
   not every input a real session can produce, and CI runners may partition work
-  differently from a local machine. The dependency stays `polars>=1.0` anyway: 2.0 is still a release
-  candidate, and the Rust `polars` crate has not gone 2.0 (crates.io tops out at
-  0.55.2, which this crate pins). Pinning the Python half to 2.0 would put the two
+  differently from a local machine. The dependency is capped at
+  `polars>=1.0,<2` anyway: the Python package reached a stable 2.0.0 on
+  2026-10-06, but the Rust `polars` crate has not (crates.io tops out at
+  0.55.2, which this crate pins). Moving the Python half to 2.0 would put the two
   engines on different generations and leave the cross-language equivalence
   tests comparing across a version boundary instead of proving one engine.
   A weekly `upstream` workflow (`python python/xexeclab/upstream.py`) goes red
