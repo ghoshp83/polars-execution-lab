@@ -1876,6 +1876,107 @@ def holdout(
     }
 
 
+def walk_forward(
+    sessions: list[pl.DataFrame],
+    bucket_ns: int,
+    parent_qty: float,
+    cap_grid: list[float],
+    half_life_grid: list[float],
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """Does the verdict hold when each session is forecast only from its past?
+
+    ``holdout`` rotates the held-out session, and says of itself that it is not
+    a backtest: a fold that holds out an early session forecasts it from
+    sessions that came after it. This is the version a desk could have run.
+    Session ``i`` is the input and sessions ``0..i`` are the history, for every
+    ``i`` from 2 up, so no fold reads a session later than the one it scores.
+    The sessions must be given oldest first and must not overlap in time, and
+    that is checked against their timestamps instead of taken on trust.
+
+    The last fold is the report ``pov-stability`` prints for the same
+    arguments, and the last fold of ``holdout`` on the same sessions. Every
+    earlier fold differs from the rotation's, because the rotation hands it the
+    future.
+
+    **The folds are not like for like.** Each one pools one more session than
+    the fold before it, so a verdict that changes along the walk may be the
+    history growing and not the input differing. ``consensus`` is still the
+    verdict every fold gave a cap, or ``mixed``; it says whether the reading
+    was the same at every step, not why it was not.
+
+    **There is deliberately no pooled figure and no best fold**, for the reason
+    ``holdout`` gives. With ``n`` sessions there are only ``n - 2`` folds, which
+    is a count to read beside the consensus and not a sample to average over.
+
+    Mirrors ``walk_forward`` in ``src/walkforward.rs`` operation for operation.
+    """
+    # A pool of one is not a pool, so the first fold is session 2; and one
+    # fold has nothing to agree with, so the walk needs a second.
+    if len(sessions) < 4:
+        raise ValueError(f"walk-forward needs at least 4 sessions, got {len(sessions)}")
+    prev_end = None
+    for i, s in enumerate(sessions):
+        if s.height == 0:
+            raise ValueError(f"walk-forward session {i} is empty")
+        start, end = s["ts_ns"].min(), s["ts_ns"].max()
+        if prev_end is not None and start <= prev_end:
+            raise ValueError(
+                "walk-forward sessions must be in time order: "
+                f"session {i} starts at or before session {i - 1} ends"
+            )
+        prev_end = end
+
+    folds: list[dict] = []
+    grid: dict = {}
+    for i in range(2, len(sessions)):
+        grid = stability(
+            sessions[:i],
+            sessions[i],
+            bucket_ns,
+            parent_qty,
+            cap_grid,
+            half_life_grid,
+            coef_bps,
+            perm_coef_bps,
+        )
+        folds.append(
+            {
+                "input": i,
+                "verdicts": [_verdict(r) for r in grid["rows"]],
+                "flat_improvement_bps": [r["flat_improvement_bps"] for r in grid["rows"]],
+                "inert_caps": grid["inert_caps"],
+                "stable_caps": grid["stable_caps"],
+                "unstable_caps": grid["unstable_caps"],
+            }
+        )
+
+    caps = [r["cap"] for r in grid["rows"]]
+    consensus = [
+        folds[0]["verdicts"][c]
+        if all(f["verdicts"][c] == folds[0]["verdicts"][c] for f in folds)
+        else "mixed"
+        for c in range(len(caps))
+    ]
+    agreeing_caps = sum(1 for v in consensus if v != "mixed")
+    return {
+        "product": grid["product"],
+        "bucket_ns": bucket_ns,
+        "buckets": grid["buckets"],
+        "sessions": len(sessions),
+        "parent_qty": grid["parent_qty"],
+        "coef_bps": grid["coef_bps"],
+        "perm_coef_bps": grid["perm_coef_bps"],
+        "caps": caps,
+        "half_lives": grid["half_lives"],
+        "folds": folds,
+        "consensus": consensus,
+        "agreeing_caps": agreeing_caps,
+        "all_agree": agreeing_caps == len(consensus),
+    }
+
+
 def _pooling_weights(sessions: int, half_life: float) -> list[float]:
     """The weight each history session carries, oldest first, summing to one.
 
