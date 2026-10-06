@@ -34,7 +34,9 @@ jobs:
       - name: Create venv and install
         run: |
           uv venv
-          uv pip install polars websockets pyarrow pytest pytest-cov ruff
+          # Capped below 2: the Rust half is on the 0.x crate line, and the
+          # equivalence tests must compare one engine generation with itself.
+          uv pip install "polars>=1.0,<2" websockets pyarrow pytest pytest-cov ruff
       - name: Lint
         run: |
           uv run ruff check python
@@ -47,12 +49,12 @@ jobs:
   polars2:
     name: python (Polars 2.0 forward-compatibility, advisory)
     runs-on: ubuntu-latest
-    # Advisory only. The project pins `polars>=1.0` and the Rust half is on the
-    # 0.x crate line, so the Python engine must not be pinned to a 2.0 release
-    # candidate -- the two halves would then be different engine generations and
-    # the equivalence tests would be comparing across a version boundary. This
-    # job exists to find out *early* when a 2.0 change would break us, not to
-    # gate the build on a pre-release.
+    # Advisory only. The project pins `polars>=1.0,<2` and the Rust half is on
+    # the 0.x crate line, so the Python engine must not move to 2.x alone -- the
+    # two halves would then be different engine generations and the equivalence
+    # tests would be comparing across a version boundary. This job exists to
+    # find out *early* when a 2.x change would break us, not to gate the build
+    # on a release the Rust crate has not reached.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
@@ -61,10 +63,10 @@ jobs:
           python-version: "3.11"
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
-      - name: Install the Polars 2.0 release candidate
+      - name: Install Polars 2.x
         run: |
           uv venv
-          uv pip install --prerelease=allow "polars>=2.0rc1" websockets pyarrow pytest
+          uv pip install "polars>=2,<3" websockets pyarrow pytest
           uv run python -c "import polars; print('polars', polars.__version__)"
       - name: Test the Python engine against Polars 2.0
         # The equivalence tests are excluded on purpose: they compare against a

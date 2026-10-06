@@ -25,7 +25,7 @@ keywords = [
     "robust-regression",
 ]
 dependencies = [
-    "polars>=1.0",
+    "polars>=1.0,<2",
     "websockets>=12",
     "pyarrow>=15",
 ]
