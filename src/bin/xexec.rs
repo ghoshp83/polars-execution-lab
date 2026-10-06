@@ -19,6 +19,7 @@ use xexec::shortfall::shortfall;
 use xexec::stability::stability;
 use xexec::stream::stream_session;
 use xexec::sweep::sweep_cost;
+use xexec::walkforward::walk_forward;
 
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
@@ -28,7 +29,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|pov-sweep|pov-hl-sweep|pov-stability|pov-holdout|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--shortfall-bps N] [--cap-grid N,N,N] [--half-life-grid N,N,N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|pov-sweep|pov-hl-sweep|pov-stability|pov-holdout|pov-walkforward|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--shortfall-bps N] [--cap-grid N,N,N] [--half-life-grid N,N,N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -482,6 +483,38 @@ fn main() -> Result<()> {
                 .map(|s| s.trim().parse::<f64>())
                 .collect::<Result<_, _>>()?;
             let report = holdout(
+                &sessions,
+                bucket_ns,
+                arg_f64(&args, "--parent-qty", 1.0)?,
+                &cap_grid,
+                &hl_grid,
+                arg_f64(&args, "--coef-bps", 10.0)?,
+                arg_f64(&args, "--perm-coef-bps", 0.0)?,
+            )?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        // `pov-walkforward` runs `pov-stability` on each session from the third
+        // on, with only the sessions before it as the history -- the rotation
+        // `pov-holdout` makes, minus every fold that would read the future. The
+        // walk is `--history` followed by `--input`, oldest first.
+        "pov-walkforward" => {
+            let mut sessions = arg_value(&args, "--history")
+                .ok_or_else(|| anyhow!("--history required\n{USAGE}"))?
+                .split(',')
+                .map(|p| read_ticks(p.trim()))
+                .collect::<Result<Vec<_>>>()?;
+            sessions.push(ticks);
+            let cap_grid: Vec<f64> = arg_value(&args, "--cap-grid")
+                .unwrap_or_else(|| "0.1,0.2,0.3".to_string())
+                .split(',')
+                .map(|s| s.trim().parse::<f64>())
+                .collect::<Result<_, _>>()?;
+            let hl_grid: Vec<f64> = arg_value(&args, "--half-life-grid")
+                .unwrap_or_else(|| "0.25,0.5,1,2,4".to_string())
+                .split(',')
+                .map(|s| s.trim().parse::<f64>())
+                .collect::<Result<_, _>>()?;
+            let report = walk_forward(
                 &sessions,
                 bucket_ns,
                 arg_f64(&args, "--parent-qty", 1.0)?,
