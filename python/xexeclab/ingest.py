@@ -109,29 +109,52 @@ async def stream_coinbase(
     out_path: str | Path,
     max_trades: int,
     log: EventLog | None = None,
+    max_reconnects: int = 5,
 ) -> int:
-    """Capture up to `max_trades` live trades for `product` into an NDJSON file."""
+    """Capture up to `max_trades` live trades for `product` into an NDJSON file.
+
+    A live feed drops connections; rather than losing the capture, this
+    reconnects and resumes appending until the target count is met or the
+    reconnect budget is exhausted. On resubscribe the exchange sends one
+    `last_match`, which is the newest trade and may be one already written, so
+    a trade is skipped when its `trade_id` is not above the last one captured.
+    Each reconnect is logged so a gap in the capture is visible.
+    """
     import websockets
 
     sub = {"type": "subscribe", "product_ids": [product], "channels": ["matches"]}
     received = 0
+    reconnects = 0
+    last_trade_id = None
     if log:
         log.emit("ingest_start", product=product, max_trades=max_trades)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
-        async with websockets.connect(COINBASE_WS, ping_interval=20) as ws:
-            await ws.send(json.dumps(sub))
-            while received < max_trades:
-                msg = json.loads(await ws.recv())
-                if msg.get("type") not in ("match", "last_match"):
-                    continue
-                f.write(json.dumps(match_to_tick(msg)) + "\n")
-                f.flush()
-                received += 1
-                if log and received % 10 == 0:
-                    log.emit("ingest_progress", received=received)
+        while received < max_trades:
+            try:
+                async with websockets.connect(COINBASE_WS, ping_interval=20) as ws:
+                    await ws.send(json.dumps(sub))
+                    while received < max_trades:
+                        msg = json.loads(await ws.recv())
+                        if msg.get("type") not in ("match", "last_match"):
+                            continue
+                        tick = match_to_tick(msg)
+                        if last_trade_id is not None and tick["trade_id"] <= last_trade_id:
+                            continue
+                        last_trade_id = tick["trade_id"]
+                        f.write(json.dumps(tick) + "\n")
+                        f.flush()
+                        received += 1
+                        if log and received % 10 == 0:
+                            log.emit("ingest_progress", received=received)
+            except websockets.ConnectionClosed:
+                reconnects += 1
+                if reconnects > max_reconnects:
+                    raise
+                if log:
+                    log.emit("ingest_reconnect", attempt=reconnects, received=received)
     if log:
-        log.emit("ingest_complete", received=received, out=str(out_path))
+        log.emit("ingest_complete", received=received, reconnects=reconnects, out=str(out_path))
     return received
 
 

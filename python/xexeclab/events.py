@@ -7,9 +7,20 @@ One JSON object per line. Every record carries:
 
 plus event-specific fields. Documented event names:
 
-    ingest_start     product, max_trades
-    ingest_progress  received
-    ingest_complete  received, out
+    ingest_start            product, max_trades
+    ingest_progress         received
+    ingest_reconnect        attempt, received
+    ingest_complete         received, reconnects, out
+
+    quote_ingest_start      product, max_quotes
+    quote_ingest_progress   received
+    quote_ingest_reconnect  attempt, received
+    quote_ingest_complete   received, reconnects, out
+
+    book_ingest_start       product, max_snapshots, levels
+    book_ingest_progress    snapshots
+    book_ingest_reconnect   attempt, snapshots
+    book_ingest_complete    snapshots, reconnects, out
 """
 
 from __future__ import annotations
