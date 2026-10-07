@@ -165,3 +165,110 @@ def test_the_walk_names_no_pooled_figure_and_no_best_fold():
     text = json.dumps(walk)
     for word in ("best", "worst", "optimal", "argmax", "recommend", "mean", "average", "pooled"):
         assert word not in text, f"report mentions {word!r}: {text}"
+
+
+def _spans(walk: dict) -> list[tuple[int, int]]:
+    return [(f["history_from"], f["input"]) for f in walk["folds"]]
+
+
+def test_without_a_window_the_history_grows_from_the_first_session():
+    """Leaving the window off must still be the walk it always was: the history
+    grows from session 0, and the report says so instead of leaving it implied.
+    A window of two starts on the same fold, since both pool sessions 0 and 1."""
+    sessions = _in_order(LUMPY, BLENDED, PINCHED, THIN_TAIL)
+    expanding = walk_forward(sessions, *ARGS)
+    rolling = walk_forward(sessions, *ARGS, window=2)
+    assert expanding["window"] is None
+    assert rolling["window"] == 2
+    assert _spans(expanding) == [(0, 2), (0, 3)]
+    assert _spans(rolling) == [(0, 2), (1, 3)]
+    assert expanding["folds"][0]["verdicts"] == rolling["folds"][0]["verdicts"]
+    assert (
+        expanding["folds"][0]["flat_improvement_bps"] == rolling["folds"][0]["flat_improvement_bps"]
+    )
+
+
+def test_a_windowed_fold_is_the_stability_grid_on_its_window_alone():
+    """A windowed fold is a re-run too: the grid ``pov-stability`` prints for
+    just the sessions inside the window. Here that changes the reading -- with
+    the oldest session pooled in, the last fold is ``unstable`` at 0.3 and 0.5;
+    from the two sessions before the input it is a ``gain`` at both."""
+    sessions = _in_order(LUMPY, BLENDED, PINCHED, THIN_TAIL)
+    rolling = walk_forward(sessions, *ARGS, window=2)
+    grid = stability(sessions[1:3], sessions[3], *ARGS)
+    last = rolling["folds"][-1]
+    assert (last["input"], last["history_from"]) == (3, 1)
+    assert last["flat_improvement_bps"] == [r["flat_improvement_bps"] for r in grid["rows"]]
+    assert last["verdicts"] == ["inert", "gain", "gain"]
+    expanding = walk_forward(sessions, *ARGS)
+    assert expanding["folds"][-1]["verdicts"] == ["inert", "unstable", "unstable"]
+
+
+def test_a_windowed_fold_is_untouched_by_sessions_older_than_its_window():
+    """The property the window exists for: a fold cannot see a session older
+    than its window. Replace the oldest session and the windowed last fold must
+    not move by a digit, while the expanding one, which still pools it, does."""
+    a = _in_order(LUMPY, BLENDED, PINCHED, THIN_TAIL)
+    b = _in_order(THIN_TAIL, BLENDED, PINCHED, THIN_TAIL)
+
+    def last(sessions: list[pl.DataFrame], window: int | None) -> list[float]:
+        return walk_forward(sessions, *ARGS, window=window)["folds"][1]["flat_improvement_bps"]
+
+    assert last(a, 2) == last(b, 2)
+    assert last(a, None) != last(b, None)
+
+
+def test_an_agreement_can_rest_on_the_oldest_session():
+    """The expanding walk says pooling pays at 0.3 and 0.5 at every step here;
+    held to two sessions of history, the last step reads both caps ``unstable``
+    and only the inert cap agrees."""
+    sessions = _in_order(LUMPY, THIN_TAIL, PINCHED, BLENDED)
+    expanding = walk_forward(sessions, *ARGS)
+    rolling = walk_forward(sessions, *ARGS, window=2)
+    assert expanding["consensus"] == ["inert", "gain", "gain"]
+    assert expanding["all_agree"] is True
+    assert rolling["folds"][-1]["verdicts"] == ["inert", "unstable", "unstable"]
+    assert rolling["consensus"] == ["inert", "mixed", "mixed"]
+    assert rolling["agreeing_caps"] == 1
+    assert rolling["all_agree"] is False
+
+
+def test_three_walks_over_the_same_sessions_give_three_answers():
+    """Why nothing here picks a window. The same five sessions agree on two
+    caps with a growing history, on none with a window of two and on all three
+    with a window of three -- and the widest window is also the one with a fold
+    fewer, so the fullest agreement is the one with the least behind it."""
+    sessions = _in_order(BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED)
+    expanding = walk_forward(sessions, *ARGS)
+    two = walk_forward(sessions, *ARGS, window=2)
+    three = walk_forward(sessions, *ARGS, window=3)
+    assert expanding["agreeing_caps"] == 2
+    assert two["agreeing_caps"] == 0
+    assert three["agreeing_caps"] == 3
+    assert len(expanding["folds"]) == 3
+    assert _spans(two) == [(0, 2), (1, 3), (2, 4)]
+    assert _spans(three) == [(0, 3), (1, 4)]
+
+
+def test_a_window_too_narrow_or_too_wide_is_refused():
+    """A window of one is the pool of one the walk already refuses, and a
+    window that leaves a single fold leaves nothing for it to agree with."""
+    four = _in_order(LUMPY, BLENDED, THIN_TAIL, PINCHED)
+    for w in (0, 1):
+        with pytest.raises(ValueError, match="window must be at least 2 sessions"):
+            walk_forward(four, *ARGS, window=w)
+    with pytest.raises(ValueError, match="window of 3 needs at least 5 sessions, got 4"):
+        walk_forward(four, *ARGS, window=3)
+    five = _in_order(LUMPY, BLENDED, THIN_TAIL, PINCHED, LUMPY)
+    assert len(walk_forward(five, *ARGS, window=3)["folds"]) == 2
+
+
+def test_a_windowed_walk_names_no_best_window():
+    """The window is an input, never an output: the report repeats the one it
+    was given and must not grow a field that prefers one."""
+    sessions = _in_order(BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED)
+    walk = walk_forward(sessions, *ARGS, window=3)
+    assert walk["window"] == 3
+    text = json.dumps(walk)
+    for word in ("best", "worst", "optimal", "argmax", "recommend", "mean", "average", "pooled"):
+        assert word not in text, f"report mentions {word!r}: {text}"
