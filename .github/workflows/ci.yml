@@ -8,7 +8,7 @@ on:
 jobs:
   rust:
     name: rust (fmt + clippy + test)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -21,7 +21,7 @@ jobs:
 
   python:
     name: python (ruff + pytest + cross-language equivalence)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -48,7 +48,7 @@ jobs:
 
   polars2:
     name: python (Polars 2.0 forward-compatibility, advisory)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Advisory only. The project pins `polars>=1.0,<2` and the Rust half is on
     # the 0.x crate line, so the Python engine must not move to 2.x alone -- the
     # two halves would then be different engine generations and the equivalence
