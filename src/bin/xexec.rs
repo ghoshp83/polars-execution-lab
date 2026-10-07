@@ -29,7 +29,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|pov-sweep|pov-hl-sweep|pov-stability|pov-holdout|pov-walkforward|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--shortfall-bps N] [--cap-grid N,N,N] [--half-life-grid N,N,N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|pov-sweep|pov-hl-sweep|pov-stability|pov-holdout|pov-walkforward|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--shortfall-bps N] [--cap-grid N,N,N] [--half-life-grid N,N,N] [--window N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -496,7 +496,9 @@ fn main() -> Result<()> {
         // `pov-walkforward` runs `pov-stability` on each session from the third
         // on, with only the sessions before it as the history -- the rotation
         // `pov-holdout` makes, minus every fold that would read the future. The
-        // walk is `--history` followed by `--input`, oldest first.
+        // walk is `--history` followed by `--input`, oldest first. `--window N`
+        // holds every fold to the `N` sessions before its input; without it
+        // the history grows by one each step.
         "pov-walkforward" => {
             let mut sessions = arg_value(&args, "--history")
                 .ok_or_else(|| anyhow!("--history required\n{USAGE}"))?
@@ -514,6 +516,9 @@ fn main() -> Result<()> {
                 .split(',')
                 .map(|s| s.trim().parse::<f64>())
                 .collect::<Result<_, _>>()?;
+            let window: Option<usize> = arg_value(&args, "--window")
+                .map(|s| s.parse::<usize>())
+                .transpose()?;
             let report = walk_forward(
                 &sessions,
                 bucket_ns,
@@ -522,6 +527,7 @@ fn main() -> Result<()> {
                 &hl_grid,
                 arg_f64(&args, "--coef-bps", 10.0)?,
                 arg_f64(&args, "--perm-coef-bps", 0.0)?,
+                window,
             )?;
             println!("{}", serde_json::to_string(&report)?);
         }
