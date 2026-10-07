@@ -1,7 +1,7 @@
 use xexec::holdout::holdout;
 use xexec::model::Tick;
 use xexec::stability::stability;
-use xexec::walkforward::{walk_forward, WalkForwardFold};
+use xexec::walkforward::{walk_forward, WalkForwardFold, WalkForwardReport};
 
 /// One second per bucket.
 const BUCKET: i64 = 1_000_000_000;
@@ -40,7 +40,7 @@ fn session(hour: i64, volumes: [f64; 3]) -> Vec<Tick> {
 }
 
 /// The shapes in the order given, an hour apart, so the order is the time order.
-fn in_order(shapes: [[f64; 3]; 4]) -> Vec<Vec<Tick>> {
+fn in_order<const N: usize>(shapes: [[f64; 3]; N]) -> Vec<Vec<Tick>> {
     shapes
         .iter()
         .enumerate()
@@ -58,7 +58,7 @@ fn verdicts(fold: &WalkForwardFold) -> Vec<&str> {
 #[test]
 fn the_last_fold_is_the_stability_grid_and_the_rotations_last_fold() {
     let sessions = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]);
-    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
+    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
     let grid = stability(
         &sessions[..3],
         &sessions[3],
@@ -96,8 +96,8 @@ fn the_last_fold_is_the_stability_grid_and_the_rotations_last_fold() {
 fn a_fold_is_untouched_by_the_sessions_after_its_input() {
     let a = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]);
     let b = in_order([LUMPY, BLENDED, THIN_TAIL, LUMPY]);
-    let wa = walk_forward(&a, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
-    let wb = walk_forward(&b, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
+    let wa = walk_forward(&a, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
+    let wb = walk_forward(&b, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
     assert_eq!(
         wa.folds.iter().map(|f| f.input).collect::<Vec<_>>(),
         vec![2, 3]
@@ -121,7 +121,7 @@ fn a_fold_is_untouched_by_the_sessions_after_its_input() {
 #[test]
 fn the_same_input_reads_differently_once_the_future_is_removed() {
     let sessions = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]);
-    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
+    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
     let rotation = holdout(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
     assert_eq!(walk.folds[0].input, 2);
     assert_eq!(rotation.folds[2].held_out, 2);
@@ -139,7 +139,7 @@ fn the_same_input_reads_differently_once_the_future_is_removed() {
 #[test]
 fn a_walk_can_agree_where_the_rotation_does_not() {
     let sessions = in_order([LUMPY, THIN_TAIL, PINCHED, BLENDED]);
-    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
+    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
     let rotation = holdout(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
     for f in &walk.folds {
         assert_eq!(verdicts(f), ["inert", "gain", "gain"]);
@@ -156,7 +156,7 @@ fn a_walk_can_agree_where_the_rotation_does_not() {
 #[test]
 fn steps_that_disagree_make_the_cap_mixed() {
     let sessions = in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED]);
-    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
+    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
     assert_eq!(verdicts(&walk.folds[0]), ["loss", "gain", "gain"]);
     assert_eq!(verdicts(&walk.folds[1]), ["inert", "gain", "gain"]);
     assert_eq!(walk.consensus, ["mixed", "gain", "gain"]);
@@ -173,7 +173,8 @@ fn steps_that_disagree_make_the_cap_mixed() {
 fn sessions_out_of_time_order_are_refused() {
     let mut sessions = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]);
     sessions.swap(1, 2);
-    let err = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap_err();
+    let err =
+        walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap_err();
     assert!(err.to_string().contains("time order"), "{err}");
     assert!(err.to_string().contains("session 2"), "{err}");
 
@@ -183,7 +184,17 @@ fn sessions_out_of_time_order_are_refused() {
         .iter()
         .map(|t| tick(t.ts_ns - HOUR + BUCKET, t.price, t.size))
         .collect();
-    let err = walk_forward(&overlapping, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap_err();
+    let err = walk_forward(
+        &overlapping,
+        BUCKET,
+        0.6,
+        &CAPS,
+        &HALF_LIVES,
+        25.0,
+        5.0,
+        None,
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("session 1"), "{err}");
 }
 
@@ -192,7 +203,17 @@ fn sessions_out_of_time_order_are_refused() {
 #[test]
 fn fewer_than_four_sessions_is_refused() {
     let sessions = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]);
-    let err = walk_forward(&sessions[..3], BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap_err();
+    let err = walk_forward(
+        &sessions[..3],
+        BUCKET,
+        0.6,
+        &CAPS,
+        &HALF_LIVES,
+        25.0,
+        5.0,
+        None,
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("at least 4 sessions"), "{err}");
 }
 
@@ -201,8 +222,171 @@ fn fewer_than_four_sessions_is_refused() {
 #[test]
 fn the_walk_names_no_pooled_figure_and_no_best_fold() {
     let sessions = in_order([LUMPY, THIN_TAIL, PINCHED, BLENDED]);
-    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
+    let walk = walk_forward(&sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
     let json = serde_json::to_string(&walk).unwrap();
+    for word in [
+        "best",
+        "worst",
+        "optimal",
+        "argmax",
+        "recommend",
+        "mean",
+        "average",
+        "pooled",
+    ] {
+        assert!(!json.contains(word), "report mentions {word:?}: {json}");
+    }
+}
+
+fn walk(sessions: &[Vec<Tick>], window: Option<usize>) -> WalkForwardReport {
+    walk_forward(sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, window).unwrap()
+}
+
+/// Leaving the window off must still be the walk it always was: the history
+/// grows from session 0, and the report says so instead of leaving it implied.
+/// A window of two starts on the same fold, since both pool sessions 0 and 1.
+#[test]
+fn without_a_window_the_history_grows_from_the_first_session() {
+    let sessions = in_order([LUMPY, BLENDED, PINCHED, THIN_TAIL]);
+    let expanding = walk(&sessions, None);
+    let rolling = walk(&sessions, Some(2));
+    assert_eq!(expanding.window, None);
+    assert_eq!(rolling.window, Some(2));
+    let from = |w: &WalkForwardReport| w.folds.iter().map(|f| f.history_from).collect::<Vec<_>>();
+    assert_eq!(from(&expanding), vec![0, 0]);
+    assert_eq!(from(&rolling), vec![0, 1]);
+    assert_eq!(expanding.folds[0].verdicts, rolling.folds[0].verdicts);
+    assert_eq!(
+        expanding.folds[0].flat_improvement_bps,
+        rolling.folds[0].flat_improvement_bps
+    );
+}
+
+/// A windowed fold is a re-run too: the grid `pov-stability` prints for just
+/// the sessions inside the window. Here that changes the reading -- with the
+/// oldest session pooled in, the last fold is `unstable` at 0.3 and 0.5; from
+/// the two sessions before the input it is a `gain` at both.
+#[test]
+fn a_windowed_fold_is_the_stability_grid_on_its_window_alone() {
+    let sessions = in_order([LUMPY, BLENDED, PINCHED, THIN_TAIL]);
+    let rolling = walk(&sessions, Some(2));
+    let grid = stability(
+        &sessions[1..3],
+        &sessions[3],
+        BUCKET,
+        0.6,
+        &CAPS,
+        &HALF_LIVES,
+        25.0,
+        5.0,
+    )
+    .unwrap();
+    let last = rolling.folds.last().unwrap();
+    assert_eq!((last.input, last.history_from), (3, 1));
+    assert_eq!(
+        last.flat_improvement_bps,
+        grid.rows
+            .iter()
+            .map(|r| r.flat_improvement_bps)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(verdicts(last), ["inert", "gain", "gain"]);
+    let expanding = walk(&sessions, None);
+    assert_eq!(
+        verdicts(expanding.folds.last().unwrap()),
+        ["inert", "unstable", "unstable"]
+    );
+}
+
+/// The property the window exists for: a fold cannot see a session older than
+/// its window. Replace the oldest session and the windowed last fold must not
+/// move by a digit, while the expanding one, which still pools it, does.
+#[test]
+fn a_windowed_fold_is_untouched_by_sessions_older_than_its_window() {
+    let a = in_order([LUMPY, BLENDED, PINCHED, THIN_TAIL]);
+    let b = in_order([THIN_TAIL, BLENDED, PINCHED, THIN_TAIL]);
+    assert_eq!(
+        walk(&a, Some(2)).folds[1].flat_improvement_bps,
+        walk(&b, Some(2)).folds[1].flat_improvement_bps
+    );
+    assert_ne!(
+        walk(&a, None).folds[1].flat_improvement_bps,
+        walk(&b, None).folds[1].flat_improvement_bps
+    );
+}
+
+/// An agreement can rest on the oldest session. The expanding walk says pooling
+/// pays at 0.3 and 0.5 at every step here; held to two sessions of history,
+/// the last step reads both caps `unstable` and only the inert cap agrees.
+#[test]
+fn an_agreement_can_rest_on_the_oldest_session() {
+    let sessions = in_order([LUMPY, THIN_TAIL, PINCHED, BLENDED]);
+    let expanding = walk(&sessions, None);
+    let rolling = walk(&sessions, Some(2));
+    assert_eq!(expanding.consensus, ["inert", "gain", "gain"]);
+    assert!(expanding.all_agree);
+    assert_eq!(
+        verdicts(rolling.folds.last().unwrap()),
+        ["inert", "unstable", "unstable"]
+    );
+    assert_eq!(rolling.consensus, ["inert", "mixed", "mixed"]);
+    assert_eq!(rolling.agreeing_caps, 1);
+    assert!(!rolling.all_agree);
+}
+
+/// Why nothing here picks a window. The same five sessions agree on two caps
+/// with a growing history, on none with a window of two and on all three with
+/// a window of three -- and the widest window is also the one with a fold
+/// fewer, so the fullest agreement is the one with the least behind it.
+#[test]
+fn three_walks_over_the_same_sessions_give_three_answers() {
+    let sessions = in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]);
+    let expanding = walk(&sessions, None);
+    let two = walk(&sessions, Some(2));
+    let three = walk(&sessions, Some(3));
+    assert_eq!(expanding.agreeing_caps, 2);
+    assert_eq!(two.agreeing_caps, 0);
+    assert_eq!(three.agreeing_caps, 3);
+    assert_eq!(expanding.folds.len(), 3);
+    assert_eq!(two.folds.len(), 3);
+    assert_eq!(three.folds.len(), 2);
+    let spans = |w: &WalkForwardReport| {
+        w.folds
+            .iter()
+            .map(|f| (f.history_from, f.input))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(spans(&two), vec![(0, 2), (1, 3), (2, 4)]);
+    assert_eq!(spans(&three), vec![(0, 3), (1, 4)]);
+}
+
+/// A window of one is the pool of one the walk already refuses, and a window
+/// that leaves a single fold leaves nothing for it to agree with.
+#[test]
+fn a_window_too_narrow_or_too_wide_is_refused() {
+    let four = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]);
+    for w in [0, 1] {
+        let err =
+            walk_forward(&four, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, Some(w)).unwrap_err();
+        assert!(err.to_string().contains("at least 2 sessions"), "{err}");
+    }
+    let err = walk_forward(&four, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0, Some(3)).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("window of 3 needs at least 5 sessions, got 4"),
+        "{err}"
+    );
+    let five = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED, LUMPY]);
+    assert_eq!(walk(&five, Some(3)).folds.len(), 2);
+}
+
+/// The window is an input, never an output: the report repeats the one it was
+/// given and must not grow a field that prefers one.
+#[test]
+fn a_windowed_walk_names_no_best_window() {
+    let sessions = in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]);
+    let json = serde_json::to_string(&walk(&sessions, Some(3))).unwrap();
+    assert!(json.contains("\"window\":3"), "{json}");
     for word in [
         "best",
         "worst",
