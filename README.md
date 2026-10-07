@@ -254,6 +254,13 @@ uv run xexeclab pov-walkforward \
     --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
     --half-life-grid 0.25,0.5,1,2,4 \
     --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
+# ...or hold every step to the two captures before it, so the steps are like for
+# like. Every verdict is the same; the thin capture's loss is 8-12x deeper
+uv run xexeclab pov-walkforward \
+    --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson,data/sample_ticks_third.ndjson \
+    --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+    --half-life-grid 0.25,0.5,1,2,4 \
+    --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5 --window 2
 
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
@@ -610,7 +617,21 @@ This is a **market-data and execution-analytics** project, not a trading system.
   cap is unstable. **The steps are not like for like**: each pools one more
   session than the one before, so a verdict that changes along the walk may be
   the history growing and not the input differing, and the report does not
-  claim to tell the two apart. Two steps are also not a sample — four captures
+  claim to tell the two apart. **`--window N` takes that difference away** by
+  holding every step to the `N` captures immediately before its input, so two
+  steps differ in which sessions they read and not in how many; each step
+  reports `history_from`, and the report repeats `window`, `null` when the
+  history grows. On the bundled captures at `--window 2` every cap keeps the
+  verdict it had, and the size does not survive: read from the two captures
+  before it, the thin session loses 0.40 bps at the 10% cap where the growing
+  history said 0.05, and the other binding caps move as far. The oldest capture
+  had been diluting that loss by a factor of eight to twelve, so the sign was
+  the session's and most of the magnitude was how far back the history went.
+  **Nothing chooses a window.** A wider one costs a step (`N + 2` captures is
+  the minimum, so with four bundled captures two is the only window there is),
+  and the tests pin five sessions that agree on two caps with a growing
+  history, on none at a window of two and on all three at a window of three.
+  Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
   Every history session must trade in the same buckets as the execution session,
