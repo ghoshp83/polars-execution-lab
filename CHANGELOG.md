@@ -4,6 +4,48 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.37.0] - 2026-10-07
+
+### Added
+- **`pov-walkforward --window N` — a walk whose steps are like for like.**
+  v0.36.0 said of its own folds that each pools one more session than the last,
+  so a verdict that changes along the walk may be the history growing and not
+  the input differing. With a window, every step pools exactly the `N` sessions
+  immediately before its input. `walk_forward` in both engines takes the window
+  as an optional last argument; without it the walk is unchanged.
+- **`history_from` on every fold and `window` on the report.** Sessions
+  `history_from..input` are a fold's history: `0` throughout on a growing walk,
+  `input - window` on a rolling one. `window` repeats the argument and is `null`
+  when the history grows.
+- **The finding.** On the four bundled captures at `--window 2` every cap keeps
+  the verdict the growing walk gave it, and the size does not survive. Read from
+  the two captures before it, the thin session's loss at the 10% cap is
+  0.39690508 bps where the growing history reported 0.04796504, and the 15%,
+  20% and 25% caps move by a factor of about eleven. The oldest capture had been
+  diluting the loss; the sign was the session's and most of the magnitude was
+  how far back the history went.
+- **Nothing chooses a window**, pinned by a test on each side. A second test
+  pins five sessions that agree on two caps with a growing history, on none at
+  a window of two and on all three at a window of three, where the widest
+  window is also the one with a step fewer.
+- A window below 2 is refused (a pool of one is not a pool), and so is one that
+  would leave a single step: `N + 2` sessions is the minimum.
+- Seven tests each side and a 28th equivalence test that pins the windowed walk
+  on the bundled captures and both refusals.
+
+### Changed
+- `xexec::walkforward::walk_forward` takes a trailing `window: Option<usize>`.
+  Rust callers pass `None` for the v0.36.0 behaviour; the Python keyword
+  defaults to `None`, so Python callers are unaffected.
+- CI and the weekly `upstream` check run on `ubuntu-24.04` instead of
+  `ubuntu-latest`. GitHub moves that label to Ubuntu 26 from 2026-10-19, and a
+  suite that compares floating-point output bit for bit across two Polars
+  versions should change its runner image on purpose and not on a schedule.
+
+### Notes
+- Polars 2.0 re-measured 2026-10-07: PyPI 2.0.0, Rust crate still 0.55.2.
+  Adoption remains blocked on the crate alone; the `<2` cap from v0.36.0 stands.
+
 ## [0.36.0] - 2026-10-06
 
 ### Added
