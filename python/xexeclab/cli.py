@@ -271,7 +271,8 @@ def cmd_pov_holdout(a: argparse.Namespace) -> None:
 
 def cmd_pov_walkforward(a: argparse.Namespace) -> None:
     # The walk is ``--history`` followed by ``--input``, oldest first, so its
-    # last fold is ``pov-stability`` on the same line.
+    # last fold is ``pov-stability`` on the same line unless ``--window`` cuts
+    # the history shorter.
     paths = [p.strip() for p in a.history.split(",")] + [a.input]
     print(
         json.dumps(
@@ -283,6 +284,7 @@ def cmd_pov_walkforward(a: argparse.Namespace) -> None:
                 [float(s) for s in a.half_life_grid.split(",")],
                 a.coef_bps,
                 a.perm_coef_bps,
+                a.window,
             )
         )
     )
@@ -864,6 +866,12 @@ def main(argv: list[str] | None = None) -> None:
         type=float,
         default=0.0,
         help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    pwf.add_argument(
+        "--window",
+        type=int,
+        default=None,
+        help="sessions of history per fold, at least 2 (default: every earlier session)",
     )
     pwf.set_defaults(fn=cmd_pov_walkforward)
 

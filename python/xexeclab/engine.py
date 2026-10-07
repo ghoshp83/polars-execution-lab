@@ -1884,6 +1884,7 @@ def walk_forward(
     half_life_grid: list[float],
     coef_bps: float,
     perm_coef_bps: float = 0.0,
+    window: int | None = None,
 ) -> dict:
     """Does the verdict hold when each session is forecast only from its past?
 
@@ -1906,9 +1907,18 @@ def walk_forward(
     verdict every fold gave a cap, or ``mixed``; it says whether the reading
     was the same at every step, not why it was not.
 
+    **A window makes them so, at a price.** With ``window`` set, every fold
+    pools exactly that many sessions, the ones immediately before its input, so
+    two folds differ in which sessions they read and not in how many. What it
+    costs is the oldest sessions, which later folds no longer see, and one fold
+    per session the window is wider than two. Nothing here chooses a window:
+    the two walks are two questions, and a cap they read differently is a cap
+    whose verdict depended on how far back the history went.
+
     **There is deliberately no pooled figure and no best fold**, for the reason
-    ``holdout`` gives. With ``n`` sessions there are only ``n - 2`` folds, which
-    is a count to read beside the consensus and not a sample to average over.
+    ``holdout`` gives. With ``n`` sessions there are only ``n - 2`` folds, or
+    ``n - window`` on a rolling walk, which is a count to read beside the
+    consensus and not a sample to average over.
 
     Mirrors ``walk_forward`` in ``src/walkforward.rs`` operation for operation.
     """
@@ -1916,6 +1926,14 @@ def walk_forward(
     # fold has nothing to agree with, so the walk needs a second.
     if len(sessions) < 4:
         raise ValueError(f"walk-forward needs at least 4 sessions, got {len(sessions)}")
+    if window is not None:
+        if window < 2:
+            raise ValueError(f"walk-forward window must be at least 2 sessions, got {window}")
+        if len(sessions) < window + 2:
+            raise ValueError(
+                f"walk-forward with a window of {window} needs at least "
+                f"{window + 2} sessions, got {len(sessions)}"
+            )
     prev_end = None
     for i, s in enumerate(sessions):
         if s.height == 0:
@@ -1930,9 +1948,10 @@ def walk_forward(
 
     folds: list[dict] = []
     grid: dict = {}
-    for i in range(2, len(sessions)):
+    for i in range(2 if window is None else window, len(sessions)):
+        history_from = 0 if window is None else i - window
         grid = stability(
-            sessions[:i],
+            sessions[history_from:i],
             sessions[i],
             bucket_ns,
             parent_qty,
@@ -1944,6 +1963,7 @@ def walk_forward(
         folds.append(
             {
                 "input": i,
+                "history_from": history_from,
                 "verdicts": [_verdict(r) for r in grid["rows"]],
                 "flat_improvement_bps": [r["flat_improvement_bps"] for r in grid["rows"]],
                 "inert_caps": grid["inert_caps"],
@@ -1965,6 +1985,7 @@ def walk_forward(
         "bucket_ns": bucket_ns,
         "buckets": grid["buckets"],
         "sessions": len(sessions),
+        "window": window,
         "parent_qty": grid["parent_qty"],
         "coef_bps": grid["coef_bps"],
         "perm_coef_bps": grid["perm_coef_bps"],
