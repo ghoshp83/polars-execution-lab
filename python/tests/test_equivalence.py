@@ -1467,3 +1467,90 @@ def test_rust_and_python_walk_forwards_are_identical():
     assert "time order" in swapped.stderr
     with pytest.raises(ValueError, match="time order"):
         walk_forward([sessions[1], sessions[0], sessions[2], sessions[3]], *args)
+
+
+def test_rust_and_python_windowed_walk_forwards_are_identical():
+    """The twenty-eighth: the walk held to a fixed window of history.
+
+    The twenty-seventh test's steps are not like for like, because the second
+    pools one more capture than the first. Held to the two captures before each
+    input, the bundled walk gives every cap the verdict it had -- and a loss
+    several times deeper on the thin capture, which the oldest capture had been
+    diluting. The sign survived the window; the size did not.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    caps = "0.05,0.1,0.15,0.2,0.25"
+    hls = "0.25,0.5,1,2,4"
+    command = [
+        binary,
+        "pov-walkforward",
+        "--history",
+        f"{SAMPLE},{NEXT_SAMPLE},{THIRD_SAMPLE}",
+        "--input",
+        THIN_SAMPLE,
+        "--bucket-ms",
+        str(BUCKET_MS),
+        "--parent-qty",
+        str(POV_PLAN["parent_qty"]),
+        "--cap-grid",
+        caps,
+        "--half-life-grid",
+        hls,
+        "--coef-bps",
+        str(POV_PLAN["coef_bps"]),
+        "--perm-coef-bps",
+        str(POV_PLAN["perm_coef_bps"]),
+    ]
+    proc = subprocess.run([*command, "--window", "2"], capture_output=True, text=True, check=True)
+    rust = json.loads(proc.stdout)
+
+    sessions = [
+        read_ticks(SAMPLE),
+        read_ticks(NEXT_SAMPLE),
+        read_ticks(THIRD_SAMPLE),
+        read_ticks(THIN_SAMPLE),
+    ]
+    args = (
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        [float(v) for v in caps.split(",")],
+        [float(v) for v in hls.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+    py = walk_forward(sessions, *args, window=2)
+    growing = walk_forward(sessions, *args)
+
+    assert rust == py
+    assert rust["window"] == 2
+    assert growing["window"] is None
+    assert [(f["history_from"], f["input"]) for f in rust["folds"]] == [(0, 2), (1, 3)]
+    assert [f["verdicts"] for f in rust["folds"]] == [f["verdicts"] for f in growing["folds"]]
+    assert rust["consensus"] == growing["consensus"]
+    assert rust["folds"][0] == growing["folds"][0]
+    assert growing["folds"][1]["flat_improvement_bps"] == [
+        0.0,
+        -0.04796504,
+        -0.03974886,
+        -0.03126811,
+        -0.02299611,
+    ]
+    assert rust["folds"][1]["flat_improvement_bps"] == [
+        0.0,
+        -0.39690508,
+        -0.42989047,
+        -0.34684097,
+        -0.26496583,
+    ]
+
+    # Four captures leave room for a window of two and nothing wider, and a
+    # window of one is a pool of one. Both engines refuse both.
+    for window, message in (("3", "needs at least 5 sessions"), ("1", "at least 2 sessions")):
+        refused = subprocess.run([*command, "--window", window], capture_output=True, text=True)
+        assert refused.returncode != 0
+        assert message in refused.stderr
+        with pytest.raises(ValueError, match=message):
+            walk_forward(sessions, *args, window=int(window))
