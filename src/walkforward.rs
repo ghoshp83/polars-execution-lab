@@ -8,8 +8,11 @@ use serde::Serialize;
 /// input and only the sessions before it, oldest first, as the history.
 #[derive(Debug, Serialize)]
 pub struct WalkForwardFold {
-    /// Position of the input session; sessions `0..input` are its history.
+    /// Position of the input session.
     pub input: usize,
+    /// Sessions `history_from..input` are its history: `0` on an expanding
+    /// walk, `input - window` on a rolling one.
+    pub history_from: usize,
     /// One of `inert`, `gain`, `loss` or `unstable` per cap, in `caps` order.
     pub verdicts: Vec<String>,
     /// `improvement_bps` at `half_life = 0` per cap, in `caps` order.
@@ -39,17 +42,29 @@ pub struct WalkForwardFold {
 /// verdict every fold gave a cap, or `mixed`; it says whether the reading was
 /// the same at every step, not why it was not.
 ///
+/// **A window makes them so, at a price.** With `window` set, every fold pools
+/// exactly that many sessions, the ones immediately before its input, so two
+/// folds differ in which sessions they read and not in how many. What it costs
+/// is the oldest sessions, which later folds no longer see, and one fold per
+/// session the window is wider than two. Nothing here chooses a window: the
+/// two walks are two questions, and a cap they read differently is a cap whose
+/// verdict depended on how far back the history went.
+///
 /// **There is deliberately no pooled figure and no best fold**, for the reason
 /// [`crate::holdout::HoldoutReport`] gives. With `n` sessions there are only
-/// `n - 2` folds, which is a count to read beside the consensus and not a
-/// sample to average over.
+/// `n - 2` folds, or `n - window` on a rolling walk, which is a count to read
+/// beside the consensus and not a sample to average over.
 #[derive(Debug, Serialize)]
 pub struct WalkForwardReport {
     pub product: String,
     pub bucket_ns: i64,
     pub buckets: usize,
-    /// Sessions walked through; the first two are only ever history.
+    /// Sessions walked through; the first two, or the first `window`, are only
+    /// ever history.
     pub sessions: usize,
+    /// Sessions of history every fold pools, or `null` when the history grows
+    /// by one each step.
+    pub window: Option<usize>,
     pub parent_qty: f64,
     pub coef_bps: f64,
     pub perm_coef_bps: f64,
@@ -63,10 +78,11 @@ pub struct WalkForwardReport {
 }
 
 /// Run [`stability`] on each session from the third on, with only the earlier
-/// sessions as its history.
+/// sessions as its history -- all of them, or the last `window` of them.
 ///
 /// Mirrors `walk_forward` in `python/xexeclab/engine.py` operation for
 /// operation, so the two engines report bit-for-bit identical walks.
+#[allow(clippy::too_many_arguments)]
 pub fn walk_forward(
     sessions: &[Vec<Tick>],
     bucket_ns: i64,
@@ -75,6 +91,7 @@ pub fn walk_forward(
     hl_grid: &[f64],
     coef_bps: f64,
     perm_coef_bps: f64,
+    window: Option<usize>,
 ) -> Result<WalkForwardReport> {
     // A pool of one is not a pool, so the first fold is session 2; and one
     // fold has nothing to agree with, so the walk needs a second.
@@ -83,6 +100,20 @@ pub fn walk_forward(
             "walk-forward needs at least 4 sessions, got {}",
             sessions.len()
         ));
+    }
+    if let Some(w) = window {
+        if w < 2 {
+            return Err(anyhow!(
+                "walk-forward window must be at least 2 sessions, got {w}"
+            ));
+        }
+        if sessions.len() < w + 2 {
+            return Err(anyhow!(
+                "walk-forward with a window of {w} needs at least {} sessions, got {}",
+                w + 2,
+                sessions.len()
+            ));
+        }
     }
     let mut prev_end = i64::MIN;
     for (i, s) in sessions.iter().enumerate() {
@@ -108,9 +139,10 @@ pub fn walk_forward(
     let mut perm = 0.0;
     let mut caps: Vec<f64> = Vec::new();
     let mut half_lives: Vec<f64> = Vec::new();
-    for input in 2..sessions.len() {
+    for input in window.unwrap_or(2)..sessions.len() {
+        let history_from = window.map_or(0, |w| input - w);
         let grid = stability(
-            &sessions[..input],
+            &sessions[history_from..input],
             &sessions[input],
             bucket_ns,
             parent_qty,
@@ -121,6 +153,7 @@ pub fn walk_forward(
         )?;
         folds.push(WalkForwardFold {
             input,
+            history_from,
             verdicts: grid.rows.iter().map(|r| verdict(r).to_string()).collect(),
             flat_improvement_bps: grid.rows.iter().map(|r| r.flat_improvement_bps).collect(),
             inert_caps: grid.inert_caps,
@@ -151,6 +184,7 @@ pub fn walk_forward(
         bucket_ns,
         buckets,
         sessions: sessions.len(),
+        window,
         parent_qty: parent,
         coef_bps: coef,
         perm_coef_bps: perm,
