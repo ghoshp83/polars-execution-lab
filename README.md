@@ -261,6 +261,14 @@ uv run xexeclab pov-walkforward \
     --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
     --half-life-grid 0.25,0.5,1,2,4 \
     --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5 --window 2
+# ...or run the walk at every window the captures allow and read what moved.
+# Every cap reads the same along both walks, only the inert one on a verdict,
+# and the thin capture's figure shifts by up to 0.39 bps
+uv run xexeclab pov-window-sweep \
+    --history data/sample_ticks.ndjson,data/sample_ticks_next.ndjson,data/sample_ticks_third.ndjson \
+    --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+    --half-life-grid 0.25,0.5,1,2,4 \
+    --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
 
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
@@ -631,6 +639,21 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the minimum, so with four bundled captures two is the only window there is),
   and the tests pin five sessions that agree on two caps with a growing
   history, on none at a window of two and on all three at a window of three.
+  **`xexeclab pov-window-sweep` runs that comparison instead of leaving it to a
+  reader with two outputs.** It walks with a growing history and then at every
+  window from 2 to `sessions - 2`, and per cap reports three things.
+  `consensus_stable` is whether every walk's consensus was the same, and
+  `settled_caps` counts the ones that matched on a verdict, because two walks
+  that both read `mixed` match without either having settled.
+  `last_fold_stable` and `last_fold_span_bps` compare the one session every
+  walk scores, the newest: the same input forecast from histories of different
+  depth. On the bundled captures all five caps are `consensus_stable` and one
+  is settled, the inert one, so sweeping the window settles nothing the walk
+  had not. The newest session keeps its verdict at every cap and moves by
+  0.24 to 0.39 bps at the four that bind, against a growing-walk loss of 0.02
+  to 0.05: the span is several times the figure it sits under. The walks are
+  listed in the order they ran and none is preferred. A window picked for the
+  verdict it gives is a verdict picked.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
