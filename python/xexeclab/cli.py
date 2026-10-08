@@ -39,6 +39,7 @@ from .engine import (
     sweep_cost,
     sweep_curve,
     walk_forward,
+    window_sweep,
     write_ticks,
 )
 from .events import EventLog
@@ -285,6 +286,25 @@ def cmd_pov_walkforward(a: argparse.Namespace) -> None:
                 a.coef_bps,
                 a.perm_coef_bps,
                 a.window,
+            )
+        )
+    )
+
+
+def cmd_pov_window_sweep(a: argparse.Namespace) -> None:
+    # The same line as ``pov-walkforward`` minus ``--window``: the sweep runs
+    # every window the sessions allow instead of taking one.
+    paths = [p.strip() for p in a.history.split(",")] + [a.input]
+    print(
+        json.dumps(
+            window_sweep(
+                [read_ticks(p) for p in paths],
+                a.bucket_ms * 1_000_000,
+                a.parent_qty,
+                [float(s) for s in a.cap_grid.split(",")],
+                [float(s) for s in a.half_life_grid.split(",")],
+                a.coef_bps,
+                a.perm_coef_bps,
             )
         )
     )
@@ -874,6 +894,41 @@ def main(argv: list[str] | None = None) -> None:
         help="sessions of history per fold, at least 2 (default: every earlier session)",
     )
     pwf.set_defaults(fn=cmd_pov_walkforward)
+
+    pws = sub.add_parser(
+        "pov-window-sweep",
+        help="run pov-walkforward at every window the sessions allow; never a best window",
+    )
+    pws.add_argument(
+        "--history",
+        required=True,
+        help="comma-separated captures, oldest first and not overlapping in time",
+    )
+    pws.add_argument("--input", required=True, help="the newest session of the walk")
+    pws.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
+    pws.add_argument(
+        "--parent-qty", type=float, default=1.0, help="parent order size in base units"
+    )
+    pws.add_argument(
+        "--cap-grid",
+        default="0.1,0.2,0.3",
+        help="comma-separated, strictly increasing grid of caps, each in (0, 1]",
+    )
+    pws.add_argument(
+        "--half-life-grid",
+        default="0.25,0.5,1,2,4",
+        help="comma-separated, strictly increasing grid of half-lives, each > 0",
+    )
+    pws.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    pws.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    pws.set_defaults(fn=cmd_pov_window_sweep)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"

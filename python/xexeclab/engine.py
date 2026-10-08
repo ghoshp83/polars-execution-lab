@@ -1998,6 +1998,102 @@ def walk_forward(
     }
 
 
+def window_sweep(
+    sessions: list[pl.DataFrame],
+    bucket_ns: int,
+    parent_qty: float,
+    cap_grid: list[float],
+    half_life_grid: list[float],
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """Does the walk's answer depend on how far back its history goes?
+
+    ``walk_forward`` takes a window and says nothing chooses one. That leaves
+    the window where the half-life was before ``pov-hl-sweep``: a parameter
+    nobody fits, quoted at whichever value was typed. This runs the walk at
+    every window the sessions allow -- the growing history first, then ``2`` up
+    to ``sessions - 2`` -- and reports what moved.
+
+    Two things are compared, because the walks share only so much. A walk's
+    ``consensus`` rests on its own folds, and a wider window has fewer of them,
+    so ``consensus_stable`` says a cap read the same along every walk without
+    the walks having scored the same sessions -- and ``mixed`` along every walk
+    is the same reading too, which is why ``settled_caps`` counts only the caps
+    that matched on a verdict. The newest session is the one
+    input every walk scores, so ``last_fold_stable`` and ``last_fold_span_bps``
+    compare like with like: the same session, forecast from histories of
+    different depth. A span beside an unchanged verdict is a size that depended
+    on the window under a sign that did not.
+
+    **There is deliberately no best window.** The walks are listed in the order
+    they were run, and nothing here ranks them: a window picked for the verdict
+    it gives is a verdict picked.
+
+    Mirrors ``window_sweep`` in ``src/walkforward.rs`` operation for operation.
+    """
+    windows: list[int | None] = [None, *range(2, len(sessions) - 1)]
+    reports = [
+        walk_forward(
+            sessions,
+            bucket_ns,
+            parent_qty,
+            cap_grid,
+            half_life_grid,
+            coef_bps,
+            perm_coef_bps,
+            window,
+        )
+        for window in windows
+    ]
+    walks = [
+        {
+            "window": r["window"],
+            "folds": len(r["folds"]),
+            "consensus": r["consensus"],
+            "agreeing_caps": r["agreeing_caps"],
+            # ``walk_forward`` refuses fewer than two folds, so there is a last.
+            "last_verdicts": r["folds"][-1]["verdicts"],
+            "last_flat_improvement_bps": r["folds"][-1]["flat_improvement_bps"],
+        }
+        for r in reports
+    ]
+
+    first = reports[0]
+    caps = range(len(first["caps"]))
+    consensus_stable = [
+        all(w["consensus"][c] == walks[0]["consensus"][c] for w in walks) for c in caps
+    ]
+    last_fold_stable = [
+        all(w["last_verdicts"][c] == walks[0]["last_verdicts"][c] for w in walks) for c in caps
+    ]
+    last_fold_span_bps = []
+    for c in caps:
+        values = [w["last_flat_improvement_bps"][c] for w in walks]
+        last_fold_span_bps.append(_r8(max(values) - min(values)))
+    # Two walks that are both ``mixed`` match without either having settled.
+    settled_caps = sum(
+        1 for c in caps if consensus_stable[c] and walks[0]["consensus"][c] != "mixed"
+    )
+    return {
+        "product": first["product"],
+        "bucket_ns": bucket_ns,
+        "buckets": first["buckets"],
+        "sessions": len(sessions),
+        "parent_qty": first["parent_qty"],
+        "coef_bps": first["coef_bps"],
+        "perm_coef_bps": first["perm_coef_bps"],
+        "caps": first["caps"],
+        "half_lives": first["half_lives"],
+        "walks": walks,
+        "consensus_stable": consensus_stable,
+        "last_fold_stable": last_fold_stable,
+        "last_fold_span_bps": last_fold_span_bps,
+        "settled_caps": settled_caps,
+        "all_settled": settled_caps == len(consensus_stable),
+    }
+
+
 def _pooling_weights(sessions: int, half_life: float) -> list[float]:
     """The weight each history session carries, oldest first, summing to one.
 
