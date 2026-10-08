@@ -43,6 +43,7 @@ from xexeclab.engine import (
     sweep_cost,
     sweep_curve,
     walk_forward,
+    window_sweep,
 )
 
 pytestmark = pytest.mark.equivalence
@@ -1554,3 +1555,90 @@ def test_rust_and_python_windowed_walk_forwards_are_identical():
         assert message in refused.stderr
         with pytest.raises(ValueError, match=message):
             walk_forward(sessions, *args, window=int(window))
+
+
+def test_rust_and_python_window_sweeps_are_identical():
+    """The twenty-ninth: the walk at every window the captures allow.
+
+    The twenty-eighth test compared two walks by hand and found the verdicts
+    equal and the thin capture's loss several times deeper. The sweep reports
+    that comparison instead of leaving it to a reader with two outputs: every
+    cap reads the same along both walks, only the inert one on a verdict, and
+    the newest capture's figure moves by more than its growing-walk size.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    caps = "0.05,0.1,0.15,0.2,0.25"
+    hls = "0.25,0.5,1,2,4"
+
+    def command(history: str) -> list[str]:
+        return [
+            binary,
+            "pov-window-sweep",
+            "--history",
+            history,
+            "--input",
+            THIN_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap-grid",
+            caps,
+            "--half-life-grid",
+            hls,
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ]
+
+    proc = subprocess.run(
+        command(f"{SAMPLE},{NEXT_SAMPLE},{THIRD_SAMPLE}"),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    sessions = [
+        read_ticks(SAMPLE),
+        read_ticks(NEXT_SAMPLE),
+        read_ticks(THIRD_SAMPLE),
+        read_ticks(THIN_SAMPLE),
+    ]
+    args = (
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        [float(v) for v in caps.split(",")],
+        [float(v) for v in hls.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+    py = window_sweep(sessions, *args)
+
+    assert rust == py
+    assert [w["window"] for w in rust["walks"]] == [None, 2]
+    for row in rust["walks"]:
+        single = walk_forward(sessions, *args, window=row["window"])
+        assert row["consensus"] == single["consensus"]
+        assert row["last_flat_improvement_bps"] == single["folds"][-1]["flat_improvement_bps"]
+        assert row["consensus"] == ["inert", "mixed", "mixed", "mixed", "mixed"]
+        assert row["last_verdicts"] == ["inert", "loss", "loss", "loss", "loss"]
+    assert rust["consensus_stable"] == [True] * 5
+    assert rust["last_fold_stable"] == [True] * 5
+    assert rust["settled_caps"] == 1
+    assert rust["all_settled"] is False
+    assert rust["last_fold_span_bps"] == [0.0, 0.34894004, 0.39014161, 0.31557286, 0.24196972]
+    # The growing walk's loss at the 10% cap is 0.048 bps; the window moves it
+    # by seven times that without moving the verdict.
+    assert rust["last_fold_span_bps"][1] > 7 * abs(rust["walks"][0]["last_flat_improvement_bps"][1])
+
+    # Three captures are one fold short of a walk, so there is nothing to sweep.
+    refused = subprocess.run(command(f"{SAMPLE},{NEXT_SAMPLE}"), capture_output=True, text=True)
+    assert refused.returncode != 0
+    assert "at least 4 sessions" in refused.stderr
+    with pytest.raises(ValueError, match="at least 4 sessions"):
+        window_sweep([sessions[0], sessions[1], sessions[3]], *args)
