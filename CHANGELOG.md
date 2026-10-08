@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.38.0] - 2026-10-08
+
+### Added
+- **`pov-window-sweep` — the walk at every window the sessions allow.**
+  v0.37.0 gave the walk a `--window` and said nothing chooses one, which left
+  the window where the half-life was before `pov-hl-sweep`: a parameter nobody
+  fits, quoted at whichever value was typed. `window_sweep` in both engines
+  runs `walk_forward` with a growing history and then at every window from 2
+  to `sessions - 2`, and lists the walks in that order.
+- Per cap it reports `consensus_stable` (every walk's consensus was the same),
+  `last_fold_stable` (every walk gave the newest session the same verdict) and
+  `last_fold_span_bps` (the widest gap between two walks' `flat_improvement_bps`
+  on the newest session). The newest session is the one input every walk
+  scores, so the last two compare like with like; a walk's consensus rests on
+  its own folds, and a wider window has fewer.
+- `settled_caps` and `all_settled` count only caps that matched on a verdict.
+  Two walks that both call a cap `mixed` match without either having settled,
+  and counting that as agreement would report a sweep as settled on exactly the
+  caps no walk could settle.
+- **Finding on the bundled captures.** At the README's settings all five caps
+  are `consensus_stable` and one is settled, the inert one. The thin capture
+  keeps its verdict at every cap and its figure moves by 0.24 to 0.39 bps at
+  the four binding caps, against a growing-walk loss of 0.02 to 0.05 bps. The
+  comparison v0.37.0 made in prose is now a reported field.
+- Eight tests each side and a 29th equivalence test that pins the sweep on the
+  bundled captures and the three-capture refusal on both engines.
+
+### Notes
+- There is no best window and no ranking of the walks, and a test scans the
+  report for one.
+- Four bundled captures allow the growing walk and a window of two, nothing
+  wider. A sweep over more windows needs more captures.
+- Polars 2.0 re-measured 2026-10-08: PyPI 2.0.0, Rust crate still 0.55.2. The
+  `polars>=1.0,<2` cap stands.
+
 ## [0.37.0] - 2026-10-07
 
 ### Added
