@@ -7,7 +7,7 @@ import json
 import polars as pl
 import pytest
 
-from xexeclab.engine import holdout, stability, walk_forward
+from xexeclab.engine import holdout, stability, walk_forward, window_sweep
 
 BUCKET = 1_000_000_000
 # An hour between sessions, so captures only line up by time into the session.
@@ -270,5 +270,113 @@ def test_a_windowed_walk_names_no_best_window():
     walk = walk_forward(sessions, *ARGS, window=3)
     assert walk["window"] == 3
     text = json.dumps(walk)
+    for word in ("best", "worst", "optimal", "argmax", "recommend", "mean", "average", "pooled"):
+        assert word not in text, f"report mentions {word!r}: {text}"
+
+
+def test_the_sweep_is_the_walk_at_every_window_the_sessions_allow():
+    """The sweep is a re-run too: each of its rows must be the walk
+    ``pov-walkforward`` prints at that window, so a number here can be traced
+    to a fold there."""
+    sessions = _in_order(BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED)
+    report = window_sweep(sessions, *ARGS)
+    assert [w["window"] for w in report["walks"]] == [None, 2, 3]
+    for row in report["walks"]:
+        single = walk_forward(sessions, *ARGS, window=row["window"])
+        last = single["folds"][-1]
+        assert row["folds"] == len(single["folds"])
+        assert row["consensus"] == single["consensus"]
+        assert row["agreeing_caps"] == single["agreeing_caps"]
+        assert last["input"] == 4, "every walk ends on the newest session"
+        assert row["last_verdicts"] == last["verdicts"]
+        assert row["last_flat_improvement_bps"] == last["flat_improvement_bps"]
+    assert report["sessions"] == 5
+    assert report["caps"] == CAPS
+
+
+def test_four_sessions_allow_one_window_and_three_are_refused():
+    """Four sessions leave room for one window, and it is the narrowest: a
+    window of three would leave a single fold. Fewer sessions are the walk's
+    refusal."""
+    four = _in_order(LUMPY, BLENDED, THIN_TAIL, PINCHED)
+    assert [w["window"] for w in window_sweep(four, *ARGS)["walks"]] == [None, 2]
+    with pytest.raises(ValueError, match="at least 4 sessions"):
+        window_sweep(four[:3], *ARGS)
+    swapped = [four[0], four[2], four[1], four[3]]
+    with pytest.raises(ValueError, match="time order"):
+        window_sweep(swapped, *ARGS)
+
+
+def test_caps_every_walk_calls_mixed_match_without_being_settled():
+    """Two walks that both call a cap ``mixed`` gave the same reading, and
+    neither gave a verdict. Counting that as agreement would report a sweep as
+    settled on exactly the caps no walk could settle."""
+    report = window_sweep(_in_order(LUMPY, BLENDED, PINCHED, THIN_TAIL), *ARGS)
+    for row in report["walks"]:
+        assert row["consensus"] == ["inert", "mixed", "mixed"]
+    assert report["consensus_stable"] == [True, True, True]
+    assert report["settled_caps"] == 1
+    assert not report["all_settled"]
+
+
+def test_the_newest_session_can_change_verdict_with_the_window():
+    """The same session, scored at the same caps, called ``unstable`` from
+    three sessions of history and a ``gain`` from two. This is the comparison
+    the consensus cannot make, because here both walks' consensus is
+    ``mixed``."""
+    report = window_sweep(_in_order(LUMPY, BLENDED, PINCHED, THIN_TAIL), *ARGS)
+    assert report["walks"][0]["last_verdicts"] == ["inert", "unstable", "unstable"]
+    assert report["walks"][1]["last_verdicts"] == ["inert", "gain", "gain"]
+    assert report["last_fold_stable"] == [True, False, False]
+    assert report["consensus_stable"] == [True, True, True]
+    # 0.47747641 at the window of two, less -1.06866706 on the growing walk.
+    assert report["last_fold_span_bps"] == [0.0, 1.54614347, 1.54614347]
+
+
+def test_a_span_can_sit_under_a_verdict_that_did_not_move():
+    """A verdict that survives the window says the sign did. The span beside it
+    is how much of the size did not, and it can be most of the figure."""
+    report = window_sweep(_in_order(LUMPY, BLENDED, THIN_TAIL, PINCHED), *ARGS)
+    assert report["last_fold_stable"] == [True, True, True]
+    assert report["walks"][0]["last_verdicts"] == report["walks"][1]["last_verdicts"]
+    assert report["last_fold_span_bps"] == [0.0, 0.56041748, 1.58217664]
+    for c, span in enumerate(report["last_fold_span_bps"]):
+        a = report["walks"][0]["last_flat_improvement_bps"][c]
+        b = report["walks"][1]["last_flat_improvement_bps"][c]
+        assert abs(span - abs(a - b)) < 1e-8, f"cap {c}: {span}"
+
+
+def test_a_consensus_can_hold_at_one_window_and_not_at_another():
+    """An agreement at one depth of history is not an agreement at another:
+    the growing walk settles two caps as gains that the window of two leaves
+    mixed."""
+    report = window_sweep(_in_order(LUMPY, THIN_TAIL, PINCHED, BLENDED), *ARGS)
+    assert report["walks"][0]["consensus"] == ["inert", "gain", "gain"]
+    assert report["walks"][1]["consensus"] == ["inert", "mixed", "mixed"]
+    assert report["consensus_stable"] == [True, False, False]
+    assert report["settled_caps"] == 1
+    # With a fifth session no cap reads the same along all three walks.
+    five = window_sweep(_in_order(BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED), *ARGS)
+    assert five["consensus_stable"] == [False, False, False]
+    assert five["settled_caps"] == 0
+
+
+def test_a_sweep_can_settle_every_cap_and_still_report_a_span():
+    """Settled is not the same as unmoved. Both walks give every cap one
+    verdict here, and the newest session's figure still shifts between them."""
+    report = window_sweep(_in_order(LUMPY, BLENDED, LUMPY, BLENDED), *ARGS)
+    for row in report["walks"]:
+        assert row["consensus"] == ["inert", "gain", "gain"]
+    assert report["settled_caps"] == 3
+    assert report["all_settled"]
+    assert report["last_fold_stable"] == [True, True, True]
+    assert report["last_fold_span_bps"] == [0.0, 0.18415301, 0.18415301]
+
+
+def test_the_sweep_names_no_best_window():
+    """The sweep lists the walks in the order it ran them and prefers none."""
+    sessions = _in_order(BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED)
+    text = json.dumps(window_sweep(sessions, *ARGS))
+    assert '"walks": [' in text
     for word in ("best", "worst", "optimal", "argmax", "recommend", "mean", "average", "pooled"):
         assert word not in text, f"report mentions {word!r}: {text}"
