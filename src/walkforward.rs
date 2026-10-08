@@ -196,3 +196,172 @@ pub fn walk_forward(
         agreeing_caps,
     })
 }
+
+/// Round to 8 decimal places, half away from zero. The Python side rounds the
+/// same way so the two engines' sweeps compare exactly.
+fn r8(x: f64) -> f64 {
+    (x * 1e8).round() / 1e8
+}
+
+/// One walk of the sweep, cut down to what the walks can be compared on.
+#[derive(Debug, Serialize)]
+pub struct WindowWalk {
+    /// Sessions of history every fold pooled, or `null` for the growing walk.
+    pub window: Option<usize>,
+    /// How many folds stand behind `consensus`: fewer as the window widens.
+    pub folds: usize,
+    /// Per cap, in `caps` order: the verdict every fold gave it, or `mixed`.
+    pub consensus: Vec<String>,
+    pub agreeing_caps: usize,
+    /// The newest session's verdict per cap -- the one fold every walk has.
+    pub last_verdicts: Vec<String>,
+    /// The newest session's `flat_improvement_bps` per cap.
+    pub last_flat_improvement_bps: Vec<f64>,
+}
+
+/// **Does the walk's answer depend on how far back its history goes?**
+///
+/// [`walk_forward`] takes a window and says nothing chooses one. That leaves
+/// the window where the half-life was before `pov-hl-sweep`: a parameter
+/// nobody fits, quoted at whichever value was typed. This runs the walk at
+/// every window the sessions allow -- the growing history first, then `2` up
+/// to `sessions - 2` -- and reports what moved.
+///
+/// Two things are compared, because the walks share only so much. A walk's
+/// `consensus` rests on its own folds, and a wider window has fewer of them, so
+/// `consensus_stable` says a cap read the same along every walk without the
+/// walks having scored the same sessions -- and `mixed` along every walk is the
+/// same reading too, which is why `settled_caps` counts only the caps that
+/// matched on a verdict. The newest session is the one input
+/// every walk scores, so `last_fold_stable` and `last_fold_span_bps` compare
+/// like with like: the same session, forecast from histories of different
+/// depth. A span beside an unchanged verdict is a size that depended on the
+/// window under a sign that did not.
+///
+/// **There is deliberately no best window.** The walks are listed in the order
+/// they were run, and nothing here ranks them: a window picked for the verdict
+/// it gives is a verdict picked.
+#[derive(Debug, Serialize)]
+pub struct WindowSweepReport {
+    pub product: String,
+    pub bucket_ns: i64,
+    pub buckets: usize,
+    pub sessions: usize,
+    pub parent_qty: f64,
+    pub coef_bps: f64,
+    pub perm_coef_bps: f64,
+    pub caps: Vec<f64>,
+    pub half_lives: Vec<f64>,
+    /// The growing walk, then one walk per window from 2 up.
+    pub walks: Vec<WindowWalk>,
+    /// Per cap: true when every walk's `consensus` is the same verdict.
+    pub consensus_stable: Vec<bool>,
+    /// Per cap: true when every walk gave the newest session the same verdict.
+    pub last_fold_stable: Vec<bool>,
+    /// Per cap: the widest gap between two walks' `flat_improvement_bps` on
+    /// the newest session.
+    pub last_fold_span_bps: Vec<f64>,
+    /// Caps every walk gave the same `consensus`, and a verdict at that: two
+    /// walks that are both `mixed` match without either having settled.
+    pub settled_caps: usize,
+    pub all_settled: bool,
+}
+
+/// Run [`walk_forward`] with a growing history and then at every window from 2
+/// to `sessions - 2`.
+///
+/// Mirrors `window_sweep` in `python/xexeclab/engine.py` operation for
+/// operation, so the two engines report bit-for-bit identical sweeps.
+pub fn window_sweep(
+    sessions: &[Vec<Tick>],
+    bucket_ns: i64,
+    parent_qty: f64,
+    cap_grid: &[f64],
+    hl_grid: &[f64],
+    coef_bps: f64,
+    perm_coef_bps: f64,
+) -> Result<WindowSweepReport> {
+    let mut windows: Vec<Option<usize>> = vec![None];
+    windows.extend((2..=sessions.len().saturating_sub(2)).map(Some));
+    let mut reports: Vec<WalkForwardReport> = Vec::with_capacity(windows.len());
+    for window in windows {
+        reports.push(walk_forward(
+            sessions,
+            bucket_ns,
+            parent_qty,
+            cap_grid,
+            hl_grid,
+            coef_bps,
+            perm_coef_bps,
+            window,
+        )?);
+    }
+    let walks: Vec<WindowWalk> = reports
+        .iter()
+        .map(|r| {
+            // `walk_forward` refuses fewer than two folds, so there is a last.
+            let last = &r.folds[r.folds.len() - 1];
+            WindowWalk {
+                window: r.window,
+                folds: r.folds.len(),
+                consensus: r.consensus.clone(),
+                agreeing_caps: r.agreeing_caps,
+                last_verdicts: last.verdicts.clone(),
+                last_flat_improvement_bps: last.flat_improvement_bps.clone(),
+            }
+        })
+        .collect();
+
+    let first = &reports[0];
+    let caps = first.caps.len();
+    let consensus_stable: Vec<bool> = (0..caps)
+        .map(|c| {
+            walks
+                .iter()
+                .all(|w| w.consensus[c] == walks[0].consensus[c])
+        })
+        .collect();
+    let last_fold_stable: Vec<bool> = (0..caps)
+        .map(|c| {
+            walks
+                .iter()
+                .all(|w| w.last_verdicts[c] == walks[0].last_verdicts[c])
+        })
+        .collect();
+    let last_fold_span_bps: Vec<f64> = (0..caps)
+        .map(|c| {
+            let mut lo = walks[0].last_flat_improvement_bps[c];
+            let mut hi = lo;
+            for w in &walks[1..] {
+                let v = w.last_flat_improvement_bps[c];
+                if v < lo {
+                    lo = v;
+                }
+                if v > hi {
+                    hi = v;
+                }
+            }
+            r8(hi - lo)
+        })
+        .collect();
+    let settled_caps = (0..caps)
+        .filter(|c| consensus_stable[*c] && walks[0].consensus[*c] != "mixed")
+        .count();
+    Ok(WindowSweepReport {
+        product: first.product.clone(),
+        bucket_ns,
+        buckets: first.buckets,
+        sessions: sessions.len(),
+        parent_qty: first.parent_qty,
+        coef_bps: first.coef_bps,
+        perm_coef_bps: first.perm_coef_bps,
+        caps: first.caps.clone(),
+        half_lives: first.half_lives.clone(),
+        walks,
+        consensus_stable,
+        last_fold_stable,
+        last_fold_span_bps,
+        settled_caps,
+        all_settled: settled_caps == caps,
+    })
+}
