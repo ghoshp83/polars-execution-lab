@@ -1,7 +1,9 @@
 use xexec::holdout::holdout;
 use xexec::model::Tick;
 use xexec::stability::stability;
-use xexec::walkforward::{walk_forward, WalkForwardFold, WalkForwardReport};
+use xexec::walkforward::{
+    walk_forward, window_sweep, WalkForwardFold, WalkForwardReport, WindowSweepReport,
+};
 
 /// One second per bucket.
 const BUCKET: i64 = 1_000_000_000;
@@ -387,6 +389,142 @@ fn a_windowed_walk_names_no_best_window() {
     let sessions = in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]);
     let json = serde_json::to_string(&walk(&sessions, Some(3))).unwrap();
     assert!(json.contains("\"window\":3"), "{json}");
+    for word in [
+        "best",
+        "worst",
+        "optimal",
+        "argmax",
+        "recommend",
+        "mean",
+        "average",
+        "pooled",
+    ] {
+        assert!(!json.contains(word), "report mentions {word:?}: {json}");
+    }
+}
+
+fn sweep(sessions: &[Vec<Tick>]) -> WindowSweepReport {
+    window_sweep(sessions, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap()
+}
+
+/// The sweep is a re-run too: each of its rows must be the walk `pov-walkforward`
+/// prints at that window, so a number here can be traced to a fold there.
+#[test]
+fn the_sweep_is_the_walk_at_every_window_the_sessions_allow() {
+    let sessions = in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]);
+    let report = sweep(&sessions);
+    let windows: Vec<Option<usize>> = report.walks.iter().map(|w| w.window).collect();
+    assert_eq!(windows, vec![None, Some(2), Some(3)]);
+    for row in &report.walks {
+        let single = walk(&sessions, row.window);
+        let last = single.folds.last().unwrap();
+        assert_eq!(row.folds, single.folds.len());
+        assert_eq!(row.consensus, single.consensus);
+        assert_eq!(row.agreeing_caps, single.agreeing_caps);
+        assert_eq!(last.input, 4, "every walk ends on the newest session");
+        assert_eq!(row.last_verdicts, last.verdicts);
+        assert_eq!(row.last_flat_improvement_bps, last.flat_improvement_bps);
+    }
+    assert_eq!(report.sessions, 5);
+    assert_eq!(report.caps, CAPS.to_vec());
+}
+
+/// Four sessions leave room for one window, and it is the narrowest: a window
+/// of three would leave a single fold. Fewer sessions are the walk's refusal.
+#[test]
+fn four_sessions_allow_one_window_and_three_are_refused() {
+    let four = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]);
+    let windows: Vec<Option<usize>> = sweep(&four).walks.iter().map(|w| w.window).collect();
+    assert_eq!(windows, vec![None, Some(2)]);
+    let err = window_sweep(&four[..3], BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap_err();
+    assert!(err.to_string().contains("at least 4 sessions"), "{err}");
+    let mut swapped = four.clone();
+    swapped.swap(1, 2);
+    let err = window_sweep(&swapped, BUCKET, 0.6, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap_err();
+    assert!(err.to_string().contains("time order"), "{err}");
+}
+
+/// Two walks that both call a cap `mixed` gave the same reading, and neither
+/// gave a verdict. Counting that as agreement would report a sweep as settled
+/// on exactly the caps no walk could settle.
+#[test]
+fn caps_every_walk_calls_mixed_match_without_being_settled() {
+    let report = sweep(&in_order([LUMPY, BLENDED, PINCHED, THIN_TAIL]));
+    for row in &report.walks {
+        assert_eq!(row.consensus, ["inert", "mixed", "mixed"]);
+    }
+    assert_eq!(report.consensus_stable, [true, true, true]);
+    assert_eq!(report.settled_caps, 1);
+    assert!(!report.all_settled);
+}
+
+/// The same session, scored at the same caps, called `unstable` from three
+/// sessions of history and a `gain` from two. This is the comparison the
+/// consensus cannot make, because here both walks' consensus is `mixed`.
+#[test]
+fn the_newest_session_can_change_verdict_with_the_window() {
+    let report = sweep(&in_order([LUMPY, BLENDED, PINCHED, THIN_TAIL]));
+    assert_eq!(
+        report.walks[0].last_verdicts,
+        ["inert", "unstable", "unstable"]
+    );
+    assert_eq!(report.walks[1].last_verdicts, ["inert", "gain", "gain"]);
+    assert_eq!(report.last_fold_stable, [true, false, false]);
+    assert_eq!(report.consensus_stable, [true, true, true]);
+    // 0.47747641 at the window of two, less -1.06866706 on the growing walk.
+    assert_eq!(report.last_fold_span_bps, [0.0, 1.54614347, 1.54614347]);
+}
+
+/// A verdict that survives the window says the sign did. The span beside it is
+/// how much of the size did not, and it can be most of the figure.
+#[test]
+fn a_span_can_sit_under_a_verdict_that_did_not_move() {
+    let report = sweep(&in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]));
+    assert_eq!(report.last_fold_stable, [true, true, true]);
+    assert_eq!(report.walks[0].last_verdicts, report.walks[1].last_verdicts);
+    assert_eq!(report.last_fold_span_bps, [0.0, 0.56041748, 1.58217664]);
+    for (c, span) in report.last_fold_span_bps.iter().enumerate() {
+        let a = report.walks[0].last_flat_improvement_bps[c];
+        let b = report.walks[1].last_flat_improvement_bps[c];
+        assert!((span - (a - b).abs()).abs() < 1e-8, "cap {c}: {span}");
+    }
+}
+
+/// An agreement at one depth of history is not an agreement at another: the
+/// growing walk settles two caps as gains that the window of two leaves mixed.
+#[test]
+fn a_consensus_can_hold_at_one_window_and_not_at_another() {
+    let report = sweep(&in_order([LUMPY, THIN_TAIL, PINCHED, BLENDED]));
+    assert_eq!(report.walks[0].consensus, ["inert", "gain", "gain"]);
+    assert_eq!(report.walks[1].consensus, ["inert", "mixed", "mixed"]);
+    assert_eq!(report.consensus_stable, [true, false, false]);
+    assert_eq!(report.settled_caps, 1);
+    // With a fifth session no cap reads the same along all three walks.
+    let five = sweep(&in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]));
+    assert_eq!(five.consensus_stable, [false, false, false]);
+    assert_eq!(five.settled_caps, 0);
+}
+
+/// Settled is not the same as unmoved. Both walks give every cap one verdict
+/// here, and the newest session's figure still shifts between them.
+#[test]
+fn a_sweep_can_settle_every_cap_and_still_report_a_span() {
+    let report = sweep(&in_order([LUMPY, BLENDED, LUMPY, BLENDED]));
+    for row in &report.walks {
+        assert_eq!(row.consensus, ["inert", "gain", "gain"]);
+    }
+    assert_eq!(report.settled_caps, 3);
+    assert!(report.all_settled);
+    assert_eq!(report.last_fold_stable, [true, true, true]);
+    assert_eq!(report.last_fold_span_bps, [0.0, 0.18415301, 0.18415301]);
+}
+
+/// The sweep lists the walks in the order it ran them and prefers none.
+#[test]
+fn the_sweep_names_no_best_window() {
+    let sessions = in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]);
+    let json = serde_json::to_string(&sweep(&sessions)).unwrap();
+    assert!(json.contains("\"walks\":["), "{json}");
     for word in [
         "best",
         "worst",
