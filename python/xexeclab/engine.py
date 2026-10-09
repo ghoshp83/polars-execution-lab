@@ -2026,6 +2026,15 @@ def window_sweep(
     different depth. A span beside an unchanged verdict is a size that depended
     on the window under a sign that did not.
 
+    **The walks overlap, and the sweep counts by how much.** A window of ``w``
+    starts on session ``w`` with sessions ``0..w`` behind it, which is the fold
+    the growing walk ran there: one calculation, reported by two walks. So each
+    windowed walk brings one fold fewer than it lists, ``distinct_folds`` is
+    what is left of ``folds_run``, and ``inputs`` sets every scored session
+    against the walks that scored it. A session with one history under it was
+    not compared with anything, whatever ``consensus_stable`` says of the walks
+    it sits in; ``compared_inputs`` counts the sessions that were.
+
     **There is deliberately no best window.** The walks are listed in the order
     they were run, and nothing here ranks them: a window picked for the verdict
     it gives is a verdict picked.
@@ -2075,6 +2084,26 @@ def window_sweep(
     settled_caps = sum(
         1 for c in caps if consensus_stable[c] and walks[0]["consensus"][c] != "mixed"
     )
+    inputs = []
+    for i in range(2, len(sessions)):
+        # The growing walk scores every session from the third on, so there is
+        # always a first.
+        scored = [f for r in reports for f in r["folds"] if f["input"] == i]
+        spans = []
+        for c in caps:
+            values = [f["flat_improvement_bps"][c] for f in scored]
+            spans.append(_r8(max(values) - min(values)))
+        inputs.append(
+            {
+                "input": i,
+                "walks": len(scored),
+                "histories": len({f["history_from"] for f in scored}),
+                "verdict_stable": [
+                    all(f["verdicts"][c] == scored[0]["verdicts"][c] for f in scored) for c in caps
+                ],
+                "span_bps": spans,
+            }
+        )
     return {
         "product": first["product"],
         "bucket_ns": bucket_ns,
@@ -2091,6 +2120,10 @@ def window_sweep(
         "last_fold_span_bps": last_fold_span_bps,
         "settled_caps": settled_caps,
         "all_settled": settled_caps == len(consensus_stable),
+        "inputs": inputs,
+        "folds_run": sum(len(r["folds"]) for r in reports),
+        "distinct_folds": sum(i["histories"] for i in inputs),
+        "compared_inputs": sum(1 for i in inputs if i["histories"] > 1),
     }
 
 
