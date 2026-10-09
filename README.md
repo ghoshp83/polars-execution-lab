@@ -654,6 +654,22 @@ This is a **market-data and execution-analytics** project, not a trading system.
   to 0.05: the span is several times the figure it sits under. The walks are
   listed in the order they ran and none is preferred. A window picked for the
   verdict it gives is a verdict picked.
+
+  **The walks overlap, and the sweep says by how much.** A window of `w` starts
+  on session `w` with sessions `0..w` behind it, which is the fold the growing
+  walk already ran there: one calculation, listed under two walks. `folds_run`
+  is the folds as listed and `distinct_folds` is what is left once each window
+  gives one back. `inputs` then sets every scored session, not only the newest,
+  against the walks that scored it: how many `walks`, how many different
+  `histories` among them, and `verdict_stable` and `span_bps` per cap.
+  `compared_inputs` counts the sessions forecast from more than one history.
+  On the bundled captures the two walks list four folds and three are distinct.
+  The third capture is scored twice from the same two sessions, so its span is
+  exactly zero at every cap and it was compared with nothing. That leaves one
+  compared session, the thin one, which means the five `consensus_stable` caps
+  above and the newest-session figures are one comparison read two ways and
+  not two findings. With five sessions a middle session is compared as well,
+  and it can change verdict at a cap where the newest one holds.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
