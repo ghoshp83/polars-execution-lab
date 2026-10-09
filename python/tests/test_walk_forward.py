@@ -380,3 +380,79 @@ def test_the_sweep_names_no_best_window():
     assert '"walks": [' in text
     for word in ("best", "worst", "optimal", "argmax", "recommend", "mean", "average", "pooled"):
         assert word not in text, f"report mentions {word!r}: {text}"
+
+
+def test_each_window_repeats_one_fold_of_the_growing_walk():
+    """A window of ``w`` starts on session ``w`` with sessions ``0..w`` behind
+    it -- the fold the growing walk already ran there. The sweep lists it under
+    both walks, so it has to say how many folds are really behind its rows."""
+    sessions = _in_order(BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED)
+    report = window_sweep(sessions, *ARGS)
+    growing = walk_forward(sessions, *ARGS)
+    for w in (2, 3):
+        first = walk_forward(sessions, *ARGS, window=w)["folds"][0]
+        twin = next(f for f in growing["folds"] if f["input"] == w)
+        assert (first["history_from"], first["input"]) == (0, w)
+        assert first["verdicts"] == twin["verdicts"]
+        assert first["flat_improvement_bps"] == twin["flat_improvement_bps"]
+    assert report["folds_run"] == 3 + 3 + 2
+    assert report["distinct_folds"] == report["folds_run"] - 2
+    four = window_sweep(_in_order(LUMPY, BLENDED, THIN_TAIL, PINCHED), *ARGS)
+    assert (four["folds_run"], four["distinct_folds"]) == (4, 3)
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        (LUMPY, BLENDED, THIN_TAIL, PINCHED),
+        (LUMPY, THIN_TAIL, PINCHED, BLENDED),
+        (BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED),
+    ],
+)
+def test_a_session_with_one_history_under_it_was_not_compared(shapes):
+    """The third session is scored by two walks from the same two sessions.
+    That is one reading listed twice: it cannot disagree with itself, and it
+    must not count as a session the window was tested on."""
+    report = window_sweep(_in_order(*shapes), *ARGS)
+    third = report["inputs"][0]
+    assert (third["input"], third["walks"], third["histories"]) == (2, 2, 1)
+    assert third["verdict_stable"] == [True, True, True]
+    assert third["span_bps"] == [0.0, 0.0, 0.0]
+    assert report["compared_inputs"] == len(shapes) - 3
+
+
+def test_the_last_input_is_the_newest_session_comparison():
+    """``inputs`` is the newest-session comparison made for every scored
+    session, so its last entry has to be that comparison and not a second
+    opinion on it."""
+    report = window_sweep(_in_order(BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED), *ARGS)
+    shape = [(i["input"], i["walks"], i["histories"]) for i in report["inputs"]]
+    assert shape == [(2, 2, 1), (3, 3, 2), (4, 3, 3)]
+    last = report["inputs"][-1]
+    assert last["verdict_stable"] == report["last_fold_stable"]
+    assert last["span_bps"] == report["last_fold_span_bps"]
+    assert sum(i["histories"] for i in report["inputs"]) == report["distinct_folds"]
+
+
+def test_a_middle_session_can_move_where_the_newest_does_not():
+    """The newest session is not the only one the window can move. Here the
+    fourth changes verdict at both binding caps while the fifth holds at the
+    widest -- a reader of ``last_fold_stable`` alone would call that cap
+    unmoved."""
+    report = window_sweep(_in_order(LUMPY, BLENDED, PINCHED, THIN_TAIL, LUMPY), *ARGS)
+    assert report["last_fold_stable"] == [True, False, True]
+    assert report["inputs"][1]["input"] == 3
+    assert report["inputs"][1]["verdict_stable"] == [True, False, False]
+    assert report["inputs"][1]["span_bps"] == [0.0, 1.54614347, 1.54614347]
+    assert report["inputs"][2]["span_bps"] == [0.0, 1.09081414, 4.32991899]
+
+
+def test_a_settled_sweep_of_four_sessions_rests_on_one_comparison():
+    """Every cap settled, on four sessions, is one session read from two depths
+    of history. The count belongs beside the verdict it qualifies."""
+    report = window_sweep(_in_order(LUMPY, BLENDED, LUMPY, BLENDED), *ARGS)
+    assert report["all_settled"] is True
+    assert report["compared_inputs"] == 1
+    assert (report["folds_run"], report["distinct_folds"]) == (4, 3)
+    assert report["inputs"][1]["histories"] == 2
+    assert report["inputs"][1]["span_bps"] == [0.0, 0.18415301, 0.18415301]
