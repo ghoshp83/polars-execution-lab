@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.39.0] - 2026-10-09
+
+### Added
+- **`inputs` on `pov-window-sweep` — every scored session against the walks
+  that scored it.** v0.38.0 compared the walks on the newest session only,
+  because it is the one input every walk scores. Earlier sessions are scored by
+  several walks too. Each entry carries the session's `input`, the number of
+  `walks` that scored it, the number of different `histories` among them, and
+  `verdict_stable` and `span_bps` per cap. The last entry is the newest
+  session, and its two per-cap fields equal `last_fold_stable` and
+  `last_fold_span_bps`.
+- **`folds_run`, `distinct_folds` and `compared_inputs` — how much of the sweep
+  is one fold listed twice.** A window of `w` starts on session `w` with
+  sessions `0..w` behind it, which is the fold the growing walk ran there. Each
+  windowed walk therefore brings one fold fewer than it lists.
+  `compared_inputs` counts the scored sessions forecast from more than one
+  history.
+- **Finding on the bundled captures, and it qualifies v0.38.0's.** The two
+  walks list four folds and three are distinct. The third capture is scored
+  twice from the same two sessions, its span is exactly zero at every cap, and
+  `compared_inputs` is 1. The five `consensus_stable` caps and the
+  newest-session figures v0.38.0 reported are one comparison read two ways.
+- Five tests each side and a 30th equivalence test that pins the overlap on
+  the bundled captures and checks the shared fold is identical in both single
+  walks.
+
+### Notes
+- The sweep still runs every walk in full; the repeated fold is counted, not
+  skipped, so each row can still be traced to the walk `pov-walkforward` prints.
+- No existing field changed. The four new fields are additions to the report.
+- Polars 2.0 re-measured 2026-10-09: PyPI 2.0.0, Rust crate still 0.55.2. The
+  `polars>=1.0,<2` cap stands.
+
 ## [0.38.0] - 2026-10-08
 
 ### Added
