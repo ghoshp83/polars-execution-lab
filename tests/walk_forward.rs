@@ -538,3 +538,87 @@ fn the_sweep_names_no_best_window() {
         assert!(!json.contains(word), "report mentions {word:?}: {json}");
     }
 }
+
+/// A window of `w` starts on session `w` with sessions `0..w` behind it -- the
+/// fold the growing walk already ran there. The sweep lists it under both
+/// walks, so it has to say how many folds are really behind its rows.
+#[test]
+fn each_window_repeats_one_fold_of_the_growing_walk() {
+    let sessions = in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]);
+    let report = sweep(&sessions);
+    let growing = walk(&sessions, None);
+    for w in [2, 3] {
+        let windowed = walk(&sessions, Some(w));
+        let first = &windowed.folds[0];
+        let twin = growing.folds.iter().find(|f| f.input == w).unwrap();
+        assert_eq!((first.history_from, first.input), (0, w));
+        assert_eq!(first.verdicts, twin.verdicts);
+        assert_eq!(first.flat_improvement_bps, twin.flat_improvement_bps);
+    }
+    assert_eq!(report.folds_run, 3 + 3 + 2);
+    assert_eq!(report.distinct_folds, report.folds_run - 2);
+    let four = sweep(&in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]));
+    assert_eq!((four.folds_run, four.distinct_folds), (4, 3));
+}
+
+/// The third session is scored by two walks from the same two sessions. That
+/// is one reading listed twice: it cannot disagree with itself, and it must not
+/// count as a session the window was tested on.
+#[test]
+fn a_session_with_one_history_under_it_was_not_compared() {
+    for sessions in [
+        in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]),
+        in_order([LUMPY, THIN_TAIL, PINCHED, BLENDED]),
+        in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]),
+    ] {
+        let report = sweep(&sessions);
+        let third = &report.inputs[0];
+        assert_eq!((third.input, third.walks, third.histories), (2, 2, 1));
+        assert_eq!(third.verdict_stable, [true, true, true]);
+        assert_eq!(third.span_bps, [0.0, 0.0, 0.0]);
+        assert_eq!(report.compared_inputs, sessions.len() - 3);
+    }
+}
+
+/// `inputs` is the newest-session comparison made for every scored session, so
+/// its last entry has to be that comparison and not a second opinion on it.
+#[test]
+fn the_last_input_is_the_newest_session_comparison() {
+    let report = sweep(&in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]));
+    let shape: Vec<(usize, usize, usize)> = report
+        .inputs
+        .iter()
+        .map(|i| (i.input, i.walks, i.histories))
+        .collect();
+    assert_eq!(shape, vec![(2, 2, 1), (3, 3, 2), (4, 3, 3)]);
+    let last = report.inputs.last().unwrap();
+    assert_eq!(last.verdict_stable, report.last_fold_stable);
+    assert_eq!(last.span_bps, report.last_fold_span_bps);
+    let histories: usize = report.inputs.iter().map(|i| i.histories).sum();
+    assert_eq!(histories, report.distinct_folds);
+}
+
+/// The newest session is not the only one the window can move. Here the fourth
+/// changes verdict at both binding caps while the fifth holds at the widest --
+/// a reader of `last_fold_stable` alone would call that cap unmoved.
+#[test]
+fn a_middle_session_can_move_where_the_newest_does_not() {
+    let report = sweep(&in_order([LUMPY, BLENDED, PINCHED, THIN_TAIL, LUMPY]));
+    assert_eq!(report.last_fold_stable, [true, false, true]);
+    assert_eq!(report.inputs[1].input, 3);
+    assert_eq!(report.inputs[1].verdict_stable, [true, false, false]);
+    assert_eq!(report.inputs[1].span_bps, [0.0, 1.54614347, 1.54614347]);
+    assert_eq!(report.inputs[2].span_bps, [0.0, 1.09081414, 4.32991899]);
+}
+
+/// Every cap settled, on four sessions, is one session read from two depths of
+/// history. The count belongs beside the verdict it qualifies.
+#[test]
+fn a_settled_sweep_of_four_sessions_rests_on_one_comparison() {
+    let report = sweep(&in_order([LUMPY, BLENDED, LUMPY, BLENDED]));
+    assert!(report.all_settled);
+    assert_eq!(report.compared_inputs, 1);
+    assert_eq!((report.folds_run, report.distinct_folds), (4, 3));
+    assert_eq!(report.inputs[1].histories, 2);
+    assert_eq!(report.inputs[1].span_bps, [0.0, 0.18415301, 0.18415301]);
+}
