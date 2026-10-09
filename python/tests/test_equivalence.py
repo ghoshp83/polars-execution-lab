@@ -1642,3 +1642,75 @@ def test_rust_and_python_window_sweeps_are_identical():
     assert "at least 4 sessions" in refused.stderr
     with pytest.raises(ValueError, match="at least 4 sessions"):
         window_sweep([sessions[0], sessions[1], sessions[3]], *args)
+
+
+def test_rust_and_python_sweeps_count_the_same_overlap():
+    """The thirtieth: how much of the bundled sweep is one fold listed twice.
+
+    The twenty-ninth test read `consensus_stable` and `last_fold_stable` as two
+    findings. On four captures they are nearly one: both walks score the third
+    capture from the same two sessions, so the only thing the window changed
+    was the history under the thin capture. Both engines must say so, in the
+    same numbers.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    caps = "0.05,0.1,0.15,0.2,0.25"
+    hls = "0.25,0.5,1,2,4"
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-window-sweep",
+            "--history",
+            f"{SAMPLE},{NEXT_SAMPLE},{THIRD_SAMPLE}",
+            "--input",
+            THIN_SAMPLE,
+            "--bucket-ms",
+            str(BUCKET_MS),
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap-grid",
+            caps,
+            "--half-life-grid",
+            hls,
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+
+    sessions = [
+        read_ticks(SAMPLE),
+        read_ticks(NEXT_SAMPLE),
+        read_ticks(THIRD_SAMPLE),
+        read_ticks(THIN_SAMPLE),
+    ]
+    args = (
+        BUCKET_MS * 1_000_000,
+        POV_PLAN["parent_qty"],
+        [float(v) for v in caps.split(",")],
+        [float(v) for v in hls.split(",")],
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+    py = window_sweep(sessions, *args)
+
+    assert rust == py
+    assert (rust["folds_run"], rust["distinct_folds"], rust["compared_inputs"]) == (4, 3, 1)
+    third, thin = rust["inputs"]
+    assert (third["input"], third["walks"], third["histories"]) == (2, 2, 1)
+    assert third["span_bps"] == [0.0] * 5
+    assert (thin["input"], thin["walks"], thin["histories"]) == (3, 2, 2)
+    assert thin["verdict_stable"] == rust["last_fold_stable"]
+    assert thin["span_bps"] == rust["last_fold_span_bps"]
+    # The shared fold is the same figures in both single walks, not close ones.
+    growing = walk_forward(sessions, *args)["folds"][0]
+    windowed = walk_forward(sessions, *args, window=2)["folds"][0]
+    assert growing == windowed
