@@ -219,6 +219,25 @@ pub struct WindowWalk {
     pub last_flat_improvement_bps: Vec<f64>,
 }
 
+/// One scored session, set against every walk that scored it.
+#[derive(Debug, Serialize)]
+pub struct InputSpread {
+    /// Position of the session, as `input` on a [`WalkForwardFold`].
+    pub input: usize,
+    /// Walks that scored it: the growing one, and each window no wider than
+    /// `input`.
+    pub walks: usize,
+    /// Different histories among them. The growing walk and the window of
+    /// `input` sessions read the same ones, so this is one less than `walks`
+    /// whenever that window is in the sweep.
+    pub histories: usize,
+    /// Per cap: true when every one of those walks gave it the same verdict.
+    pub verdict_stable: Vec<bool>,
+    /// Per cap: the widest gap between two of those walks'
+    /// `flat_improvement_bps`.
+    pub span_bps: Vec<f64>,
+}
+
 /// **Does the walk's answer depend on how far back its history goes?**
 ///
 /// [`walk_forward`] takes a window and says nothing chooses one. That leaves
@@ -237,6 +256,15 @@ pub struct WindowWalk {
 /// like with like: the same session, forecast from histories of different
 /// depth. A span beside an unchanged verdict is a size that depended on the
 /// window under a sign that did not.
+///
+/// **The walks overlap, and the sweep counts by how much.** A window of `w`
+/// starts on session `w` with sessions `0..w` behind it, which is the fold the
+/// growing walk ran there: one calculation, reported by two walks. So each
+/// windowed walk brings one fold fewer than it lists, `distinct_folds` is what
+/// is left of `folds_run`, and `inputs` sets every scored session against the
+/// walks that scored it. A session with one history under it was not compared
+/// with anything, whatever `consensus_stable` says of the walks it sits in;
+/// `compared_inputs` counts the sessions that were.
 ///
 /// **There is deliberately no best window.** The walks are listed in the order
 /// they were run, and nothing here ranks them: a window picked for the verdict
@@ -265,6 +293,16 @@ pub struct WindowSweepReport {
     /// walks that are both `mixed` match without either having settled.
     pub settled_caps: usize,
     pub all_settled: bool,
+    /// Every scored session, oldest first, against the walks that scored it.
+    /// The last entry is the newest session: its `verdict_stable` and
+    /// `span_bps` are `last_fold_stable` and `last_fold_span_bps`.
+    pub inputs: Vec<InputSpread>,
+    /// Folds across all the walks, as listed.
+    pub folds_run: usize,
+    /// Folds that differ in input or history: `folds_run` less one per window.
+    pub distinct_folds: usize,
+    /// Scored sessions forecast from more than one history.
+    pub compared_inputs: usize,
 }
 
 /// Run [`walk_forward`] with a growing history and then at every window from 2
@@ -347,6 +385,50 @@ pub fn window_sweep(
     let settled_caps = (0..caps)
         .filter(|c| consensus_stable[*c] && walks[0].consensus[*c] != "mixed")
         .count();
+    let inputs: Vec<InputSpread> = (2..sessions.len())
+        .map(|input| {
+            // The growing walk scores every session from the third on, so
+            // there is always a first.
+            let scored: Vec<&WalkForwardFold> = reports
+                .iter()
+                .flat_map(|r| r.folds.iter().filter(|f| f.input == input))
+                .collect();
+            let mut histories: Vec<usize> = scored.iter().map(|f| f.history_from).collect();
+            histories.sort_unstable();
+            histories.dedup();
+            InputSpread {
+                input,
+                walks: scored.len(),
+                histories: histories.len(),
+                verdict_stable: (0..caps)
+                    .map(|c| {
+                        scored
+                            .iter()
+                            .all(|f| f.verdicts[c] == scored[0].verdicts[c])
+                    })
+                    .collect(),
+                span_bps: (0..caps)
+                    .map(|c| {
+                        let mut lo = scored[0].flat_improvement_bps[c];
+                        let mut hi = lo;
+                        for f in &scored[1..] {
+                            let v = f.flat_improvement_bps[c];
+                            if v < lo {
+                                lo = v;
+                            }
+                            if v > hi {
+                                hi = v;
+                            }
+                        }
+                        r8(hi - lo)
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    let folds_run = reports.iter().map(|r| r.folds.len()).sum();
+    let distinct_folds = inputs.iter().map(|i| i.histories).sum();
+    let compared_inputs = inputs.iter().filter(|i| i.histories > 1).count();
     Ok(WindowSweepReport {
         product: first.product.clone(),
         bucket_ns,
@@ -363,5 +445,9 @@ pub fn window_sweep(
         last_fold_span_bps,
         settled_caps,
         all_settled: settled_caps == caps,
+        inputs,
+        folds_run,
+        distinct_folds,
+        compared_inputs,
     })
 }
