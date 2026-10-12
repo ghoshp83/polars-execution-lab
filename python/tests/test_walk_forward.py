@@ -456,3 +456,112 @@ def test_a_settled_sweep_of_four_sessions_rests_on_one_comparison():
     assert (report["folds_run"], report["distinct_folds"]) == (4, 3)
     assert report["inputs"][1]["histories"] == 2
     assert report["inputs"][1]["span_bps"] == [0.0, 0.18415301, 0.18415301]
+
+
+SIX = (LUMPY, BLENDED, PINCHED, THIN_TAIL, LUMPY, BLENDED)
+FIVES = [
+    (LUMPY, BLENDED, PINCHED, THIN_TAIL, LUMPY),
+    (BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED),
+    (PINCHED, THIN_TAIL, LUMPY, BLENDED, PINCHED),
+]
+
+
+def test_the_newest_session_can_hold_while_an_earlier_one_splits():
+    """Six sessions where the newest reads the same at every window, at every
+    cap. Two of those caps changed verdict with the window on an earlier
+    session, so ``last_fold_stable`` alone would pass a sweep the table under
+    it does not."""
+    report = window_sweep(_in_order(*SIX), *ARGS)
+    assert report["last_fold_stable"] == [True, True, True]
+    assert report["every_input_stable"] == [True, False, False]
+    assert report["newest_only_caps"] == 2
+    assert report["inputs"][1]["verdict_stable"] == [True, False, False]
+    assert report["inputs"][2]["verdict_stable"] == [True, False, True]
+
+
+def test_the_widest_span_is_not_always_on_the_newest_session():
+    """The size moves most where it moves most, which need not be the newest
+    session: here the two binding caps peak on two different earlier sessions,
+    at five and fourteen times what the newest one shows."""
+    report = window_sweep(_in_order(*SIX), *ARGS)
+    assert report["last_fold_span_bps"] == [0.0, 0.2995315, 0.2995315]
+    assert report["widest_span_bps"] == [0.0, 1.54614347, 4.32991899]
+    assert report["widest_span_input"] == [5, 3, 4]
+
+
+@pytest.mark.parametrize("shapes", FIVES)
+def test_a_tie_for_the_widest_span_goes_to_the_newer_session(shapes):
+    """A cap whose size never moved has no session to point at, and a tie
+    between two sessions has two. Both go to the newer one, so the field never
+    sends a reader to an old session for a span the newest shows as well."""
+    report = window_sweep(_in_order(*shapes), *ARGS)
+    assert report["widest_span_bps"][0] == 0.0
+    assert report["widest_span_input"][0] == len(shapes) - 1
+
+
+@pytest.mark.parametrize("shapes", FIVES)
+def test_the_summary_is_read_off_the_table_of_inputs(shapes):
+    """The four fields are a reading of ``inputs``, not a second calculation:
+    every one of them has to be recoverable from the rows, and none may report
+    less movement than the newest session alone does."""
+    report = window_sweep(_in_order(*shapes), *ARGS)
+    newest_only = 0
+    for c in range(len(CAPS)):
+        every = all(i["verdict_stable"][c] for i in report["inputs"])
+        assert report["every_input_stable"][c] is every
+        at = next(i for i in report["inputs"] if i["input"] == report["widest_span_input"][c])
+        assert at["span_bps"][c] == report["widest_span_bps"][c]
+        assert all(i["span_bps"][c] <= report["widest_span_bps"][c] for i in report["inputs"])
+        assert report["widest_span_bps"][c] >= report["last_fold_span_bps"][c]
+        assert report["last_fold_stable"][c] or not report["every_input_stable"][c]
+        newest_only += report["last_fold_stable"][c] and not every
+    assert report["newest_only_caps"] == newest_only
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        (LUMPY, BLENDED, LUMPY, BLENDED),
+        (LUMPY, BLENDED, THIN_TAIL, PINCHED),
+        (LUMPY, THIN_TAIL, PINCHED, BLENDED),
+    ],
+)
+def test_on_four_sessions_the_table_is_its_last_row(shapes):
+    """With four sessions only the newest was compared with anything, so the
+    whole table says what its last row says. The new fields add nothing there,
+    and have to say so instead of looking like a second finding."""
+    report = window_sweep(_in_order(*shapes), *ARGS)
+    assert report["compared_inputs"] == 1
+    assert report["every_input_stable"] == report["last_fold_stable"]
+    assert report["widest_span_bps"] == report["last_fold_span_bps"]
+    assert report["widest_span_input"] == [3, 3, 3]
+    assert report["newest_only_caps"] == 0
+
+
+@pytest.mark.parametrize("shapes", [SIX, *FIVES, (LUMPY, BLENDED, THIN_TAIL, PINCHED)])
+def test_the_sweep_works_out_each_distinct_fold_once(shapes, monkeypatch):
+    """A window's first fold is the growing walk's fold on that session, so the
+    sweep takes it from there. ``distinct_folds`` is then the work it does, and
+    each walk it lists is still the walk run alone."""
+    from xexeclab import engine
+
+    calls = []
+    real = engine.stability
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    sessions = _in_order(*shapes)
+    monkeypatch.setattr(engine, "stability", counting)
+    report = window_sweep(sessions, *ARGS)
+    monkeypatch.setattr(engine, "stability", real)
+
+    assert len(calls) == report["distinct_folds"]
+    assert len(calls) == report["folds_run"] - (len(shapes) - 3)
+    for listed in report["walks"]:
+        alone = walk_forward(sessions, *ARGS, window=listed["window"])
+        assert listed["folds"] == len(alone["folds"])
+        assert listed["consensus"] == alone["consensus"]
+        assert listed["last_verdicts"] == alone["folds"][-1]["verdicts"]
+        assert listed["last_flat_improvement_bps"] == alone["folds"][-1]["flat_improvement_bps"]
