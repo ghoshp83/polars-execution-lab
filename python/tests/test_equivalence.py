@@ -1714,3 +1714,105 @@ def test_rust_and_python_sweeps_count_the_same_overlap():
     growing = walk_forward(sessions, *args)["folds"][0]
     windowed = walk_forward(sessions, *args, window=2)["folds"][0]
     assert growing == windowed
+
+
+def test_rust_and_python_sweeps_read_every_scored_session(tmp_path):
+    """The thirty-first: the sweep's table of sessions, read to the end.
+
+    The bundled captures cannot tell `every_input_stable` from
+    `last_fold_stable`: with four of them only the newest was compared with
+    anything, so the summary of the table is its last row, and both engines
+    must report it as that. Six written sessions can tell them apart, so the
+    two engines are also run over those, where the newest session holds at
+    every cap and two caps split earlier.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    def both(paths, bucket_ms, parent_qty, caps, hls):
+        proc = subprocess.run(
+            [
+                binary,
+                "pov-window-sweep",
+                "--history",
+                ",".join(paths[:-1]),
+                "--input",
+                paths[-1],
+                "--bucket-ms",
+                str(bucket_ms),
+                "--parent-qty",
+                str(parent_qty),
+                "--cap-grid",
+                caps,
+                "--half-life-grid",
+                hls,
+                "--coef-bps",
+                str(POV_PLAN["coef_bps"]),
+                "--perm-coef-bps",
+                str(POV_PLAN["perm_coef_bps"]),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        py = window_sweep(
+            [read_ticks(p) for p in paths],
+            bucket_ms * 1_000_000,
+            parent_qty,
+            [float(v) for v in caps.split(",")],
+            [float(v) for v in hls.split(",")],
+            POV_PLAN["coef_bps"],
+            POV_PLAN["perm_coef_bps"],
+        )
+        rust = json.loads(proc.stdout)
+        assert rust == py
+        return rust
+
+    hls = "0.25,0.5,1,2,4"
+    bundled = both(
+        [SAMPLE, NEXT_SAMPLE, THIRD_SAMPLE, THIN_SAMPLE],
+        BUCKET_MS,
+        POV_PLAN["parent_qty"],
+        "0.05,0.1,0.15,0.2,0.25",
+        hls,
+    )
+    assert bundled["compared_inputs"] == 1
+    assert bundled["every_input_stable"] == bundled["last_fold_stable"] == [True] * 5
+    assert bundled["widest_span_bps"] == bundled["last_fold_span_bps"]
+    assert bundled["widest_span_input"] == [3] * 5
+    assert bundled["newest_only_caps"] == 0
+
+    # Three one-second buckets a session, an hour apart, oldest first.
+    shapes = [
+        [1.0, 6.0, 3.0],
+        [3.5, 3.5, 3.0],
+        [1.0, 1.0, 0.02],
+        [10.0, 1.0, 0.6],
+        [1.0, 6.0, 3.0],
+        [3.5, 3.5, 3.0],
+    ]
+    paths = []
+    for hour, volumes in enumerate(shapes):
+        path = tmp_path / f"session_{hour}.ndjson"
+        with path.open("w") as out:
+            for i, size in enumerate(volumes):
+                ts_ns = (hour + 1) * 3_600_000_000_000 + i * 1_000_000_000
+                tick = {
+                    "ts_ns": ts_ns,
+                    "product": "BTC-USD",
+                    "price": 100.0 + i,
+                    "size": size,
+                    "side": "buy",
+                    "trade_id": ts_ns,
+                }
+                out.write(json.dumps(tick) + "\n")
+        paths.append(str(path))
+    six = both(paths, 1000, 0.6, "0.01,0.3,0.5", hls)
+    assert (six["folds_run"], six["distinct_folds"], six["compared_inputs"]) == (13, 10, 3)
+    assert six["last_fold_stable"] == [True, True, True]
+    assert six["every_input_stable"] == [True, False, False]
+    assert six["newest_only_caps"] == 2
+    assert six["last_fold_span_bps"] == [0.0, 0.2995315, 0.2995315]
+    assert six["widest_span_bps"] == [0.0, 1.54614347, 4.32991899]
+    assert six["widest_span_input"] == [5, 3, 4]
