@@ -6,7 +6,7 @@ use serde::Serialize;
 
 /// One step of the walk: the stability grid run with session `input` as the
 /// input and only the sessions before it, oldest first, as the history.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WalkForwardFold {
     /// Position of the input session.
     pub input: usize,
@@ -93,6 +93,35 @@ pub fn walk_forward(
     perm_coef_bps: f64,
     window: Option<usize>,
 ) -> Result<WalkForwardReport> {
+    walk(
+        sessions,
+        bucket_ns,
+        parent_qty,
+        cap_grid,
+        hl_grid,
+        coef_bps,
+        perm_coef_bps,
+        window,
+        None,
+    )
+}
+
+/// [`walk_forward`], given the growing walk of the same sessions when there is
+/// one. A window of `w` opens on session `w` with sessions `0..w` behind it,
+/// which the growing walk has already scored, so that fold is taken from it
+/// and not worked out a second time.
+#[allow(clippy::too_many_arguments)]
+fn walk(
+    sessions: &[Vec<Tick>],
+    bucket_ns: i64,
+    parent_qty: f64,
+    cap_grid: &[f64],
+    hl_grid: &[f64],
+    coef_bps: f64,
+    perm_coef_bps: f64,
+    window: Option<usize>,
+    growing: Option<&WalkForwardReport>,
+) -> Result<WalkForwardReport> {
     // A pool of one is not a pool, so the first fold is session 2; and one
     // fold has nothing to agree with, so the walk needs a second.
     if sessions.len() < 4 {
@@ -141,6 +170,12 @@ pub fn walk_forward(
     let mut half_lives: Vec<f64> = Vec::new();
     for input in window.unwrap_or(2)..sessions.len() {
         let history_from = window.map_or(0, |w| input - w);
+        // Only a window's first fold starts at session 0, and it is never its
+        // last, so the fields read off the grid below are always set.
+        if let Some(g) = growing.filter(|_| history_from == 0) {
+            folds.push(g.folds[input - 2].clone());
+            continue;
+        }
         let grid = stability(
             &sessions[history_from..input],
             &sessions[input],
@@ -264,7 +299,19 @@ pub struct InputSpread {
 /// is left of `folds_run`, and `inputs` sets every scored session against the
 /// walks that scored it. A session with one history under it was not compared
 /// with anything, whatever `consensus_stable` says of the walks it sits in;
-/// `compared_inputs` counts the sessions that were.
+/// `compared_inputs` counts the sessions that were. The shared fold is worked
+/// out once: the sweep runs [`stability`] `distinct_folds` times, not
+/// `folds_run`.
+///
+/// **The newest session is one row of several, and the sweep reads them all.**
+/// `last_fold_stable` and `last_fold_span_bps` are the last entry of `inputs`.
+/// `every_input_stable` asks the same of every entry, `widest_span_bps` and
+/// `widest_span_input` say how far a cap's size moved and on which session,
+/// and `newest_only_caps` counts the caps that held on the newest session and
+/// split on an earlier one -- the ones the newest-session reading passes and
+/// the full table does not. Earlier sessions are scored by fewer walks, so
+/// this is not a stricter test of the same thing: it is the rest of the
+/// comparisons the sweep already made.
 ///
 /// **There is deliberately no best window.** The walks are listed in the order
 /// they were run, and nothing here ranks them: a window picked for the verdict
@@ -300,9 +347,22 @@ pub struct WindowSweepReport {
     /// Folds across all the walks, as listed.
     pub folds_run: usize,
     /// Folds that differ in input or history: `folds_run` less one per window.
+    /// This is how many the sweep computes.
     pub distinct_folds: usize,
     /// Scored sessions forecast from more than one history.
     pub compared_inputs: usize,
+    /// Per cap: true when every scored session got one verdict from all the
+    /// walks that scored it -- `verdict_stable` at every entry of `inputs`,
+    /// where `last_fold_stable` is the last entry alone.
+    pub every_input_stable: Vec<bool>,
+    /// Per cap: the widest `span_bps` any scored session shows.
+    pub widest_span_bps: Vec<f64>,
+    /// Per cap: the `input` that span was measured on. A tie goes to the
+    /// newer session, so a cap that moved nowhere points at the newest.
+    pub widest_span_input: Vec<usize>,
+    /// Caps the walks agreed on at the newest session and split on at an
+    /// earlier one: `last_fold_stable` without `every_input_stable`.
+    pub newest_only_caps: usize,
 }
 
 /// Run [`walk_forward`] with a growing history and then at every window from 2
@@ -323,7 +383,7 @@ pub fn window_sweep(
     windows.extend((2..=sessions.len().saturating_sub(2)).map(Some));
     let mut reports: Vec<WalkForwardReport> = Vec::with_capacity(windows.len());
     for window in windows {
-        reports.push(walk_forward(
+        let report = walk(
             sessions,
             bucket_ns,
             parent_qty,
@@ -332,7 +392,9 @@ pub fn window_sweep(
             coef_bps,
             perm_coef_bps,
             window,
-        )?);
+            reports.first(),
+        )?;
+        reports.push(report);
     }
     let walks: Vec<WindowWalk> = reports
         .iter()
@@ -429,6 +491,24 @@ pub fn window_sweep(
     let folds_run = reports.iter().map(|r| r.folds.len()).sum();
     let distinct_folds = inputs.iter().map(|i| i.histories).sum();
     let compared_inputs = inputs.iter().filter(|i| i.histories > 1).count();
+    let every_input_stable: Vec<bool> = (0..caps)
+        .map(|c| inputs.iter().all(|i| i.verdict_stable[c]))
+        .collect();
+    let mut widest_span_bps: Vec<f64> = Vec::with_capacity(caps);
+    let mut widest_span_input: Vec<usize> = Vec::with_capacity(caps);
+    for c in 0..caps {
+        let mut widest = &inputs[0];
+        for i in &inputs[1..] {
+            if i.span_bps[c] >= widest.span_bps[c] {
+                widest = i;
+            }
+        }
+        widest_span_bps.push(widest.span_bps[c]);
+        widest_span_input.push(widest.input);
+    }
+    let newest_only_caps = (0..caps)
+        .filter(|c| last_fold_stable[*c] && !every_input_stable[*c])
+        .count();
     Ok(WindowSweepReport {
         product: first.product.clone(),
         bucket_ns,
@@ -449,5 +529,9 @@ pub fn window_sweep(
         folds_run,
         distinct_folds,
         compared_inputs,
+        every_input_stable,
+        widest_span_bps,
+        widest_span_input,
+        newest_only_caps,
     })
 }
