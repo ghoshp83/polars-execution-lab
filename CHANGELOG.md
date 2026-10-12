@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.40.0] - 2026-10-12
+
+### Added
+- **`every_input_stable` on `pov-window-sweep` — the verdict question asked of
+  every scored session.** `last_fold_stable` is the last entry of `inputs`.
+  v0.39.0 listed the other entries and left the reader to scan them. This is
+  that scan, per cap: true when every scored session got one verdict from all
+  the walks that scored it.
+- **`widest_span_bps` and `widest_span_input` — how far a cap's size moved, and
+  on which session.** `last_fold_span_bps` is the newest session's span. The
+  widest one can sit on an earlier session. A tie goes to the newer session, so
+  a cap that never moved points at the newest.
+- **`newest_only_caps` — caps the walks agreed on at the newest session and
+  split on at an earlier one.** These are the caps a reader of
+  `last_fold_stable` alone would call unmoved.
+- **Finding, and it is two results.** On the bundled captures the new fields
+  add nothing: one session was compared, so `every_input_stable` equals
+  `last_fold_stable`, each widest span is the newest session's, and
+  `newest_only_caps` is 0. On six written sessions they separate. The newest
+  session keeps its verdict at all three caps, two of those caps change verdict
+  on an earlier session, and the widest span is 4.33 bps on the fifth session
+  against 0.30 on the newest.
+- Five tests each side, a Python test that counts the grids the sweep runs,
+  and a 31st equivalence test. It runs both engines over the bundled captures
+  and over six sessions it writes itself, the first equivalence case where
+  `newest_only_caps` is not zero.
+
+### Changed
+- **The sweep computes each shared fold once.** A window's first fold is the
+  growing walk's fold on that session, and the sweep now takes it from there:
+  `distinct_folds` grids instead of `folds_run`, which is 3 instead of 4 on the
+  bundled captures and 10 instead of 13 on six sessions. No reported figure
+  changed, and each walk the sweep lists still equals the walk
+  `pov-walkforward` prints for that window. This closes the note v0.39.0 left.
+
+### Notes
+- No existing field changed. The four new fields are additions to the report.
+- Earlier sessions are scored by fewer walks than the newest, so
+  `every_input_stable` is not a stricter version of `last_fold_stable`. It is
+  the rest of the comparisons the sweep already made.
+- Polars 2.0 re-measured 2026-10-12: PyPI 2.0.0, Rust crate still 0.55.2. The
+  `polars>=1.0,<2` cap stands.
+
 ## [0.39.0] - 2026-10-09
 
 ### Added
