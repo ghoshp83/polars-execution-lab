@@ -1922,6 +1922,34 @@ def walk_forward(
 
     Mirrors ``walk_forward`` in ``src/walkforward.rs`` operation for operation.
     """
+    return _walk(
+        sessions,
+        bucket_ns,
+        parent_qty,
+        cap_grid,
+        half_life_grid,
+        coef_bps,
+        perm_coef_bps,
+        window,
+        None,
+    )
+
+
+def _walk(
+    sessions: list[pl.DataFrame],
+    bucket_ns: int,
+    parent_qty: float,
+    cap_grid: list[float],
+    half_life_grid: list[float],
+    coef_bps: float,
+    perm_coef_bps: float,
+    window: int | None,
+    growing: dict | None,
+) -> dict:
+    """``walk_forward``, given the growing walk of the same sessions when there
+    is one. A window of ``w`` opens on session ``w`` with sessions ``0..w``
+    behind it, which the growing walk has already scored, so that fold is taken
+    from it and not worked out a second time. Mirrors the Rust ``walk``."""
     # A pool of one is not a pool, so the first fold is session 2; and one
     # fold has nothing to agree with, so the walk needs a second.
     if len(sessions) < 4:
@@ -1950,6 +1978,11 @@ def walk_forward(
     grid: dict = {}
     for i in range(2 if window is None else window, len(sessions)):
         history_from = 0 if window is None else i - window
+        # Only a window's first fold starts at session 0, and it is never its
+        # last, so ``grid`` is always set by the time it is read below.
+        if growing is not None and history_from == 0:
+            folds.append(growing["folds"][i - 2])
+            continue
         grid = stability(
             sessions[history_from:i],
             sessions[i],
@@ -2033,7 +2066,19 @@ def window_sweep(
     what is left of ``folds_run``, and ``inputs`` sets every scored session
     against the walks that scored it. A session with one history under it was
     not compared with anything, whatever ``consensus_stable`` says of the walks
-    it sits in; ``compared_inputs`` counts the sessions that were.
+    it sits in; ``compared_inputs`` counts the sessions that were. The shared
+    fold is worked out once: the sweep runs ``stability`` ``distinct_folds``
+    times, not ``folds_run``.
+
+    **The newest session is one row of several, and the sweep reads them all.**
+    ``last_fold_stable`` and ``last_fold_span_bps`` are the last entry of
+    ``inputs``. ``every_input_stable`` asks the same of every entry,
+    ``widest_span_bps`` and ``widest_span_input`` say how far a cap's size
+    moved and on which session, and ``newest_only_caps`` counts the caps that
+    held on the newest session and split on an earlier one -- the ones the
+    newest-session reading passes and the full table does not. Earlier sessions
+    are scored by fewer walks, so this is not a stricter test of the same
+    thing: it is the rest of the comparisons the sweep already made.
 
     **There is deliberately no best window.** The walks are listed in the order
     they were run, and nothing here ranks them: a window picked for the verdict
@@ -2042,19 +2087,21 @@ def window_sweep(
     Mirrors ``window_sweep`` in ``src/walkforward.rs`` operation for operation.
     """
     windows: list[int | None] = [None, *range(2, len(sessions) - 1)]
-    reports = [
-        walk_forward(
-            sessions,
-            bucket_ns,
-            parent_qty,
-            cap_grid,
-            half_life_grid,
-            coef_bps,
-            perm_coef_bps,
-            window,
+    reports: list[dict] = []
+    for window in windows:
+        reports.append(
+            _walk(
+                sessions,
+                bucket_ns,
+                parent_qty,
+                cap_grid,
+                half_life_grid,
+                coef_bps,
+                perm_coef_bps,
+                window,
+                reports[0] if reports else None,
+            )
         )
-        for window in windows
-    ]
     walks = [
         {
             "window": r["window"],
@@ -2104,6 +2151,16 @@ def window_sweep(
                 "span_bps": spans,
             }
         )
+    every_input_stable = [all(i["verdict_stable"][c] for i in inputs) for c in caps]
+    widest_span_bps = []
+    widest_span_input = []
+    for c in caps:
+        widest = inputs[0]
+        for i in inputs[1:]:
+            if i["span_bps"][c] >= widest["span_bps"][c]:
+                widest = i
+        widest_span_bps.append(widest["span_bps"][c])
+        widest_span_input.append(widest["input"])
     return {
         "product": first["product"],
         "bucket_ns": bucket_ns,
@@ -2124,6 +2181,12 @@ def window_sweep(
         "folds_run": sum(len(r["folds"]) for r in reports),
         "distinct_folds": sum(i["histories"] for i in inputs),
         "compared_inputs": sum(1 for i in inputs if i["histories"] > 1),
+        "every_input_stable": every_input_stable,
+        "widest_span_bps": widest_span_bps,
+        "widest_span_input": widest_span_input,
+        "newest_only_caps": sum(
+            1 for c in caps if last_fold_stable[c] and not every_input_stable[c]
+        ),
     }
 
 
