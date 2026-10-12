@@ -622,3 +622,101 @@ fn a_settled_sweep_of_four_sessions_rests_on_one_comparison() {
     assert_eq!(report.inputs[1].histories, 2);
     assert_eq!(report.inputs[1].span_bps, [0.0, 0.18415301, 0.18415301]);
 }
+
+/// Six sessions where the newest reads the same at every window, at every cap.
+/// Two of those caps changed verdict with the window on an earlier session, so
+/// `last_fold_stable` alone would pass a sweep the table under it does not.
+#[test]
+fn the_newest_session_can_hold_while_an_earlier_one_splits() {
+    let report = sweep(&in_order([
+        LUMPY, BLENDED, PINCHED, THIN_TAIL, LUMPY, BLENDED,
+    ]));
+    assert_eq!(report.last_fold_stable, [true, true, true]);
+    assert_eq!(report.every_input_stable, [true, false, false]);
+    assert_eq!(report.newest_only_caps, 2);
+    assert_eq!(report.inputs[1].verdict_stable, [true, false, false]);
+    assert_eq!(report.inputs[2].verdict_stable, [true, false, true]);
+}
+
+/// The size moves most where it moves most, which need not be the newest
+/// session: here the two binding caps peak on two different earlier sessions,
+/// at five and fourteen times what the newest one shows.
+#[test]
+fn the_widest_span_is_not_always_on_the_newest_session() {
+    let report = sweep(&in_order([
+        LUMPY, BLENDED, PINCHED, THIN_TAIL, LUMPY, BLENDED,
+    ]));
+    assert_eq!(report.last_fold_span_bps, [0.0, 0.2995315, 0.2995315]);
+    assert_eq!(report.widest_span_bps, [0.0, 1.54614347, 4.32991899]);
+    assert_eq!(report.widest_span_input, [5, 3, 4]);
+}
+
+/// A cap whose size never moved has no session to point at, and a tie between
+/// two sessions has two. Both go to the newer one, so the field never sends a
+/// reader to an old session for a span the newest shows as well.
+#[test]
+fn a_tie_for_the_widest_span_goes_to_the_newer_session() {
+    for sessions in [
+        in_order([LUMPY, BLENDED, PINCHED, THIN_TAIL, LUMPY]),
+        in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]),
+        in_order([PINCHED, THIN_TAIL, LUMPY, BLENDED, PINCHED]),
+    ] {
+        let report = sweep(&sessions);
+        assert_eq!(report.widest_span_bps[0], 0.0);
+        assert_eq!(report.widest_span_input[0], sessions.len() - 1);
+    }
+}
+
+/// The four fields are a reading of `inputs`, not a second calculation: every
+/// one of them has to be recoverable from the rows, and none may report less
+/// movement than the newest session alone does.
+#[test]
+fn the_summary_is_read_off_the_table_of_inputs() {
+    for sessions in [
+        in_order([LUMPY, BLENDED, PINCHED, THIN_TAIL, LUMPY]),
+        in_order([BLENDED, LUMPY, THIN_TAIL, PINCHED, BLENDED]),
+        in_order([PINCHED, THIN_TAIL, LUMPY, BLENDED, PINCHED]),
+    ] {
+        let report = sweep(&sessions);
+        let mut newest_only = 0;
+        for c in 0..CAPS.len() {
+            let all = report.inputs.iter().all(|i| i.verdict_stable[c]);
+            assert_eq!(report.every_input_stable[c], all);
+            let at = report
+                .inputs
+                .iter()
+                .find(|i| i.input == report.widest_span_input[c])
+                .unwrap();
+            assert_eq!(at.span_bps[c], report.widest_span_bps[c]);
+            assert!(report
+                .inputs
+                .iter()
+                .all(|i| i.span_bps[c] <= report.widest_span_bps[c]));
+            assert!(report.widest_span_bps[c] >= report.last_fold_span_bps[c]);
+            assert!(report.last_fold_stable[c] || !report.every_input_stable[c]);
+            if report.last_fold_stable[c] && !all {
+                newest_only += 1;
+            }
+        }
+        assert_eq!(report.newest_only_caps, newest_only);
+    }
+}
+
+/// With four sessions only the newest was compared with anything, so the whole
+/// table says what its last row says. The new fields add nothing there, and
+/// have to say so instead of looking like a second finding.
+#[test]
+fn on_four_sessions_the_table_is_its_last_row() {
+    for sessions in [
+        in_order([LUMPY, BLENDED, LUMPY, BLENDED]),
+        in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]),
+        in_order([LUMPY, THIN_TAIL, PINCHED, BLENDED]),
+    ] {
+        let report = sweep(&sessions);
+        assert_eq!(report.compared_inputs, 1);
+        assert_eq!(report.every_input_stable, report.last_fold_stable);
+        assert_eq!(report.widest_span_bps, report.last_fold_span_bps);
+        assert_eq!(report.widest_span_input, [3, 3, 3]);
+        assert_eq!(report.newest_only_caps, 0);
+    }
+}
