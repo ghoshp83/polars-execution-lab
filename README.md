@@ -670,6 +670,23 @@ This is a **market-data and execution-analytics** project, not a trading system.
   above and the newest-session figures are one comparison read two ways and
   not two findings. With five sessions a middle session is compared as well,
   and it can change verdict at a cap where the newest one holds.
+
+  **The newest session is one row of that table, and the sweep reads all of
+  them.** `last_fold_stable` and `last_fold_span_bps` are the last entry of
+  `inputs`. `every_input_stable` asks the same question of every entry,
+  `widest_span_bps` and `widest_span_input` report how far a cap's size moved
+  and on which session, and `newest_only_caps` counts the caps the walks agreed
+  on at the newest session and split on at an earlier one. On the bundled
+  captures these add nothing, and the report says so: one session was compared,
+  so `every_input_stable` equals `last_fold_stable`, every widest span is the
+  newest session's, and `newest_only_caps` is 0. They separate from six
+  sessions on. The test suite pins six where the newest session keeps its
+  verdict at all three caps, two of those caps change verdict on an earlier
+  session, and the widest span is 4.33 bps on the fifth session against 0.30 on
+  the newest. Earlier sessions are scored by fewer walks than the newest, so
+  this is the rest of the comparisons the sweep made and not a stricter test.
+  The sweep also computes each shared fold once now, `distinct_folds` grids
+  instead of `folds_run`, with no change to any figure it reports.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
