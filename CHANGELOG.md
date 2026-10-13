@@ -4,6 +4,66 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.41.0] - 2026-10-13
+
+### Changed
+- **The Python engine runs on Polars 2.x (`polars>=2,<3`).** Since v0.24.0 this
+  project waited for the Rust crate to publish a `2.x` before moving, so that
+  the two engines would not be on different generations. They were never going
+  to be: Polars numbers its Python package and its Rust crate independently,
+  and the source tag `py-2.0.0` declares crate version 0.55.1 — the line
+  `Cargo.toml` has pinned since v0.23.0. Measured on Polars 2.0.0: all 317
+  Python tests pass, including the 32 equivalence tests against a binary built
+  on crate 0.55.2, and a 400,000-tick capture fingerprints bit for bit the same
+  as under 1.44.2 (60,507 values). Polars 1.x is no longer supported. The pairing it replaces
+  was the mismatched one — Python 1.43.2 is built from crate 0.54.4.
+- **The weekly `upstream` watch compares crate lines.** It waited for a stable
+  2.x on both registries, which crates.io was not going to produce. It now
+  reads the newest stable Python release, fetches the crate version that
+  release's tag declares, and goes red when its line differs from the
+  `polars` requirement in `Cargo.toml`. Today: Python 2.0.0, built from 0.55.1,
+  pin 0.55, green.
+- CI runs two jobs instead of three. The Python job installs Polars 2.x.
+
+### Added
+- **`data/real/` — six recorded sessions.** 1,916 consecutive BTC-USD trades
+  from Coinbase's public feed, ten minutes on 2026-10-13 cut into 100-second
+  slices on 10-second boundaries. Trade ids are contiguous from first to last;
+  `data/real/README.md` says what was done to the capture and what the files
+  are not. Every earlier capture in `data/` was written by hand.
+- **What the engine reports on them**, pinned in both languages
+  (`tests/real_capture.rs`, `python/tests/test_real_capture.py`). At a 0.2 BTC
+  parent and 10-second buckets the walk-forward settles one cap, and it is the
+  first settled cap that is not inert: 25% gains at every step of every walk
+  (0.20 to 0.96 bps). The other four are `mixed`. The v0.40.0 fields, inert on
+  the hand-written captures, separate here: three sessions are compared,
+  `every_input_stable` is false at the 20% cap, `newest_only_caps` is 1, and
+  the widest span at that cap is 0.51403291 bps on the fifth session against
+  0.42218023 on the newest.
+- **A 32nd equivalence test**, the first over trades nobody wrote: both engines
+  produce the same `pov-window-sweep` report on the recorded sessions, with
+  sizes down to 2e-8 and up to nine trades in one microsecond.
+
+### Fixed
+- **Live timestamps were up to 128 ns off.** The collectors converted the
+  exchange's ISO time through a float, whose spacing at today's epoch is
+  256 ns, so a trade stamped `…44.325540` was written as `…325540096`. The
+  conversion is now done in integers and returns the microsecond exactly. No
+  bundled file was affected before this release; the recorded sessions hold
+  the corrected values.
+
+### Removed
+- The advisory `polars2` CI job and `python/tests/polars2_baseline.json`, which
+  compared Polars 1.x with 2.x and have nothing left to compare.
+  `python -m xexeclab.compat` stays for the next major.
+
+### Notes
+- The recorded sessions are ten minutes of one product, and neighbours in
+  time. They show the commands behaving on real prices and sizes. They are not
+  evidence about the strategy, and the README says so next to every figure.
+- The crates.io release (0.55.2) is a patch ahead of the crate the Python
+  wheel is built from (0.55.1): the engines share a line, not a commit.
+
 ## [0.40.0] - 2026-10-12
 
 ### Added
