@@ -41,6 +41,16 @@ def test_iso_to_ns_parses_utc_to_nanoseconds():
     assert _iso_to_ns("2024-07-01T00:00:00.500000Z") == 1_719_792_000_500_000_000
 
 
+def test_iso_to_ns_keeps_the_exchange_microsecond_exactly():
+    # A float holds this epoch to the nearest 256 ns, so a conversion that
+    # passes through one wrote ...325540096 for a trade stamped ...325540.
+    assert _iso_to_ns("2026-10-13T08:16:44.325540Z") == 1_791_879_404_325_540_000
+    assert (
+        _iso_to_ns("2026-10-13T08:16:44.325541Z") - _iso_to_ns("2026-10-13T08:16:44.325540Z")
+        == 1_000
+    )
+
+
 def test_match_to_tick_yields_the_canonical_schema():
     tick = match_to_tick(RAW_MATCH)
     # Exactly the canonical columns, nothing extra, nothing missing.

@@ -11,17 +11,21 @@ from __future__ import annotations
 import json
 import math
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .events import EventLog
 
 COINBASE_WS = "wss://ws-feed.exchange.coinbase.com"
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def _iso_to_ns(iso: str) -> int:
+    # Whole microseconds, in integers. Going through `timestamp()` puts the
+    # value in a float, whose spacing at today's epoch is 256 ns, so the
+    # exchange's microsecond came back up to 128 ns off.
     dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(UTC)
-    return int(dt.timestamp() * 1_000_000_000)
+    return (dt - _EPOCH) // timedelta(microseconds=1) * 1_000
 
 
 def match_to_tick(msg: dict) -> dict:
