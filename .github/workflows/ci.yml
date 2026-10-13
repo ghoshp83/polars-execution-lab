@@ -34,9 +34,9 @@ jobs:
       - name: Create venv and install
         run: |
           uv venv
-          # Capped below 2: the Rust half is on the 0.x crate line, and the
-          # equivalence tests must compare one engine generation with itself.
-          uv pip install "polars>=1.0,<2" websockets pyarrow pytest pytest-cov ruff
+          # Polars 2.x is built from the 0.55 crate line the Rust half pins,
+          # so the equivalence tests compare one engine generation with itself.
+          uv pip install "polars>=2,<3" websockets pyarrow pytest pytest-cov ruff
       - name: Lint
         run: |
           uv run ruff check python
@@ -45,44 +45,3 @@ jobs:
         run: cargo build --release
       - name: Test
         run: XEXEC_BIN=target/release/xexec uv run pytest --cov=xexeclab
-
-  polars2:
-    name: python (Polars 2.0 forward-compatibility, advisory)
-    runs-on: ubuntu-24.04
-    # Advisory only. The project pins `polars>=1.0,<2` and the Rust half is on
-    # the 0.x crate line, so the Python engine must not move to 2.x alone -- the
-    # two halves would then be different engine generations and the equivalence
-    # tests would be comparing across a version boundary. This job exists to
-    # find out *early* when a 2.x change would break us, not to gate the build
-    # on a release the Rust crate has not reached.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-      - name: Install Polars 2.x
-        run: |
-          uv venv
-          uv pip install "polars>=2,<3" websockets pyarrow pytest
-          uv run python -c "import polars; print('polars', polars.__version__)"
-      - name: Test the Python engine against Polars 2.0
-        # The equivalence tests are excluded on purpose: they compare against a
-        # Rust binary built on the 0.x crate line, so a failure there would say
-        # something about the version gap rather than about our code.
-        run: uv run pytest python/tests -q -m "not equivalence"
-      - name: Fingerprint a 400k-tick capture under Polars 2.0
-        # The fixtures above are too small for the streaming engine to partition,
-        # so they cannot see a change in how a column is summed. This can.
-        run: PYTHONPATH=python uv run python -m xexeclab.compat dump v2.json
-      - name: Fingerprint the same capture under Polars 1.x
-        run: |
-          uv venv .venv1
-          VIRTUAL_ENV=.venv1 uv pip install "polars>=1.0,<2"
-          PYTHONPATH=python .venv1/bin/python -m xexeclab.compat dump v1.json
-      - name: Compare bit for bit against the recorded baseline
-        # Passes while the versions differ exactly as recorded in the baseline;
-        # fails on any new, changed, or vanished difference.
-        run: PYTHONPATH=python uv run python -m xexeclab.compat compare v1.json v2.json python/tests/polars2_baseline.json

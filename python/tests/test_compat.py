@@ -1,18 +1,6 @@
 """The cross-version check must pass on a recorded difference and fail on any change."""
 
-import json
-from pathlib import Path
-
 from xexeclab import compat
-
-BASELINE = Path(__file__).with_name("polars2_baseline.json")
-
-
-def test_the_committed_baseline_is_in_the_shape_compare_reads():
-    baseline = json.loads(BASELINE.read_text())
-    assert isinstance(baseline["differences"], dict)
-    for pair in baseline["differences"].values():
-        assert len(pair) == 2
 
 
 def test_the_synthetic_capture_is_deterministic():
