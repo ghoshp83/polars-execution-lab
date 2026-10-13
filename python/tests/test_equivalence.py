@@ -1816,3 +1816,57 @@ def test_rust_and_python_sweeps_read_every_scored_session(tmp_path):
     assert six["last_fold_span_bps"] == [0.0, 0.2995315, 0.2995315]
     assert six["widest_span_bps"] == [0.0, 1.54614347, 4.32991899]
     assert six["widest_span_input"] == [5, 3, 4]
+
+
+def test_rust_and_python_agree_on_recorded_trades():
+    """The thirty-second, and the first over trades nobody wrote.
+
+    Every capture the other thirty-one read was typed in: round prices, round
+    sizes, a tick every 200 ms. The six sessions under `data/real` are 1,916
+    consecutive BTC-USD trades off Coinbase's feed, with sizes down to 2e-8 and
+    up to nine trades in one microsecond, so the sort, the bucket sums and the
+    rounding all meet inputs a fixture does not produce.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    paths = [f"data/real/btc_usd_{i}.ndjson" for i in range(1, 7)]
+    caps, hls = [0.05, 0.1, 0.15, 0.2, 0.25], [0.25, 0.5, 1.0, 2.0, 4.0]
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-window-sweep",
+            "--history",
+            ",".join(paths[:-1]),
+            "--input",
+            paths[-1],
+            "--bucket-ms",
+            "10000",
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap-grid",
+            ",".join(str(c) for c in caps),
+            "--half-life-grid",
+            ",".join(str(h) for h in hls),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+    py = window_sweep(
+        [read_ticks(p) for p in paths],
+        10_000_000_000,
+        POV_PLAN["parent_qty"],
+        caps,
+        hls,
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+    assert rust == py
+    assert rust["sessions"] == 6 and rust["buckets"] == 10
+    assert rust["newest_only_caps"] == 1
