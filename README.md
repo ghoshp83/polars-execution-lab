@@ -269,6 +269,15 @@ uv run xexeclab pov-window-sweep \
     --input data/sample_ticks_thin.ndjson --cap-grid 0.05,0.1,0.15,0.2,0.25 \
     --half-life-grid 0.25,0.5,1,2,4 \
     --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
+# ...and the same sweep over six recorded sessions: 1,916 real BTC-USD trades,
+# ten minutes of Coinbase's feed in 100-second slices (see data/real/README.md).
+# The 25% cap gains at every step of every walk; the other four change sign
+R=data/real/btc_usd
+uv run xexeclab pov-window-sweep \
+    --history ${R}_1.ndjson,${R}_2.ndjson,${R}_3.ndjson,${R}_4.ndjson,${R}_5.ndjson \
+    --input ${R}_6.ndjson --bucket-ms 10000 --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+    --half-life-grid 0.25,0.5,1,2,4 \
+    --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
 
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
@@ -334,9 +343,9 @@ XEXEC_BIN=target/release/xexec uv run pytest -m equivalence
   reconnect is logged so discontinuities are visible. All three collectors are
   tested offline against a scripted feed.
 - **Bar width is a parameter** (`--bucket-ms`); benchmarks scale to any horizon.
-- CI runs three jobs: Rust (`fmt` + `clippy -D warnings` + `test`), Python
-  (`ruff` + `pytest` + the equivalence tests that build the Rust binary), and an
-  advisory Python job on Polars 2.x.
+- CI runs two jobs: Rust (`fmt` + `clippy -D warnings` + `test`) and Python on
+  Polars 2.x (`ruff` + `pytest` + the equivalence tests that build the Rust
+  binary).
 
 ## Evaluation
 
@@ -395,7 +404,10 @@ This is a **market-data and execution-analytics** project, not a trading system.
 - Live data comes from Coinbase's public feed; availability and rate limits are
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
-  and test run with no network.
+  and test run with no network. The `data/sample_*` files are written by hand
+  to make each command's point on a few rows. `data/real/` holds six recorded
+  sessions — 1,916 consecutive BTC-USD trades, ten minutes of one morning —
+  which are real but are not a sample of a market: see `data/real/README.md`.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
@@ -687,6 +699,18 @@ This is a **market-data and execution-analytics** project, not a trading system.
   this is the rest of the comparisons the sweep made and not a stricter test.
   The sweep also computes each shared fold once now, `distinct_folds` grids
   instead of `folds_run`, with no change to any figure it reports.
+  **On recorded trades those fields are not inert.** Over the six sessions in
+  `data/real` (10-second buckets, a 0.2 BTC parent) three sessions are
+  compared instead of one. The newest reads the same at every window at all
+  five caps, and the 20% cap changes verdict on the fourth session, so
+  `every_input_stable` is false there and `newest_only_caps` is 1. The widest
+  span at that cap is 0.51 bps on the fifth session against 0.42 on the newest.
+  One cap is settled and, for the first time, it is not the inert one: 25%
+  gains at every step of every walk, between 0.20 and 0.96 bps. The other four
+  are `mixed`: the two tightest are inert until the newest session and a loss
+  on it, of up to 0.93 bps. This is ten minutes of one product cut into 100-second slices
+  that sit next to each other in time. It shows the commands separating things
+  on real prices and sizes; it is not evidence that a 25% cap is a good one.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
@@ -704,28 +728,25 @@ This is a **market-data and execution-analytics** project, not a trading system.
   which sort for you. Only the session aggregates (`vwap`, `twap`, volume,
   notional, order flow) are streamed; every other command in this project still
   reads its whole replay into memory.
-- **Polars 2.0 is watched, not adopted.** Polars 2.0 makes the streaming
-  engine the default for every `LazyFrame` query, and the Python engine here
-  passes its whole test suite unchanged on 2.0.0. An advisory CI job also runs
-  `python -m xexeclab.compat` on a 400,000-tick capture under both 1.x and 2.0
-  and compares every result bit for bit against a recorded baseline; today they
-  match exactly. That covers one synthetic capture and two engine entry points,
-  not every input a real session can produce, and CI runners may partition work
-  differently from a local machine. The dependency is capped at
-  `polars>=1.0,<2` anyway: the Python package reached a stable 2.0.0 on
-  2026-10-06, but the Rust `polars` crate has not (crates.io tops out at
-  0.55.2, which this crate pins). Moving the Python half to 2.0 would put the two
-  engines on different generations and leave the cross-language equivalence
-  tests comparing across a version boundary instead of proving one engine.
-  A weekly `upstream` workflow (`python python/xexeclab/upstream.py`) goes red
-  once both registries publish a stable 2.x; pre-releases never trip it. The
-  migration then runs in this order, both engines in one release:
-  1. Move the Rust crate to 2.x and fix any API breaks; `cargo test` passes.
-  2. Move the Python pin to `polars>=2,<3`; `pytest -m "not equivalence"` passes.
-  3. Rebuild the binary and run all equivalence tests against it — they must
-     pass unchanged, or the difference is explained before anything ships.
-  4. Retire the advisory `polars2` job and its baseline, which have nothing
-     left to compare.
+- **Both engines run the Polars 2.0 engine, and the version numbers do not
+  say so.** The Python package requires `polars>=2,<3`; the Rust crate pins
+  `polars` 0.55. Those are the same engine: Polars numbers its Python package
+  and its Rust crate independently, and the source tag `py-2.0.0` declares
+  crate version 0.55.1 for the workspace it is built from. Until v0.41.0 this
+  project waited for a `2.x` crate before moving the Python half, on the
+  reading that 2.0 and 0.55 were different generations. That reading was wrong,
+  and the earlier pairing was the mismatched one: Python 1.43.2 is built from
+  crate 0.54.4, a line behind the Rust half. On Polars 2.0.0 every Python test
+  passes unchanged, including all the cross-language equivalence tests against
+  a binary built on crate 0.55.2, and a 400,000-tick capture fingerprints bit
+  for bit the same as under 1.44.2 (`python -m xexeclab.compat`). Polars 1.x is
+  no longer tested or supported. The crate on crates.io (0.55.2) is a patch
+  ahead of the one the Python wheel is built from (0.55.1), so "the same line"
+  is the claim, not "the same commit". A weekly `upstream` workflow
+  (`python python/xexeclab/upstream.py`) reads the newest stable Python
+  release, looks up the crate version its tag declares, and goes red when that
+  line differs from the one `Cargo.toml` pins — the signal to move the Rust
+  pin, which is what keeps the equivalence tests comparing one engine.
 - **"8 decimal places" is a rounding rule, not a precision guarantee at every
   magnitude.** Both engines round every reported value to 8 *absolute*
   decimals, but a 64-bit float's spacing grows with the size of the number.
