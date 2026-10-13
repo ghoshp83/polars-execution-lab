@@ -1,14 +1,18 @@
-"""Watch the two package registries for a stable Polars 2.0.
+"""Watch that both engines are built from the same Polars crate line.
 
-The project adopts Polars 2.0 only when both engines can move together: the
-Python package on PyPI *and* the Rust crate on crates.io must each publish a
-stable 2.x release. Adopting one side alone would leave the cross-language
-equivalence tests comparing two engine generations.
+The Python package and the Rust crate are numbered independently. Every Python
+release is built from the Rust workspace in the same repository, and that
+workspace carries a crate version of its own: the `py-1.43.2` tag declares
+0.54.4, and `py-1.44.2` and `py-2.0.0` both declare 0.55.1. So "Polars 2.0" is
+a Python version number, and the crate line it is built from is the one to
+match. This reads the newest stable Python release, looks up the crate version
+its tag declares, and compares that line with the one `Cargo.toml` pins.
 
     python -m xexeclab.upstream
 
-Exits 0 while at least one side is still short of a stable 2.0, and 1 once both
-have one -- so a scheduled CI run goes red on the day the migration can start.
+Exits 0 while the two lines match and 1 once the newest Python release is built
+from a different crate line -- so a scheduled CI run goes red on the day the
+Rust pin has fallen behind the Python engine.
 """
 
 from __future__ import annotations
@@ -16,11 +20,14 @@ from __future__ import annotations
 import json
 import re
 import sys
+import tomllib
 import urllib.request
+from pathlib import Path
 
-TARGET_MAJOR = 2
 CRATES_URL = "https://crates.io/api/v1/crates/polars/versions"
 PYPI_URL = "https://pypi.org/pypi/polars/json"
+TAG_MANIFEST_URL = "https://raw.githubusercontent.com/pola-rs/polars/py-{version}/Cargo.toml"
+OWN_MANIFEST = Path(__file__).resolve().parents[2] / "Cargo.toml"
 
 _STABLE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
@@ -42,27 +49,40 @@ def newest_stable(versions: list[str]) -> str | None:
     return max(releases, key=lambda r: r[1])[0] if releases else None
 
 
-def ready(versions: list[str]) -> bool:
-    """True once a stable release at or above the target major exists."""
-    newest = newest_stable(versions)
-    return newest is not None and stable(newest)[0] >= TARGET_MAJOR
+def line(version: str) -> tuple[int, int]:
+    """The crate line a version or a requirement belongs to: `0.55.2` and the
+    requirement `0.55` are both the 0.55 line. Below 1.0 a minor bump is the
+    breaking one, so the line is what two builds must share."""
+    major, minor = version.split(".")[:2]
+    return int(major), int(minor)
 
 
-def _get(url: str) -> dict:
+def built_from(tag_manifest: str) -> str:
+    """The crate version a Python release tag declares for its Rust workspace."""
+    return tomllib.loads(tag_manifest)["workspace"]["package"]["version"]
+
+
+def pinned(own_manifest: str) -> str:
+    """The `polars` requirement in this project's `Cargo.toml`."""
+    return tomllib.loads(own_manifest)["dependencies"]["polars"]["version"]
+
+
+def _fetch(url: str) -> str:
     # crates.io refuses requests without an identifying User-Agent.
     req = urllib.request.Request(url, headers={"User-Agent": "polars-execution-lab upstream watch"})
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)
+        return resp.read().decode()
 
 
 def main() -> int:
-    crate = [v["num"] for v in _get(CRATES_URL)["versions"] if not v["yanked"]]
-    pypi = list(_get(PYPI_URL)["releases"])
-    rust_ready, python_ready = ready(crate), ready(pypi)
-    print(f"rust   crate  newest stable {newest_stable(crate)}  2.0 ready: {rust_ready}")
-    print(f"python package newest stable {newest_stable(pypi)}  2.0 ready: {python_ready}")
-    if rust_ready and python_ready:
-        print("Both engines have a stable Polars 2.0 -- start the README migration checklist.")
+    crate = [v["num"] for v in json.loads(_fetch(CRATES_URL))["versions"] if not v["yanked"]]
+    python = newest_stable(list(json.loads(_fetch(PYPI_URL))["releases"]))
+    source = built_from(_fetch(TAG_MANIFEST_URL.format(version=python)))
+    pin = pinned(OWN_MANIFEST.read_text())
+    print(f"python package newest stable {python}, built from crate {source}")
+    print(f"rust   crate   newest stable {newest_stable(crate)}, Cargo.toml pins {pin}")
+    if line(source) != line(pin):
+        print("The engines are on different crate lines -- move the Rust pin to match.")
         return 1
     return 0
 

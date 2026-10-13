@@ -1,23 +1,23 @@
 name: upstream
 
-# A tripwire, not a gate: goes red on the first weekly run after both the Rust
-# crate and the Python package publish a stable Polars 2.0, which is the signal
-# to start the migration checklist in the README.
+# A tripwire, not a gate: goes red on the first weekly run after the newest
+# stable Python release of Polars is built from a crate line other than the one
+# Cargo.toml pins, which is the signal to move the Rust pin.
 on:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
 jobs:
-  polars2-watch:
-    name: Polars 2.0 stable on crates.io and PyPI
+  crate-line-watch:
+    name: Python and Rust engines on one Polars crate line
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - name: Check both registries
+      - name: Compare the crate lines
         # Standard library only -- no install step, so the watch cannot break on
         # a dependency the way the thing it watches for might.
         # Run as a plain script so the package (and Polars) is never imported.
