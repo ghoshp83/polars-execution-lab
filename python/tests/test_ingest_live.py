@@ -150,6 +150,47 @@ def test_a_trade_feed_that_keeps_dropping_fails_loudly(feed, tmp_path):
     assert [t["trade_id"] for t in _lines(out)] == [1]
 
 
+def test_a_timed_capture_holds_exactly_its_window_of_exchange_time(feed, tmp_path):
+    """Sessions of a fixed length were cut from captures sized by count, and a
+    count is a poor proxy: the same 2,600 trades took ten minutes one morning
+    and four the next afternoon. The window is the exchange's clock, opened by
+    the first trade written; the trade that reaches its end is not written."""
+    feed([[{"type": "subscriptions"}, *[_match(i) for i in range(1, 7)]]])
+    out = tmp_path / "trades.ndjson"
+    log = EventLog()
+    n = asyncio.run(stream_coinbase("BTC-USD", out, None, log, seconds=3))
+    assert n == 3
+    assert [t["trade_id"] for t in _lines(out)] == [1, 2, 3]
+    assert log.events[0]["seconds"] == 3
+    assert log.events[-1]["received"] == 3
+
+
+def test_a_timed_capture_still_stops_at_its_count(feed, tmp_path):
+    """Both bounds apply, and the nearer one ends the capture."""
+    feed([[_match(i) for i in range(1, 7)]])
+    out = tmp_path / "trades.ndjson"
+    assert asyncio.run(stream_coinbase("BTC-USD", out, 2, seconds=60)) == 2
+
+
+def test_a_timed_quote_capture_holds_its_window(feed, tmp_path):
+    """Quotes are bounded by the same clock, so a quote file and a trade file
+    taken side by side with the same `seconds` cover the same stretch."""
+    feed([[_ticker(i) for i in range(10, 16)]])
+    out = tmp_path / "quotes.ndjson"
+    n = asyncio.run(stream_coinbase_quotes("BTC-USD", out, None, seconds=2.5))
+    assert n == 3
+    assert len(_lines(out)) == 3
+
+
+def test_a_capture_with_no_bound_is_refused_before_it_connects(feed, tmp_path):
+    """Neither a count nor a duration would stream until the process is
+    killed; that is an error at the call, not a hang."""
+    fake = feed([])
+    with pytest.raises(ValueError, match="count, a duration"):
+        asyncio.run(stream_coinbase("BTC-USD", tmp_path / "t.ndjson", None))
+    assert fake.urls == []
+
+
 def test_quotes_skip_tickers_without_a_book_and_resume_after_a_drop(feed, tmp_path):
     """The first `ticker` after subscribing can arrive without `best_bid`; it is
     not a quote and must be skipped, not crash the normaliser. A drop resumes

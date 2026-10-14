@@ -108,14 +108,46 @@ def book_levels(
     return rows
 
 
+class _Bound:
+    """When a live capture stops: after `count` records, at the first record
+    stamped `seconds` or more after the first one written, or whichever comes
+    first. A capture with neither would never return."""
+
+    def __init__(self, count: int | None, seconds: float | None):
+        if count is None and seconds is None:
+            raise ValueError("a live capture needs a count, a duration, or both")
+        self.count = count
+        self.span_ns = None if seconds is None else round(seconds * 1e9)
+        self.start_ns: int | None = None
+        self.over = False
+
+    def done(self, received: int) -> bool:
+        return self.over or (self.count is not None and received >= self.count)
+
+    def expired(self, ts_ns: int) -> bool:
+        if self.span_ns is None:
+            return False
+        if self.start_ns is None:
+            self.start_ns = ts_ns
+        self.over = ts_ns - self.start_ns >= self.span_ns
+        return self.over
+
+
 async def stream_coinbase(
     product: str,
     out_path: str | Path,
-    max_trades: int,
+    max_trades: int | None,
     log: EventLog | None = None,
     max_reconnects: int = 5,
+    seconds: float | None = None,
 ) -> int:
     """Capture up to `max_trades` live trades for `product` into an NDJSON file.
+
+    `seconds` bounds the capture by exchange time instead, or as well: the
+    window opens at the first trade written, and the first trade stamped at or
+    past its end stops the capture without being written. A session of a fixed
+    length cannot be sized by count, because the trade rate varies tenfold over
+    a day.
 
     A live feed drops connections; rather than losing the capture, this
     reconnects and resumes appending until the target count is met or the
@@ -127,24 +159,27 @@ async def stream_coinbase(
     import websockets
 
     sub = {"type": "subscribe", "product_ids": [product], "channels": ["matches"]}
+    bound = _Bound(max_trades, seconds)
     received = 0
     reconnects = 0
     last_trade_id = None
     if log:
-        log.emit("ingest_start", product=product, max_trades=max_trades)
+        log.emit("ingest_start", product=product, max_trades=max_trades, seconds=seconds)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
-        while received < max_trades:
+        while not bound.done(received):
             try:
                 async with websockets.connect(COINBASE_WS, ping_interval=20) as ws:
                     await ws.send(json.dumps(sub))
-                    while received < max_trades:
+                    while not bound.done(received):
                         msg = json.loads(await ws.recv())
                         if msg.get("type") not in ("match", "last_match"):
                             continue
                         tick = match_to_tick(msg)
                         if last_trade_id is not None and tick["trade_id"] <= last_trade_id:
                             continue
+                        if bound.expired(tick["ts_ns"]):
+                            break
                         last_trade_id = tick["trade_id"]
                         f.write(json.dumps(tick) + "\n")
                         f.flush()
@@ -165,11 +200,14 @@ async def stream_coinbase(
 async def stream_coinbase_quotes(
     product: str,
     out_path: str | Path,
-    max_quotes: int,
+    max_quotes: int | None,
     log: EventLog | None = None,
     max_reconnects: int = 5,
+    seconds: float | None = None,
 ) -> int:
     """Capture up to `max_quotes` live top-of-book quotes into an NDJSON file.
+
+    `seconds` bounds it by exchange time, as in `stream_coinbase`.
 
     Subscribes to Coinbase's `ticker` channel (best bid/ask on every trade). A
     live feed drops connections; rather than losing the capture, this reconnects
@@ -179,21 +217,25 @@ async def stream_coinbase_quotes(
     import websockets
 
     sub = {"type": "subscribe", "product_ids": [product], "channels": ["ticker"]}
+    bound = _Bound(max_quotes, seconds)
     received = 0
     reconnects = 0
     if log:
-        log.emit("quote_ingest_start", product=product, max_quotes=max_quotes)
+        log.emit("quote_ingest_start", product=product, max_quotes=max_quotes, seconds=seconds)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
-        while received < max_quotes:
+        while not bound.done(received):
             try:
                 async with websockets.connect(COINBASE_WS, ping_interval=20) as ws:
                     await ws.send(json.dumps(sub))
-                    while received < max_quotes:
+                    while not bound.done(received):
                         msg = json.loads(await ws.recv())
                         if msg.get("type") != "ticker" or "best_bid" not in msg:
                             continue
-                        f.write(json.dumps(ticker_to_quote(msg)) + "\n")
+                        quote = ticker_to_quote(msg)
+                        if bound.expired(quote["ts_ns"]):
+                            break
+                        f.write(json.dumps(quote) + "\n")
                         f.flush()
                         received += 1
                         if log and received % 10 == 0:

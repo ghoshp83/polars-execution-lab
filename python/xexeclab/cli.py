@@ -46,11 +46,21 @@ from .events import EventLog
 from .fills import pov_fill, twap_fill
 
 
+def _count(given: int | None, seconds: float | None) -> int | None:
+    """500 records when nothing bounds a capture; no count when only a duration
+    was asked for, so `--seconds 600` is not cut short at the default."""
+    if given is None and seconds is None:
+        return 500
+    return given
+
+
 def cmd_ingest(a: argparse.Namespace) -> None:
     from .ingest import stream_coinbase
 
     log = EventLog(a.event_log)
-    n = asyncio.run(stream_coinbase(a.product, a.out, a.max_trades, log))
+    n = asyncio.run(
+        stream_coinbase(a.product, a.out, _count(a.max_trades, a.seconds), log, seconds=a.seconds)
+    )
     print(f"captured {n} trades -> {a.out}")
 
 
@@ -65,7 +75,11 @@ def cmd_ingest_quotes(a: argparse.Namespace) -> None:
     from .ingest import stream_coinbase_quotes
 
     log = EventLog(a.event_log)
-    n = asyncio.run(stream_coinbase_quotes(a.product, a.out, a.max_quotes, log))
+    n = asyncio.run(
+        stream_coinbase_quotes(
+            a.product, a.out, _count(a.max_quotes, a.seconds), log, seconds=a.seconds
+        )
+    )
     print(f"captured {n} quotes -> {a.out}")
 
 
@@ -506,7 +520,10 @@ def main(argv: list[str] | None = None) -> None:
     pi = sub.add_parser("ingest", help="capture live Coinbase trades into an NDJSON replay")
     pi.add_argument("--product", default="BTC-USD")
     pi.add_argument("--out", required=True)
-    pi.add_argument("--max-trades", type=int, default=500)
+    pi.add_argument("--max-trades", type=int, default=None, help="default 500 unless --seconds")
+    pi.add_argument(
+        "--seconds", type=float, default=None, help="stop after this much exchange time"
+    )
     pi.add_argument("--event-log", default=None)
     pi.set_defaults(fn=cmd_ingest)
 
@@ -522,7 +539,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     piq.add_argument("--product", default="BTC-USD")
     piq.add_argument("--out", required=True)
-    piq.add_argument("--max-quotes", type=int, default=500)
+    piq.add_argument("--max-quotes", type=int, default=None, help="default 500 unless --seconds")
+    piq.add_argument(
+        "--seconds", type=float, default=None, help="stop after this much exchange time"
+    )
     piq.add_argument("--event-log", default=None)
     piq.set_defaults(fn=cmd_ingest_quotes)
 
