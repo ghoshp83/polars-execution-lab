@@ -107,3 +107,80 @@ fn the_widest_real_span_at_one_cap_is_on_an_earlier_session() {
         [0.21014988, 0.39667092, 0.41470266, 0.51403291, 0.76405639]
     );
 }
+
+/// Day two: the same feed, collector and cut, thirty-one hours later.
+fn day_two() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d2_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// Six more whole sessions, contiguous among themselves, a day and more after
+/// the first six; the gap between the two runs is the point of having them.
+#[test]
+fn day_two_is_its_own_unbroken_run_a_day_and_more_later() {
+    let day_one = sessions();
+    let day_two = day_two();
+    let ticks: Vec<&Tick> = day_two.iter().flatten().collect();
+    assert_eq!(ticks.len(), 5248);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_one = day_one.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_one > 24 * 3600 * 1_000_000_000);
+    // Over six times the volume of day one: 89 BTC against 14.
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 85.0 && volume < 95.0);
+}
+
+/// Day one's one settled cap was the first result here that was not inert. A
+/// second day is the first chance to see whether it repeats, and it does not:
+/// the 25% cap is unstable on two of day two's four folds and no cap settles.
+/// Every session reads the same at every window, so the disagreement is
+/// between days, not between windows.
+#[test]
+fn the_cap_day_one_settled_does_not_settle_on_day_two() {
+    let day_two = day_two();
+    let walk = walk_forward(&day_two, BUCKET, 0.2, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
+    let at_25: Vec<&str> = walk.folds.iter().map(|f| f.verdicts[4].as_str()).collect();
+    assert_eq!(at_25, ["unstable", "gain", "gain", "unstable"]);
+    // 0.2 BTC is under 2.5% of every day-two session, so on the later folds no
+    // cap binds and all five caps are one plan.
+    for fold in &walk.folds[2..] {
+        assert!(fold
+            .flat_improvement_bps
+            .iter()
+            .all(|b| *b == fold.flat_improvement_bps[0]));
+    }
+
+    let sweep = window_sweep(&day_two, BUCKET, 0.2, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
+    assert_eq!(sweep.settled_caps, 0);
+    assert_eq!(sweep.every_input_stable, [true; 5]);
+    assert_eq!(sweep.newest_only_caps, 0);
+}
+
+/// Walked as one history the 25% cap gains on nine folds out of ten and the
+/// newest session is unstable at every cap; scored from exactly six sessions,
+/// so that day two's first fold sees only day one, it gains on five of six.
+#[test]
+fn across_two_days_no_cap_settles() {
+    let mut both = sessions();
+    both.extend(day_two());
+    let walk = walk_forward(&both, BUCKET, 0.2, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
+    assert_eq!(walk.consensus, ["mixed"; 5]);
+    let at_25: Vec<&str> = walk.folds.iter().map(|f| f.verdicts[4].as_str()).collect();
+    assert_eq!(at_25[..9], ["gain"; 9]);
+    assert_eq!(walk.folds[9].verdicts, ["unstable"; 5]);
+
+    let window = walk_forward(&both, BUCKET, 0.2, &CAPS, &HALF_LIVES, 25.0, 5.0, Some(6)).unwrap();
+    let at_25: Vec<&str> = window
+        .folds
+        .iter()
+        .map(|f| f.verdicts[4].as_str())
+        .collect();
+    assert_eq!(at_25, ["gain", "gain", "gain", "gain", "gain", "unstable"]);
+    assert_eq!(window.consensus, ["mixed"; 5]);
+}
