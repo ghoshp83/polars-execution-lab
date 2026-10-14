@@ -278,6 +278,14 @@ uv run xexeclab pov-window-sweep \
     --input ${R}_6.ndjson --bucket-ms 10000 --cap-grid 0.05,0.1,0.15,0.2,0.25 \
     --half-life-grid 0.25,0.5,1,2,4 \
     --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
+# ...and walked across both recorded days, each session scored from the six
+# before it, so day two's first session is judged on day one alone.
+# That cap is no longer settled: the newest session is unstable at every cap
+D1=$(echo ${R}_{1..6}.ndjson | tr ' ' ,); D2=$(echo ${R}_d2_{1..5}.ndjson | tr ' ' ,)
+uv run xexeclab pov-walkforward --history $D1,$D2 --input ${R}_d2_6.ndjson \
+    --window 6 --bucket-ms 10000 --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+    --half-life-grid 0.25,0.5,1,2,4 \
+    --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
 
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
@@ -303,6 +311,10 @@ uv run xexeclab eval    --input data/sample_ticks.ndjson --algo pov --side buy -
 uv run xexeclab ingest        --product BTC-USD --out out/btc.ndjson       --max-trades 500 --event-log out/events.jsonl
 uv run xexeclab ingest-quotes --product BTC-USD --out out/btc_quotes.ndjson --max-quotes 500      # auto-reconnects
 uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --max-snapshots 500 --levels 10  # reconstructs L2, backfills on reconnect
+# ...or bound a capture by exchange time instead of a count: ten minutes is ten
+# minutes whether the market prints 2,000 trades in it or 6,000
+uv run xexeclab ingest        --product BTC-USD --out out/btc.ndjson        --seconds 610
+uv run xexeclab ingest-quotes --product BTC-USD --out out/btc_quotes.ndjson --seconds 610
 uv run xexeclab summary --input out/btc.ndjson
 uv run xexeclab depth   --input out/btc_book.ndjson
 
@@ -405,9 +417,10 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
-  to make each command's point on a few rows. `data/real/` holds six recorded
-  sessions — 1,916 consecutive BTC-USD trades, ten minutes of one morning —
-  which are real but are not a sample of a market: see `data/real/README.md`.
+  to make each command's point on a few rows. `data/real/` holds twelve
+  recorded sessions — two ten-minute runs of consecutive BTC-USD trades a day
+  apart, 1,916 and 5,248 of them — and 100 seconds of recorded quotes. They
+  are real but are not a sample of a market: see `data/real/README.md`.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
@@ -711,6 +724,18 @@ This is a **market-data and execution-analytics** project, not a trading system.
   on it, of up to 0.93 bps. This is ten minutes of one product cut into 100-second slices
   that sit next to each other in time. It shows the commands separating things
   on real prices and sizes; it is not evidence that a 25% cap is a good one.
+  **A second day says so.** Six more sessions recorded thirty-one hours later
+  (`data/real/btc_usd_d2_*`, same feed, cut and parameters) settle no cap. The
+  25% cap is `unstable` on two of their four folds, though every session there
+  reads the same at every window, so the disagreement is between days and not
+  between windows. Walked as one twelve-session history the 25% cap gains on
+  nine folds of ten and the newest session is `unstable` at every cap; scored
+  from exactly six sessions, so that day two's first fold sees only day one,
+  it gains on five of six. Every consensus is `mixed`. Day two also traded 6.3
+  times day one's volume, so a 0.2 BTC parent stops binding: on its last two
+  folds all five caps are the same plan and the cap grid measures nothing. A
+  result that held on every step of one morning did not survive the next
+  afternoon, and two days cannot say which of the two is typical.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
