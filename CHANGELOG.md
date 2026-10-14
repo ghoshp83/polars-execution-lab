@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.42.0] - 2026-10-14
+
+### Added
+- **A second recorded day.** `data/real/btc_usd_d2_{1..6}.ndjson`: 5,248
+  consecutive BTC-USD trades from Coinbase's public feed, 2026-10-14 15:17:10 to
+  15:27:10 UTC, cut like day one into six 100-second sessions on 10-second
+  boundaries. Thirty-one hours after day one, with 2.7 times its trades and 6.3
+  times its volume. Both collectors reported zero reconnects.
+- **Recorded quotes.** `data/real/btc_usd_d2_1_quotes.ndjson`: 776 top-of-book
+  quotes from the `ticker` channel, taken alongside the trades and cut to the
+  first day-two session. One quote per trade at that trade's time; the spread
+  runs from one cent to eighteen dollars and never crosses.
+- **`ingest --seconds` and `ingest-quotes --seconds`.** A capture can be bounded
+  by exchange time instead of, or as well as, a count. The window opens at the
+  first record written; the first record stamped at or past its end stops the
+  capture and is not written. `--max-trades` / `--max-quotes` still default to
+  500 when no duration is given; with `--seconds` alone there is no count. A
+  call with neither bound is refused before it connects.
+- **What the engine reports on day two and across both days**, pinned in both
+  languages: day two settles no cap, and the 25% cap day one settled is
+  `unstable` on two of its four folds. Across all twelve sessions every
+  consensus is `mixed`: the 25% cap gains on nine folds of ten (five of six with
+  `--window 6`) and the newest session is `unstable` at every cap. On day two's
+  later folds a 0.2 BTC parent binds at no cap, so all five caps are one plan.
+- **Two equivalence tests (33 and 34):** the six-session-window walk across both
+  days, and `book` on the recorded quotes.
+
+### Notes
+- The v0.41.0 README called its 25% result "not evidence that a 25% cap is a
+  good one". Day two is the evidence that it was not: the one settled result on
+  recorded trades did not repeat a day later. Two days still cannot say which
+  of the two is typical.
+- The first day-two capture was sized by count, 2,600 trades, and covered 258
+  seconds instead of the ten minutes it was meant to; `--seconds` is the fix.
+
 ## [0.41.0] - 2026-10-13
 
 ### Changed
