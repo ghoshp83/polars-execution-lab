@@ -1870,3 +1870,74 @@ def test_rust_and_python_agree_on_recorded_trades():
     assert rust == py
     assert rust["sessions"] == 6 and rust["buckets"] == 10
     assert rust["newest_only_caps"] == 1
+
+
+def test_rust_and_python_agree_on_a_walk_across_two_days():
+    """The thirty-third: twelve recorded sessions, six from each of two days
+    thirty-one hours apart, walked with a six-session window so the first fold
+    is scored on day two from day one alone. Day two trades six times the
+    volume of day one, so the walk meets buckets far larger than the parent.
+    """
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    paths = [f"data/real/btc_usd_{i}.ndjson" for i in range(1, 7)]
+    paths += [f"data/real/btc_usd_d2_{i}.ndjson" for i in range(1, 7)]
+    caps, hls = [0.05, 0.1, 0.15, 0.2, 0.25], [0.25, 0.5, 1.0, 2.0, 4.0]
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-walkforward",
+            "--history",
+            ",".join(paths[:-1]),
+            "--input",
+            paths[-1],
+            "--window",
+            "6",
+            "--bucket-ms",
+            "10000",
+            "--parent-qty",
+            str(POV_PLAN["parent_qty"]),
+            "--cap-grid",
+            ",".join(str(c) for c in caps),
+            "--half-life-grid",
+            ",".join(str(h) for h in hls),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+    py = walk_forward(
+        [read_ticks(p) for p in paths],
+        10_000_000_000,
+        POV_PLAN["parent_qty"],
+        caps,
+        hls,
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+        window=6,
+    )
+    assert rust == py
+    assert len(rust["folds"]) == 6
+    assert rust["consensus"] == ["mixed"] * 5
+
+
+def test_rust_and_python_agree_on_recorded_quotes():
+    """The thirty-fourth: the top of Coinbase's book at every trade for 100
+    seconds, against the 13 typed quotes `book` was checked on until now --
+    sizes down to 1e-8 and a spread from one cent to eighteen dollars."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    path = "data/real/btc_usd_d2_1_quotes.ndjson"
+    proc = subprocess.run(
+        [binary, "book", "--input", path], capture_output=True, text=True, check=True
+    )
+    df = read_quotes(path)
+    assert json.loads(proc.stdout) == quote_metrics(df, df["product"][0])
+    assert df.height == 776
