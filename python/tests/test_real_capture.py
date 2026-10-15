@@ -182,3 +182,29 @@ def test_recorded_quotes_are_the_book_at_each_trade_of_their_session():
     metrics = quote_metrics(quotes, "BTC-USD")
     assert metrics["quotes"] == 776
     assert metrics["avg_spread"] == 2.21742268
+
+
+def test_sized_to_its_own_history_day_one_settles_no_cap(sessions, sweep):
+    """Day one's one settled cap was the fixed parent's doing. Its sessions
+    traded from 0.83 to 5.73 BTC, so 0.2 BTC was 3.5% of one and 24% of
+    another. A share of 0.085 is the same 0.2 against day one's mean session,
+    taken from each fold's history alone, and with it nothing settles."""
+    sized = window_sweep(sessions, BUCKET, None, CAPS, HALF_LIVES, 25.0, 5.0, parent_share=0.085)
+    assert sweep["settled_caps"] == 1
+    assert sized["settled_caps"] == 0
+    assert sized["walks"][0]["consensus"] == ["mixed"] * 5
+    grown = walk_forward(sessions, BUCKET, None, CAPS, HALF_LIVES, 25.0, 5.0, parent_share=0.085)
+    parents = [f["parent_qty"] for f in grown["folds"]]
+    assert parents == [0.35185609, 0.25819891, 0.21457672, 0.19137286]
+    assert [f["verdicts"][4] for f in grown["folds"]] == ["inert", "unstable", "gain", "gain"]
+
+
+def test_sized_to_the_day_the_parent_grows_with_it_and_still_settles_nothing(day_two):
+    """On day two the same share is six to seven times day one's parent, so
+    the caps bind again where a fixed 0.2 BTC let them all give one plan. They
+    still disagree along the walk, and the 25% cap now loses on a fold."""
+    walk = walk_forward(day_two, BUCKET, None, CAPS, HALF_LIVES, 25.0, 5.0, parent_share=0.085)
+    parents = [f["parent_qty"] for f in walk["folds"]]
+    assert parents == [1.37807173, 1.41895757, 1.25205563, 1.3017328]
+    assert [f["verdicts"][4] for f in walk["folds"]] == ["gain", "loss", "gain", "unstable"]
+    assert walk["consensus"] == ["mixed"] * 5

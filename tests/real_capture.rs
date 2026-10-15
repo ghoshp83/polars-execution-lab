@@ -5,7 +5,9 @@
 
 use xexec::model::Tick;
 use xexec::replay::read_ticks;
-use xexec::walkforward::{walk_forward, window_sweep, WindowSweepReport};
+use xexec::walkforward::{
+    walk_forward, walk_forward_share, window_sweep, window_sweep_share, WindowSweepReport,
+};
 
 /// Ten seconds per bucket: the widest five-second gap in the run is empty, and
 /// a bucket with no trade has no price to execute at.
@@ -183,4 +185,23 @@ fn across_two_days_no_cap_settles() {
         .collect();
     assert_eq!(at_25, ["gain", "gain", "gain", "gain", "gain", "unstable"]);
     assert_eq!(window.consensus, ["mixed"; 5]);
+}
+
+/// Day one's one settled cap was the fixed parent's doing. Its sessions traded
+/// from 0.83 to 5.73 BTC, so 0.2 BTC was 3.5% of one and 24% of another. A
+/// share of 0.085 is the same 0.2 against day one's mean session, taken from
+/// each fold's history alone, and with it nothing settles.
+#[test]
+fn sized_to_its_own_history_day_one_settles_no_cap() {
+    let day_one = sessions();
+    assert_eq!(sweep().settled_caps, 1);
+    let sized = window_sweep_share(&day_one, BUCKET, 0.085, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
+    assert_eq!(sized.settled_caps, 0);
+    assert_eq!(sized.walks[0].consensus, ["mixed"; 5]);
+    let grown =
+        walk_forward_share(&day_one, BUCKET, 0.085, &CAPS, &HALF_LIVES, 25.0, 5.0, None).unwrap();
+    let parents: Vec<f64> = grown.folds.iter().map(|f| f.parent_qty).collect();
+    assert_eq!(parents, [0.35185609, 0.25819891, 0.21457672, 0.19137286]);
+    let at_25: Vec<&str> = grown.folds.iter().map(|f| f.verdicts[4].as_str()).collect();
+    assert_eq!(at_25, ["inert", "unstable", "gain", "gain"]);
 }
