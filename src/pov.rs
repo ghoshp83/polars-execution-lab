@@ -737,7 +737,7 @@ fn validate(
 
 /// A capture's volume profile, its per-bucket volumes and their total —
 /// refusing a capture no plan can be priced on.
-fn measured(ticks: &[Tick], bucket_ns: i64) -> Result<(DataFrame, Vec<f64>, f64)> {
+pub(crate) fn measured(ticks: &[Tick], bucket_ns: i64) -> Result<(DataFrame, Vec<f64>, f64)> {
     if ticks.is_empty() {
         return Err(anyhow!("no ticks"));
     }

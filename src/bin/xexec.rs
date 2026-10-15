@@ -19,7 +19,7 @@ use xexec::shortfall::shortfall;
 use xexec::stability::stability;
 use xexec::stream::stream_session;
 use xexec::sweep::sweep_cost;
-use xexec::walkforward::{walk_forward, window_sweep};
+use xexec::walkforward::{walk_forward, walk_forward_share, window_sweep, window_sweep_share};
 
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
@@ -29,7 +29,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|pov-sweep|pov-hl-sweep|pov-stability|pov-holdout|pov-walkforward|pov-window-sweep|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--cap N] [--half-life N] [--shortfall-bps N] [--cap-grid N,N,N] [--half-life-grid N,N,N] [--window N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|pov-sweep|pov-hl-sweep|pov-stability|pov-holdout|pov-walkforward|pov-window-sweep|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--parent-share N] [--cap N] [--half-life N] [--shortfall-bps N] [--cap-grid N,N,N] [--half-life-grid N,N,N] [--window N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -43,6 +43,16 @@ fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
 /// report says so rather than standing in a zero.
 fn arg_opt_f64(args: &[String], key: &str) -> Result<Option<f64>> {
     Ok(arg_value(args, key).map(|s| s.parse()).transpose()?)
+}
+
+/// `--parent-share`, refused beside `--parent-qty`: a walk sizes its parent one
+/// way or the other, and a size given twice would leave one of them unread.
+fn parent_share(args: &[String]) -> Result<Option<f64>> {
+    let share = arg_opt_f64(args, "--parent-share")?;
+    if share.is_some() && arg_value(args, "--parent-qty").is_some() {
+        return Err(anyhow!("--parent-qty and --parent-share are exclusive"));
+    }
+    Ok(share)
 }
 
 fn main() -> Result<()> {
@@ -519,16 +529,23 @@ fn main() -> Result<()> {
             let window: Option<usize> = arg_value(&args, "--window")
                 .map(|s| s.parse::<usize>())
                 .transpose()?;
-            let report = walk_forward(
-                &sessions,
-                bucket_ns,
-                arg_f64(&args, "--parent-qty", 1.0)?,
-                &cap_grid,
-                &hl_grid,
-                arg_f64(&args, "--coef-bps", 10.0)?,
-                arg_f64(&args, "--perm-coef-bps", 0.0)?,
-                window,
-            )?;
+            let coef = arg_f64(&args, "--coef-bps", 10.0)?;
+            let perm = arg_f64(&args, "--perm-coef-bps", 0.0)?;
+            let report = match parent_share(&args)? {
+                Some(share) => walk_forward_share(
+                    &sessions, bucket_ns, share, &cap_grid, &hl_grid, coef, perm, window,
+                )?,
+                None => walk_forward(
+                    &sessions,
+                    bucket_ns,
+                    arg_f64(&args, "--parent-qty", 1.0)?,
+                    &cap_grid,
+                    &hl_grid,
+                    coef,
+                    perm,
+                    window,
+                )?,
+            };
             println!("{}", serde_json::to_string(&report)?);
         }
         // `pov-window-sweep` runs `pov-walkforward` with a growing history and
@@ -551,15 +568,22 @@ fn main() -> Result<()> {
                 .split(',')
                 .map(|s| s.trim().parse::<f64>())
                 .collect::<Result<_, _>>()?;
-            let report = window_sweep(
-                &sessions,
-                bucket_ns,
-                arg_f64(&args, "--parent-qty", 1.0)?,
-                &cap_grid,
-                &hl_grid,
-                arg_f64(&args, "--coef-bps", 10.0)?,
-                arg_f64(&args, "--perm-coef-bps", 0.0)?,
-            )?;
+            let coef = arg_f64(&args, "--coef-bps", 10.0)?;
+            let perm = arg_f64(&args, "--perm-coef-bps", 0.0)?;
+            let report = match parent_share(&args)? {
+                Some(share) => window_sweep_share(
+                    &sessions, bucket_ns, share, &cap_grid, &hl_grid, coef, perm,
+                )?,
+                None => window_sweep(
+                    &sessions,
+                    bucket_ns,
+                    arg_f64(&args, "--parent-qty", 1.0)?,
+                    &cap_grid,
+                    &hl_grid,
+                    coef,
+                    perm,
+                )?,
+            };
             println!("{}", serde_json::to_string(&report)?);
         }
         other => return Err(anyhow!("unknown command {other:?}\n{USAGE}")),

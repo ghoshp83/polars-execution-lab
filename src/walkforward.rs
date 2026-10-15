@@ -1,5 +1,6 @@
 use crate::holdout::verdict;
 use crate::model::Tick;
+use crate::pov::measured;
 use crate::stability::stability;
 use anyhow::{anyhow, Result};
 use serde::Serialize;
@@ -13,6 +14,9 @@ pub struct WalkForwardFold {
     /// Sessions `history_from..input` are its history: `0` on an expanding
     /// walk, `input - window` on a rolling one.
     pub history_from: usize,
+    /// The parent this fold priced: the one given, or `parent_share` of its
+    /// history's mean session volume.
+    pub parent_qty: f64,
     /// One of `inert`, `gain`, `loss` or `unstable` per cap, in `caps` order.
     pub verdicts: Vec<String>,
     /// `improvement_bps` at `half_life = 0` per cap, in `caps` order.
@@ -54,6 +58,13 @@ pub struct WalkForwardFold {
 /// [`crate::holdout::HoldoutReport`] gives. With `n` sessions there are only
 /// `n - 2` folds, or `n - window` on a rolling walk, which is a count to read
 /// beside the consensus and not a sample to average over.
+///
+/// **A fixed parent is a different order on a different day.** The same size
+/// is a large share of a quiet session and a sliver of a busy one, and a cap
+/// that never binds cannot tell plans apart. With `parent_share` set, each
+/// fold sizes its parent as that share of its history's mean session volume:
+/// a number the desk had before the session opened, never the volume of the
+/// session it scores. The fold's `parent_qty` says what it came to.
 #[derive(Debug, Serialize)]
 pub struct WalkForwardReport {
     pub product: String,
@@ -65,7 +76,11 @@ pub struct WalkForwardReport {
     /// Sessions of history every fold pools, or `null` when the history grows
     /// by one each step.
     pub window: Option<usize>,
-    pub parent_qty: f64,
+    /// The parent every fold priced, or `null` when each fold sized its own.
+    pub parent_qty: Option<f64>,
+    /// Each fold's parent as a share of its history's mean session volume, or
+    /// `null` when the parent was given.
+    pub parent_share: Option<f64>,
     pub coef_bps: f64,
     pub perm_coef_bps: f64,
     pub caps: Vec<f64>,
@@ -96,7 +111,7 @@ pub fn walk_forward(
     walk(
         sessions,
         bucket_ns,
-        parent_qty,
+        Parent::Qty(parent_qty),
         cap_grid,
         hl_grid,
         coef_bps,
@@ -104,6 +119,52 @@ pub fn walk_forward(
         window,
         None,
     )
+}
+
+/// [`walk_forward`] with each fold's parent sized as `parent_share` of its
+/// history's mean session volume instead of given.
+#[allow(clippy::too_many_arguments)]
+pub fn walk_forward_share(
+    sessions: &[Vec<Tick>],
+    bucket_ns: i64,
+    parent_share: f64,
+    cap_grid: &[f64],
+    hl_grid: &[f64],
+    coef_bps: f64,
+    perm_coef_bps: f64,
+    window: Option<usize>,
+) -> Result<WalkForwardReport> {
+    walk(
+        sessions,
+        bucket_ns,
+        Parent::Share(parent_share),
+        cap_grid,
+        hl_grid,
+        coef_bps,
+        perm_coef_bps,
+        window,
+        None,
+    )
+}
+
+/// How a walk sizes the parent each fold prices.
+#[derive(Debug, Clone, Copy)]
+enum Parent {
+    /// The same quantity on every fold.
+    Qty(f64),
+    /// This share of the fold's history's mean session volume.
+    Share(f64),
+}
+
+/// `share` of the mean volume of the history sessions. Each session's volume
+/// is the total the forecast itself measures, and the sessions are added in an
+/// explicit loop, oldest first, as the Python side adds them.
+fn history_parent(history: &[Vec<Tick>], bucket_ns: i64, share: f64) -> Result<f64> {
+    let mut total = 0.0;
+    for s in history {
+        total += measured(s, bucket_ns)?.2;
+    }
+    Ok(share * (total / history.len() as f64))
 }
 
 /// [`walk_forward`], given the growing walk of the same sessions when there is
@@ -114,7 +175,7 @@ pub fn walk_forward(
 fn walk(
     sessions: &[Vec<Tick>],
     bucket_ns: i64,
-    parent_qty: f64,
+    parent: Parent,
     cap_grid: &[f64],
     hl_grid: &[f64],
     coef_bps: f64,
@@ -144,6 +205,13 @@ fn walk(
             ));
         }
     }
+    if let Parent::Share(s) = parent {
+        // A share above one asks for more than a whole session's volume, which
+        // no cap in (0, 1] could fill.
+        if !s.is_finite() || s <= 0.0 || s > 1.0 {
+            return Err(anyhow!("parent_share must be in (0, 1], got {s}"));
+        }
+    }
     let mut prev_end = i64::MIN;
     for (i, s) in sessions.iter().enumerate() {
         let start = s.iter().map(|t| t.ts_ns).min();
@@ -163,7 +231,7 @@ fn walk(
     let mut folds: Vec<WalkForwardFold> = Vec::with_capacity(sessions.len() - 2);
     let mut product = String::new();
     let mut buckets = 0usize;
-    let mut parent = 0.0;
+    let mut fixed = 0.0;
     let mut coef = 0.0;
     let mut perm = 0.0;
     let mut caps: Vec<f64> = Vec::new();
@@ -176,8 +244,13 @@ fn walk(
             folds.push(g.folds[input - 2].clone());
             continue;
         }
+        let history = &sessions[history_from..input];
+        let parent_qty = match parent {
+            Parent::Qty(q) => q,
+            Parent::Share(s) => history_parent(history, bucket_ns, s)?,
+        };
         let grid = stability(
-            &sessions[history_from..input],
+            history,
             &sessions[input],
             bucket_ns,
             parent_qty,
@@ -189,6 +262,7 @@ fn walk(
         folds.push(WalkForwardFold {
             input,
             history_from,
+            parent_qty: grid.parent_qty,
             verdicts: grid.rows.iter().map(|r| verdict(r).to_string()).collect(),
             flat_improvement_bps: grid.rows.iter().map(|r| r.flat_improvement_bps).collect(),
             inert_caps: grid.inert_caps,
@@ -197,7 +271,7 @@ fn walk(
         });
         product = grid.product;
         buckets = grid.buckets;
-        parent = grid.parent_qty;
+        fixed = grid.parent_qty;
         coef = grid.coef_bps;
         perm = grid.perm_coef_bps;
         caps = grid.rows.iter().map(|r| r.cap).collect();
@@ -220,7 +294,14 @@ fn walk(
         buckets,
         sessions: sessions.len(),
         window,
-        parent_qty: parent,
+        parent_qty: match parent {
+            Parent::Qty(_) => Some(fixed),
+            Parent::Share(_) => None,
+        },
+        parent_share: match parent {
+            Parent::Qty(_) => None,
+            Parent::Share(s) => Some(r8(s)),
+        },
         coef_bps: coef,
         perm_coef_bps: perm,
         caps,
@@ -322,7 +403,11 @@ pub struct WindowSweepReport {
     pub bucket_ns: i64,
     pub buckets: usize,
     pub sessions: usize,
-    pub parent_qty: f64,
+    /// As on [`WalkForwardReport`]: the given parent, or `null` when each fold
+    /// sized its own from `parent_share`. Then a deeper history is a different
+    /// parent as well as a different forecast, and `span_bps` holds both.
+    pub parent_qty: Option<f64>,
+    pub parent_share: Option<f64>,
     pub coef_bps: f64,
     pub perm_coef_bps: f64,
     pub caps: Vec<f64>,
@@ -379,6 +464,50 @@ pub fn window_sweep(
     coef_bps: f64,
     perm_coef_bps: f64,
 ) -> Result<WindowSweepReport> {
+    sweep(
+        sessions,
+        bucket_ns,
+        Parent::Qty(parent_qty),
+        cap_grid,
+        hl_grid,
+        coef_bps,
+        perm_coef_bps,
+    )
+}
+
+/// [`window_sweep`] with each fold's parent sized as `parent_share` of its
+/// history's mean session volume instead of given. The fold a window shares
+/// with the growing walk has the same history, so the same parent, and is
+/// still worked out once.
+pub fn window_sweep_share(
+    sessions: &[Vec<Tick>],
+    bucket_ns: i64,
+    parent_share: f64,
+    cap_grid: &[f64],
+    hl_grid: &[f64],
+    coef_bps: f64,
+    perm_coef_bps: f64,
+) -> Result<WindowSweepReport> {
+    sweep(
+        sessions,
+        bucket_ns,
+        Parent::Share(parent_share),
+        cap_grid,
+        hl_grid,
+        coef_bps,
+        perm_coef_bps,
+    )
+}
+
+fn sweep(
+    sessions: &[Vec<Tick>],
+    bucket_ns: i64,
+    parent: Parent,
+    cap_grid: &[f64],
+    hl_grid: &[f64],
+    coef_bps: f64,
+    perm_coef_bps: f64,
+) -> Result<WindowSweepReport> {
     let mut windows: Vec<Option<usize>> = vec![None];
     windows.extend((2..=sessions.len().saturating_sub(2)).map(Some));
     let mut reports: Vec<WalkForwardReport> = Vec::with_capacity(windows.len());
@@ -386,7 +515,7 @@ pub fn window_sweep(
         let report = walk(
             sessions,
             bucket_ns,
-            parent_qty,
+            parent,
             cap_grid,
             hl_grid,
             coef_bps,
@@ -515,6 +644,7 @@ pub fn window_sweep(
         buckets: first.buckets,
         sessions: sessions.len(),
         parent_qty: first.parent_qty,
+        parent_share: first.parent_share,
         coef_bps: first.coef_bps,
         perm_coef_bps: first.perm_coef_bps,
         caps: first.caps.clone(),

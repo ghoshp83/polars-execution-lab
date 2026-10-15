@@ -2,7 +2,8 @@ use xexec::holdout::holdout;
 use xexec::model::Tick;
 use xexec::stability::stability;
 use xexec::walkforward::{
-    walk_forward, window_sweep, WalkForwardFold, WalkForwardReport, WindowSweepReport,
+    walk_forward, walk_forward_share, window_sweep, window_sweep_share, WalkForwardFold,
+    WalkForwardReport, WindowSweepReport,
 };
 
 /// One second per bucket.
@@ -718,5 +719,147 @@ fn on_four_sessions_the_table_is_its_last_row() {
         assert_eq!(report.widest_span_bps, report.last_fold_span_bps);
         assert_eq!(report.widest_span_input, [3, 3, 3]);
         assert_eq!(report.newest_only_caps, 0);
+    }
+}
+
+/// Session volumes 10 / 10 / 11.6 / 2.02 / 10: a quiet one among busy ones.
+const SIZED: [[f64; 3]; 5] = [LUMPY, BLENDED, THIN_TAIL, PINCHED, LUMPY];
+
+/// Each session's total, then their mean, added in the order the engine adds
+/// them so the parent compares exactly.
+fn mean_volume(shapes: &[[f64; 3]]) -> f64 {
+    let mut total = 0.0;
+    for shape in shapes {
+        let mut session = 0.0;
+        for v in shape {
+            session += v;
+        }
+        total += session;
+    }
+    total / shapes.len() as f64
+}
+
+fn sized(sessions: &[Vec<Tick>], share: f64, window: Option<usize>) -> WalkForwardReport {
+    walk_forward_share(
+        sessions,
+        BUCKET,
+        share,
+        &CAPS,
+        &HALF_LIVES,
+        25.0,
+        5.0,
+        window,
+    )
+    .unwrap()
+}
+
+fn parents(walk: &WalkForwardReport) -> Vec<f64> {
+    walk.folds.iter().map(|f| f.parent_qty).collect()
+}
+
+/// `parent_share` sizes each fold from the sessions behind it: the size a desk
+/// had before the session opened. Making the scored session ten times busier
+/// must not move its own parent, or the walk would be reading the future it
+/// says it does not.
+#[test]
+fn a_sized_parent_is_its_historys_mean_volume_and_never_its_inputs() {
+    let walk = sized(&in_order(SIZED), 0.05, None);
+    for f in &walk.folds {
+        let expected = 0.05 * mean_volume(&SIZED[..f.input]);
+        // The report rounds to 8 places.
+        assert!((f.parent_qty - expected).abs() < 1e-8);
+    }
+    assert_eq!(walk.parent_qty, None);
+    assert_eq!(walk.parent_share, Some(0.05));
+    let mut busier = in_order(SIZED);
+    busier[4] = session(4, [10.0, 60.0, 30.0]);
+    assert_eq!(parents(&sized(&busier, 0.05, None)), parents(&walk));
+}
+
+/// Sizing changes the parent and nothing else: each fold must be exactly the
+/// grid `pov-stability` prints at the parent its own history gave it.
+#[test]
+fn a_sized_fold_is_the_stability_grid_at_the_size_it_came_to() {
+    let sessions = in_order(SIZED);
+    let walk = sized(&sessions, 0.3, Some(2));
+    for f in &walk.folds {
+        let parent = 0.3 * mean_volume(&SIZED[f.history_from..f.input]);
+        let grid = stability(
+            &sessions[f.history_from..f.input],
+            &sessions[f.input],
+            BUCKET,
+            parent,
+            &CAPS,
+            &HALF_LIVES,
+            25.0,
+            5.0,
+        )
+        .unwrap();
+        assert_eq!(f.parent_qty, grid.parent_qty);
+        let flat: Vec<f64> = grid.rows.iter().map(|r| r.flat_improvement_bps).collect();
+        assert_eq!(f.flat_improvement_bps, flat);
+    }
+}
+
+#[test]
+fn a_fixed_walk_prices_the_same_parent_on_every_fold() {
+    let walk = walk_forward(
+        &in_order(SIZED),
+        BUCKET,
+        0.6,
+        &CAPS,
+        &HALF_LIVES,
+        25.0,
+        5.0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(walk.parent_qty, Some(0.6));
+    assert_eq!(walk.parent_share, None);
+    assert_eq!(parents(&walk), [0.6; 3]);
+}
+
+/// Above one asks for more than a whole session, which no cap could fill.
+#[test]
+fn a_share_outside_zero_to_one_is_refused() {
+    let sessions = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]);
+    for share in [0.0, -0.1, 1.5, f64::NAN, f64::INFINITY] {
+        let err = walk_forward_share(
+            &sessions,
+            BUCKET,
+            share,
+            &CAPS,
+            &HALF_LIVES,
+            25.0,
+            5.0,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("parent_share must be in (0, 1]"));
+        let err = window_sweep_share(&sessions, BUCKET, share, &CAPS, &HALF_LIVES, 25.0, 5.0)
+            .unwrap_err();
+        assert!(err.to_string().contains("parent_share must be in (0, 1]"));
+    }
+}
+
+/// A window of `w` opens on the history the growing walk had there, so the
+/// same parent: the fold the sweep takes from the growing walk must be the one
+/// a windowed walk works out for itself.
+#[test]
+fn a_sized_sweep_shares_the_fold_its_windows_open_on() {
+    let sessions = in_order(SIZED);
+    let sweep = window_sweep_share(&sessions, BUCKET, 0.3, &CAPS, &HALF_LIVES, 25.0, 5.0).unwrap();
+    let grown = sized(&sessions, 0.3, None);
+    assert_eq!(sweep.parent_qty, None);
+    assert_eq!(sweep.parent_share, Some(0.3));
+    assert_eq!(sweep.walks[0].consensus, grown.consensus);
+    for w in [2, 3] {
+        let first = &sized(&sessions, 0.3, Some(w)).folds[0];
+        assert_eq!(first.parent_qty, grown.folds[w - 2].parent_qty);
+        assert_eq!(first.verdicts, grown.folds[w - 2].verdicts);
+        assert_eq!(
+            first.flat_improvement_bps,
+            grown.folds[w - 2].flat_improvement_bps
+        );
     }
 }
