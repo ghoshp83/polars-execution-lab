@@ -286,6 +286,14 @@ uv run xexeclab pov-walkforward --history $D1,$D2 --input ${R}_d2_6.ndjson \
     --window 6 --bucket-ms 10000 --cap-grid 0.05,0.1,0.15,0.2,0.25 \
     --half-life-grid 0.25,0.5,1,2,4 \
     --parent-qty 0.2 --coef-bps 25 --perm-coef-bps 5
+# ...and day one again, with each step's parent sized from its own history:
+# 8.5% of the mean session behind it, which is 0.2 BTC on average. Nothing
+# settles -- day one's 25% result came from a fixed size on uneven sessions
+uv run xexeclab pov-window-sweep \
+    --history ${R}_1.ndjson,${R}_2.ndjson,${R}_3.ndjson,${R}_4.ndjson,${R}_5.ndjson \
+    --input ${R}_6.ndjson --bucket-ms 10000 --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+    --half-life-grid 0.25,0.5,1,2,4 \
+    --parent-share 0.085 --coef-bps 25 --perm-coef-bps 5
 
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
@@ -736,6 +744,23 @@ This is a **market-data and execution-analytics** project, not a trading system.
   folds all five caps are the same plan and the cap grid measures nothing. A
   result that held on every step of one morning did not survive the next
   afternoon, and two days cannot say which of the two is typical.
+  **Sized to the session, the first morning does not say it either.** Day
+  one's sessions traded between 0.83 and 5.73 BTC, so a fixed 0.2 BTC parent
+  was 3.5% of one and 24% of another, and the cap grid was reading the size of
+  the order as much as the forecast. `--parent-share F` on `pov-walkforward`
+  and `pov-window-sweep` sizes each step's parent as `F` of its history's mean
+  session volume. That is a figure a desk has before the session opens, never
+  the volume of the session being scored; changing the scored session leaves
+  its parent where it was, and the tests check that. Each step reports the
+  `parent_qty` it came to, and the report's own `parent_qty` is then `null`
+  beside `parent_share`. At 0.085, which is 0.2 BTC against day one's mean
+  session, day one settles no cap and the 25% cap reads `inert`, `unstable`,
+  `gain`, `gain` along the walk. On day two the same share comes to 1.25 to
+  1.42 BTC, so the caps bind again: its last two steps give five different
+  figures at five caps where the fixed parent gave one. Nothing settles there
+  either, and the 25% cap loses on one step. The one settled result on
+  recorded trades depended on the size of the order. The share is no more
+  fitted than the half-life or the window, and nothing reports a best one.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
