@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from xexeclab.cli import main
 from xexeclab.engine import (
     calibrate_impact,
     calibrate_impact_robust,
@@ -1941,3 +1942,82 @@ def test_rust_and_python_agree_on_recorded_quotes():
     df = read_quotes(path)
     assert json.loads(proc.stdout) == quote_metrics(df, df["product"][0])
     assert df.height == 776
+
+
+def test_rust_and_python_agree_on_a_sweep_sized_from_history():
+    """The thirty-fifth: day one's six recorded sessions swept with each fold's
+    parent sized as 8.5% of its history's mean session volume. The sizing adds
+    a division and a running total, both of which must land on the same bit."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    paths = [f"data/real/btc_usd_{i}.ndjson" for i in range(1, 7)]
+    caps, hls = [0.05, 0.1, 0.15, 0.2, 0.25], [0.25, 0.5, 1.0, 2.0, 4.0]
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-window-sweep",
+            "--history",
+            ",".join(paths[:-1]),
+            "--input",
+            paths[-1],
+            "--bucket-ms",
+            "10000",
+            "--parent-share",
+            "0.085",
+            "--cap-grid",
+            ",".join(str(c) for c in caps),
+            "--half-life-grid",
+            ",".join(str(h) for h in hls),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+    py = window_sweep(
+        [read_ticks(p) for p in paths],
+        10_000_000_000,
+        None,
+        caps,
+        hls,
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+        parent_share=0.085,
+    )
+    assert rust == py
+    assert rust["parent_qty"] is None and rust["parent_share"] == 0.085
+    assert rust["settled_caps"] == 0
+
+
+def test_rust_and_python_both_refuse_a_parent_given_two_ways(capsys):
+    """The thirty-sixth: a size and a share on one line leave one unread, so
+    both command lines refuse it rather than quietly pick one."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    paths = [f"data/real/btc_usd_{i}.ndjson" for i in range(1, 7)]
+    line = [
+        "pov-walkforward",
+        "--history",
+        ",".join(paths[:-1]),
+        "--input",
+        paths[-1],
+        "--bucket-ms",
+        "10000",
+        "--parent-qty",
+        "0.2",
+        "--parent-share",
+        "0.085",
+    ]
+    proc = subprocess.run([binary, *line], capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "--parent-qty and --parent-share are exclusive" in proc.stderr
+    with pytest.raises(SystemExit) as exit_info:
+        main(line)
+    assert exit_info.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
