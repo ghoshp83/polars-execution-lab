@@ -1879,12 +1879,13 @@ def holdout(
 def walk_forward(
     sessions: list[pl.DataFrame],
     bucket_ns: int,
-    parent_qty: float,
+    parent_qty: float | None,
     cap_grid: list[float],
     half_life_grid: list[float],
     coef_bps: float,
     perm_coef_bps: float = 0.0,
     window: int | None = None,
+    parent_share: float | None = None,
 ) -> dict:
     """Does the verdict hold when each session is forecast only from its past?
 
@@ -1920,8 +1921,18 @@ def walk_forward(
     ``n - window`` on a rolling walk, which is a count to read beside the
     consensus and not a sample to average over.
 
-    Mirrors ``walk_forward`` in ``src/walkforward.rs`` operation for operation.
+    **A fixed parent is a different order on a different day.** The same size
+    is a large share of a quiet session and a sliver of a busy one, and a cap
+    that never binds cannot tell plans apart. With ``parent_share`` set, and
+    ``parent_qty`` then ``None``, each fold sizes its parent as that share of
+    its history's mean session volume: a number the desk had before the session
+    opened, never the volume of the session it scores. The fold's
+    ``parent_qty`` says what it came to.
+
+    Mirrors ``walk_forward`` / ``walk_forward_share`` in ``src/walkforward.rs``
+    operation for operation.
     """
+    _check_parent(parent_qty, parent_share)
     return _walk(
         sessions,
         bucket_ns,
@@ -1932,7 +1943,24 @@ def walk_forward(
         perm_coef_bps,
         window,
         None,
+        parent_share,
     )
+
+
+def _check_parent(parent_qty: float | None, parent_share: float | None) -> None:
+    """A walk sizes its parent one way or the other, never both or neither."""
+    if (parent_qty is None) == (parent_share is None):
+        raise ValueError("give exactly one of parent_qty and parent_share")
+
+
+def _history_parent(history: list[pl.DataFrame], bucket_ns: int, share: float) -> float:
+    """``share`` of the mean volume of the history sessions. Each session's
+    volume is the total the forecast itself measures, added in an explicit loop,
+    oldest first, as the Rust ``history_parent`` adds them."""
+    total = 0.0
+    for s in history:
+        total += _measured(s, bucket_ns)[2]
+    return share * (total / len(history))
 
 
 def _walk(
@@ -1945,6 +1973,7 @@ def _walk(
     perm_coef_bps: float,
     window: int | None,
     growing: dict | None,
+    parent_share: float | None = None,
 ) -> dict:
     """``walk_forward``, given the growing walk of the same sessions when there
     is one. A window of ``w`` opens on session ``w`` with sessions ``0..w``
@@ -1962,6 +1991,10 @@ def _walk(
                 f"walk-forward with a window of {window} needs at least "
                 f"{window + 2} sessions, got {len(sessions)}"
             )
+    # A share above one asks for more than a whole session's volume, which no
+    # cap in (0, 1] could fill.
+    if parent_share is not None and not (math.isfinite(parent_share) and 0.0 < parent_share <= 1.0):
+        raise ValueError(f"parent_share must be in (0, 1], got {parent_share}")
     prev_end = None
     for i, s in enumerate(sessions):
         if s.height == 0:
@@ -1983,11 +2016,17 @@ def _walk(
         if growing is not None and history_from == 0:
             folds.append(growing["folds"][i - 2])
             continue
+        history = sessions[history_from:i]
+        fold_parent = (
+            parent_qty
+            if parent_share is None
+            else _history_parent(history, bucket_ns, parent_share)
+        )
         grid = stability(
-            sessions[history_from:i],
+            history,
             sessions[i],
             bucket_ns,
-            parent_qty,
+            fold_parent,
             cap_grid,
             half_life_grid,
             coef_bps,
@@ -1997,6 +2036,7 @@ def _walk(
             {
                 "input": i,
                 "history_from": history_from,
+                "parent_qty": grid["parent_qty"],
                 "verdicts": [_verdict(r) for r in grid["rows"]],
                 "flat_improvement_bps": [r["flat_improvement_bps"] for r in grid["rows"]],
                 "inert_caps": grid["inert_caps"],
@@ -2019,7 +2059,8 @@ def _walk(
         "buckets": grid["buckets"],
         "sessions": len(sessions),
         "window": window,
-        "parent_qty": grid["parent_qty"],
+        "parent_qty": grid["parent_qty"] if parent_share is None else None,
+        "parent_share": None if parent_share is None else _r8(parent_share),
         "coef_bps": grid["coef_bps"],
         "perm_coef_bps": grid["perm_coef_bps"],
         "caps": caps,
@@ -2034,11 +2075,12 @@ def _walk(
 def window_sweep(
     sessions: list[pl.DataFrame],
     bucket_ns: int,
-    parent_qty: float,
+    parent_qty: float | None,
     cap_grid: list[float],
     half_life_grid: list[float],
     coef_bps: float,
     perm_coef_bps: float = 0.0,
+    parent_share: float | None = None,
 ) -> dict:
     """Does the walk's answer depend on how far back its history goes?
 
@@ -2084,8 +2126,15 @@ def window_sweep(
     they were run, and nothing here ranks them: a window picked for the verdict
     it gives is a verdict picked.
 
-    Mirrors ``window_sweep`` in ``src/walkforward.rs`` operation for operation.
+    With ``parent_share`` each fold sizes its own parent, as in
+    ``walk_forward``, so a deeper history is a different parent as well as a
+    different forecast and ``span_bps`` holds both. The fold a window shares
+    with the growing walk has the same history and so the same parent.
+
+    Mirrors ``window_sweep`` / ``window_sweep_share`` in ``src/walkforward.rs``
+    operation for operation.
     """
+    _check_parent(parent_qty, parent_share)
     windows: list[int | None] = [None, *range(2, len(sessions) - 1)]
     reports: list[dict] = []
     for window in windows:
@@ -2100,6 +2149,7 @@ def window_sweep(
                 perm_coef_bps,
                 window,
                 reports[0] if reports else None,
+                parent_share,
             )
         )
     walks = [
@@ -2167,6 +2217,7 @@ def window_sweep(
         "buckets": first["buckets"],
         "sessions": len(sessions),
         "parent_qty": first["parent_qty"],
+        "parent_share": first["parent_share"],
         "coef_bps": first["coef_bps"],
         "perm_coef_bps": first["perm_coef_bps"],
         "caps": first["caps"],

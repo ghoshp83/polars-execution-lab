@@ -565,3 +565,86 @@ def test_the_sweep_works_out_each_distinct_fold_once(shapes, monkeypatch):
         assert listed["consensus"] == alone["consensus"]
         assert listed["last_verdicts"] == alone["folds"][-1]["verdicts"]
         assert listed["last_flat_improvement_bps"] == alone["folds"][-1]["flat_improvement_bps"]
+
+
+# Session volumes 10 / 10 / 11.6 / 2.02 / 10: a quiet one among busy ones.
+SIZED = (LUMPY, BLENDED, THIN_TAIL, PINCHED, LUMPY)
+
+
+def _mean_volume(shapes) -> float:
+    """Each session's total, then their mean, added in the order the engine adds
+    them so the parent compares exactly."""
+    total = 0.0
+    for shape in shapes:
+        session = 0.0
+        for v in shape:
+            session += v
+        total += session
+    return total / len(shapes)
+
+
+def _sized(sessions, share, **kw):
+    return walk_forward(
+        sessions, BUCKET, None, CAPS, HALF_LIVES, 25.0, 5.0, parent_share=share, **kw
+    )
+
+
+def test_a_sized_parent_is_its_historys_mean_volume_and_never_its_inputs():
+    """``parent_share`` sizes each fold from the sessions behind it: the size a
+    desk had before the session opened. Making the scored session ten times
+    busier must not move its own parent, or the walk would be reading the
+    future it says it does not."""
+    walk = _sized(_in_order(*SIZED), 0.05)
+    expected = [0.05 * _mean_volume(SIZED[: f["input"]]) for f in walk["folds"]]
+    assert [f["parent_qty"] for f in walk["folds"]] == pytest.approx(expected, abs=1e-8)
+    assert walk["parent_qty"] is None and walk["parent_share"] == 0.05
+    busier = _sized(_in_order(*SIZED[:4], [10.0, 60.0, 30.0]), 0.05)
+    assert [f["parent_qty"] for f in busier["folds"]] == [f["parent_qty"] for f in walk["folds"]]
+
+
+def test_a_sized_fold_is_the_stability_grid_at_the_size_it_came_to():
+    """Sizing changes the parent and nothing else: each fold must be exactly
+    the grid ``pov-stability`` prints at the parent its own history gave it."""
+    sessions = _in_order(*SIZED)
+    walk = _sized(sessions, 0.3, window=2)
+    for f in walk["folds"]:
+        history = sessions[f["history_from"] : f["input"]]
+        parent = 0.3 * _mean_volume(SIZED[f["history_from"] : f["input"]])
+        grid = stability(history, sessions[f["input"]], BUCKET, parent, CAPS, HALF_LIVES, 25.0, 5.0)
+        assert f["parent_qty"] == grid["parent_qty"]
+        assert f["flat_improvement_bps"] == [r["flat_improvement_bps"] for r in grid["rows"]]
+
+
+def test_a_fixed_walk_prices_the_same_parent_on_every_fold():
+    walk = walk_forward(_in_order(*SIZED), *ARGS)
+    assert walk["parent_qty"] == 0.6 and walk["parent_share"] is None
+    assert [f["parent_qty"] for f in walk["folds"]] == [0.6] * 3
+
+
+@pytest.mark.parametrize("share", [0.0, -0.1, 1.5, float("nan"), float("inf")])
+def test_a_share_outside_zero_to_one_is_refused(share):
+    """Above one asks for more than a whole session, which no cap could fill."""
+    with pytest.raises(ValueError, match=r"parent_share must be in \(0, 1\]"):
+        _sized(_in_order(*SIZED[:4]), share)
+
+
+@pytest.mark.parametrize("run", [walk_forward, window_sweep])
+def test_a_walk_takes_one_parent_never_both_or_neither(run):
+    sessions = _in_order(*SIZED[:4])
+    with pytest.raises(ValueError, match="exactly one of parent_qty and parent_share"):
+        run(sessions, BUCKET, None, CAPS, HALF_LIVES, 25.0, 5.0)
+    with pytest.raises(ValueError, match="exactly one of parent_qty and parent_share"):
+        run(sessions, BUCKET, 0.6, CAPS, HALF_LIVES, 25.0, 5.0, parent_share=0.1)
+
+
+def test_a_sized_sweep_shares_the_fold_its_windows_open_on():
+    """A window of ``w`` opens on the history the growing walk had there, so
+    the same parent: the fold the sweep takes from the growing walk must be the
+    one a windowed walk works out for itself."""
+    sessions = _in_order(*SIZED)
+    sweep = window_sweep(sessions, BUCKET, None, CAPS, HALF_LIVES, 25.0, 5.0, parent_share=0.3)
+    grown = _sized(sessions, 0.3)
+    assert sweep["parent_qty"] is None and sweep["parent_share"] == 0.3
+    assert sweep["walks"][0]["consensus"] == grown["consensus"]
+    for w in (2, 3):
+        assert _sized(sessions, 0.3, window=w)["folds"][0] == grown["folds"][w - 2]

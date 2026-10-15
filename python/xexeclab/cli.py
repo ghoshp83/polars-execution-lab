@@ -284,6 +284,14 @@ def cmd_pov_holdout(a: argparse.Namespace) -> None:
     )
 
 
+def _walk_parent(a: argparse.Namespace) -> float | None:
+    """``--parent-qty`` when the walk is not sizing its own parent from history;
+    1.0 when neither flag was given, as on every other ``pov-*`` command."""
+    if a.parent_share is not None:
+        return None
+    return 1.0 if a.parent_qty is None else a.parent_qty
+
+
 def cmd_pov_walkforward(a: argparse.Namespace) -> None:
     # The walk is ``--history`` followed by ``--input``, oldest first, so its
     # last fold is ``pov-stability`` on the same line unless ``--window`` cuts
@@ -294,12 +302,13 @@ def cmd_pov_walkforward(a: argparse.Namespace) -> None:
             walk_forward(
                 [read_ticks(p) for p in paths],
                 a.bucket_ms * 1_000_000,
-                a.parent_qty,
+                _walk_parent(a),
                 [float(s) for s in a.cap_grid.split(",")],
                 [float(s) for s in a.half_life_grid.split(",")],
                 a.coef_bps,
                 a.perm_coef_bps,
                 a.window,
+                a.parent_share,
             )
         )
     )
@@ -314,11 +323,12 @@ def cmd_pov_window_sweep(a: argparse.Namespace) -> None:
             window_sweep(
                 [read_ticks(p) for p in paths],
                 a.bucket_ms * 1_000_000,
-                a.parent_qty,
+                _walk_parent(a),
                 [float(s) for s in a.cap_grid.split(",")],
                 [float(s) for s in a.half_life_grid.split(",")],
                 a.coef_bps,
                 a.perm_coef_bps,
+                a.parent_share,
             )
         )
     )
@@ -885,8 +895,16 @@ def main(argv: list[str] | None = None) -> None:
     )
     pwf.add_argument("--input", required=True, help="the newest session of the walk")
     pwf.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
-    pwf.add_argument(
-        "--parent-qty", type=float, default=1.0, help="parent order size in base units"
+    pwf_parent = pwf.add_mutually_exclusive_group()
+    pwf_parent.add_argument(
+        "--parent-qty", type=float, default=None, help="parent order size in base units (default 1)"
+    )
+    pwf_parent.add_argument(
+        "--parent-share",
+        type=float,
+        default=None,
+        help="size each fold's parent as this share, in (0, 1], of its history's mean "
+        "session volume",
     )
     pwf.add_argument(
         "--cap-grid",
@@ -926,8 +944,16 @@ def main(argv: list[str] | None = None) -> None:
     )
     pws.add_argument("--input", required=True, help="the newest session of the walk")
     pws.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
-    pws.add_argument(
-        "--parent-qty", type=float, default=1.0, help="parent order size in base units"
+    pws_parent = pws.add_mutually_exclusive_group()
+    pws_parent.add_argument(
+        "--parent-qty", type=float, default=None, help="parent order size in base units (default 1)"
+    )
+    pws_parent.add_argument(
+        "--parent-share",
+        type=float,
+        default=None,
+        help="size each fold's parent as this share, in (0, 1], of its history's mean "
+        "session volume",
     )
     pws.add_argument(
         "--cap-grid",
