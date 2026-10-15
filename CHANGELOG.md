@@ -4,6 +4,43 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.43.0] - 2026-10-15
+
+### Added
+- **`--parent-share F` on `pov-walkforward` and `pov-window-sweep`.** Each
+  fold sizes its parent as `F`, in (0, 1], of its history's mean session
+  volume, the same per-session total the forecast measures. The parent is read
+  from the sessions behind a fold and never from the session it scores, so the
+  walk still uses nothing a desk would not have had. `--parent-qty` and
+  `--parent-share` are exclusive in both command lines; given neither, the
+  parent is 1 as before. In Rust the sized walks are `walk_forward_share` and
+  `window_sweep_share`; in Python, `parent_share=` on `walk_forward` and
+  `window_sweep` with `parent_qty=None`.
+- **Each fold reports its `parent_qty`**, and the reports carry
+  `parent_share`. On a sized walk the report's own `parent_qty` is `null`,
+  since no single size was priced.
+- **What sizing does to the recorded days**, pinned in both languages: at a
+  share of 0.085, 0.2 BTC against day one's mean session, day one settles no
+  cap (`settled_caps` 1 with the fixed parent, 0 sized) and the 25% cap reads
+  `inert, unstable, gain, gain`. On day two the share comes to 1.25 to 1.42
+  BTC and the 25% cap reads `gain, loss, gain, unstable`.
+- **Two equivalence tests (35 and 36):** the sized sweep over day one, and both
+  command lines refusing a parent given two ways.
+
+### Changed
+- `parent_qty` on `WalkForwardReport` and `WindowSweepReport` is now
+  `Option<f64>` in Rust. With a fixed parent the JSON is unchanged apart from the
+  new fields.
+
+### Notes
+- Day one's sessions ran from 0.83 to 5.73 BTC, so the fixed 0.2 BTC parent the
+  README used was 3.5% of one and 24% of another. Its one settled cap, 25%, does
+  not survive sizing the same 0.2 to each fold's history. It did not survive a
+  second day either (v0.42.0): the one settled result on recorded trades
+  survives neither check.
+- The share is a parameter nobody fits, like the half-life and the window, and
+  nothing reports a best one.
+
 ## [0.42.0] - 2026-10-14
 
 ### Added
