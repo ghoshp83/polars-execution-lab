@@ -37,6 +37,7 @@ from xexeclab.engine import (
     sensitivity,
     session_twap,
     session_vwap,
+    share_sweep,
     shortfall,
     stability,
     stream_session,
@@ -82,6 +83,9 @@ STREAM_CHUNK_ROWS = 4
 # too -- so the comparison is between two tradeable plans, not against a fiction.
 POV_PLAN = dict(parent_qty=0.2, cap=0.25, coef_bps=25.0, perm_coef_bps=5.0)
 BUCKET_MS = 1000
+# Parent shares for the recorded share sweep, either side of the 8.5% the
+# sized window sweep is checked at.
+SHARE_GRID = [0.05, 0.085, 0.15]
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
 
@@ -2021,3 +2025,81 @@ def test_rust_and_python_both_refuse_a_parent_given_two_ways(capsys):
         main(line)
     assert exit_info.value.code == 2
     assert "not allowed with argument" in capsys.readouterr().err
+
+
+def test_rust_and_python_agree_on_a_sweep_across_shares():
+    """The thirty-seventh: day one's six recorded sessions swept at every
+    share on a grid. Each row is a full window sweep at its own share, so a
+    share that came out one bit apart would show as a different parent on
+    every fold."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    paths = [f"data/real/btc_usd_{i}.ndjson" for i in range(1, 7)]
+    shares = SHARE_GRID
+    caps, hls = [0.05, 0.1, 0.15, 0.2, 0.25], [0.25, 0.5, 1.0, 2.0, 4.0]
+    proc = subprocess.run(
+        [
+            binary,
+            "pov-share-sweep",
+            "--history",
+            ",".join(paths[:-1]),
+            "--input",
+            paths[-1],
+            "--bucket-ms",
+            "10000",
+            "--share-grid",
+            ",".join(str(s) for s in shares),
+            "--cap-grid",
+            ",".join(str(c) for c in caps),
+            "--half-life-grid",
+            ",".join(str(h) for h in hls),
+            "--coef-bps",
+            str(POV_PLAN["coef_bps"]),
+            "--perm-coef-bps",
+            str(POV_PLAN["perm_coef_bps"]),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+    py = share_sweep(
+        [read_ticks(p) for p in paths],
+        10_000_000_000,
+        shares,
+        caps,
+        hls,
+        POV_PLAN["coef_bps"],
+        POV_PLAN["perm_coef_bps"],
+    )
+    assert rust == py
+    assert [r["parent_share"] for r in rust["shares"]] == shares
+    assert rust["settled_at"] == [0] * 5
+
+
+def test_rust_and_python_both_refuse_a_parent_on_a_share_sweep(capsys):
+    """The thirty-eighth: the share grid is the parent, so a size or a single
+    share beside it would be left unread. Both command lines refuse it."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    paths = [f"data/real/btc_usd_{i}.ndjson" for i in range(1, 7)]
+    for extra in (["--parent-qty", "0.2"], ["--parent-share", "0.085"]):
+        line = [
+            "pov-share-sweep",
+            "--history",
+            ",".join(paths[:-1]),
+            "--input",
+            paths[-1],
+            "--bucket-ms",
+            "10000",
+            *extra,
+        ]
+        proc = subprocess.run([binary, *line], capture_output=True, text=True)
+        assert proc.returncode != 0
+        assert "--parent-qty and --parent-share are not taken" in proc.stderr
+        with pytest.raises(SystemExit) as exit_info:
+            main(line)
+        assert exit_info.value.code == 2
+        assert "unrecognized arguments" in capsys.readouterr().err
