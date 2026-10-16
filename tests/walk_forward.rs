@@ -2,8 +2,8 @@ use xexec::holdout::holdout;
 use xexec::model::Tick;
 use xexec::stability::stability;
 use xexec::walkforward::{
-    walk_forward, walk_forward_share, window_sweep, window_sweep_share, WalkForwardFold,
-    WalkForwardReport, WindowSweepReport,
+    share_sweep, walk_forward, walk_forward_share, window_sweep, window_sweep_share,
+    ShareSweepReport, WalkForwardFold, WalkForwardReport, WindowSweepReport,
 };
 
 /// One second per bucket.
@@ -861,5 +861,92 @@ fn a_sized_sweep_shares_the_fold_its_windows_open_on() {
             first.flat_improvement_bps,
             grown.folds[w - 2].flat_improvement_bps
         );
+    }
+}
+
+const SHARES: [f64; 3] = [0.05, 0.3, 1.0];
+
+fn shares_of(sessions: &[Vec<Tick>], grid: &[f64]) -> anyhow::Result<ShareSweepReport> {
+    share_sweep(sessions, BUCKET, grid, &CAPS, &HALF_LIVES, 25.0, 5.0)
+}
+
+/// The share sweep is a re-run, not a new calculation: each row must be what
+/// `pov-window-sweep --parent-share` prints at that share, with a cap settled
+/// exactly where that sweep settled it.
+#[test]
+fn each_share_row_is_the_window_sweep_at_that_share() {
+    let sessions = in_order(SIZED);
+    let report = shares_of(&sessions, &SHARES).unwrap();
+    let listed: Vec<f64> = report.shares.iter().map(|r| r.parent_share).collect();
+    assert_eq!(listed, SHARES);
+    for row in &report.shares {
+        let alone = window_sweep_share(
+            &sessions,
+            BUCKET,
+            row.parent_share,
+            &CAPS,
+            &HALF_LIVES,
+            25.0,
+            5.0,
+        )
+        .unwrap();
+        assert_eq!(row.settled_caps, alone.settled_caps);
+        assert_eq!(row.last_verdicts, alone.walks[0].last_verdicts);
+        for (c, settled) in row.settled.iter().enumerate() {
+            let verdict = &alone.walks[0].consensus[c];
+            if alone.consensus_stable[c] && verdict != "mixed" {
+                assert_eq!(settled.as_ref(), Some(verdict));
+            } else {
+                assert_eq!(*settled, None);
+            }
+        }
+        assert_eq!(
+            row.settled_caps,
+            row.settled.iter().filter(|v| v.is_some()).count()
+        );
+    }
+    assert_eq!(report.caps, CAPS);
+    assert_eq!(report.sessions, 5);
+}
+
+/// `share_stable` is the strict reading: settled at every share, and on one
+/// verdict. A cap settled at some shares is counted in `settled_at` and not
+/// held, because the share decided it.
+#[test]
+fn a_cap_holds_across_shares_only_when_every_share_settles_it_the_same() {
+    let report = shares_of(&in_order(SIZED), &SHARES).unwrap();
+    for c in 0..CAPS.len() {
+        let column: Vec<&Option<String>> = report.shares.iter().map(|r| &r.settled[c]).collect();
+        assert_eq!(
+            report.settled_at[c],
+            column.iter().filter(|v| v.is_some()).count()
+        );
+        let held = column[0].is_some() && column.iter().all(|v| *v == column[0]);
+        assert_eq!(report.share_stable[c], held);
+        if held {
+            assert_eq!(report.settled_at[c], SHARES.len());
+        }
+        let newest = &report.shares[0].last_verdicts[c];
+        let same = report.shares.iter().all(|r| &r.last_verdicts[c] == newest);
+        assert_eq!(report.last_share_stable[c], same);
+    }
+    assert_eq!(
+        report.held_caps,
+        report.share_stable.iter().filter(|s| **s).count()
+    );
+}
+
+#[test]
+fn a_share_grid_that_is_not_a_sweep_is_refused() {
+    let sessions = in_order([LUMPY, BLENDED, THIN_TAIL, PINCHED]);
+    for (grid, want) in [
+        (&[0.1][..], "share_grid needs at least 2 points"),
+        (&[0.2, 0.1][..], "share_grid must be strictly increasing"),
+        (&[0.1, 0.1][..], "share_grid must be strictly increasing"),
+        (&[0.5, 1.5][..], "parent_share must be in (0, 1]"),
+        (&[0.0, 0.5][..], "parent_share must be in (0, 1]"),
+    ] {
+        let err = shares_of(&sessions, grid).unwrap_err();
+        assert!(err.to_string().contains(want), "{grid:?}: {err}");
     }
 }

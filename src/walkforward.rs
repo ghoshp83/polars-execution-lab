@@ -665,3 +665,149 @@ fn sweep(
         newest_only_caps,
     })
 }
+
+/// One share of the sweep: [`window_sweep_share`] at that share, cut down to
+/// what the shares can be compared on.
+#[derive(Debug, Serialize)]
+pub struct ShareRow {
+    pub parent_share: f64,
+    /// Per cap, in `caps` order: the verdict every walk's `consensus` gave it,
+    /// or `null` when the walks split or agreed only on `mixed`.
+    pub settled: Vec<Option<String>>,
+    pub settled_caps: usize,
+    /// Per cap: the verdict the growing walk gave the newest session.
+    pub last_verdicts: Vec<String>,
+}
+
+/// **Does a settled cap depend on the share the parent was sized at?**
+///
+/// `--parent-share` replaced a size typed once for every day with a size the
+/// desk had before each session opened. It did not replace the typing: the
+/// share is a number too, and nothing here fits it. This runs the window sweep
+/// at every share on a grid and reports, per cap, what it settled on at each.
+///
+/// A cap is `share_stable` when it settled at every share, on the same
+/// verdict. One that settled at some shares and not at others settled because
+/// of the share, and `settled_at` says at how many. Every share is a fresh
+/// sweep: a different parent prices every fold differently, so no fold is
+/// shared across rows.
+///
+/// **There is deliberately no best share.** The rows are listed in grid order
+/// and nothing here ranks them: a share picked for the verdict it gives is a
+/// verdict picked.
+#[derive(Debug, Serialize)]
+pub struct ShareSweepReport {
+    pub product: String,
+    pub bucket_ns: i64,
+    pub buckets: usize,
+    pub sessions: usize,
+    pub coef_bps: f64,
+    pub perm_coef_bps: f64,
+    pub caps: Vec<f64>,
+    pub half_lives: Vec<f64>,
+    /// One row per share, in grid order.
+    pub shares: Vec<ShareRow>,
+    /// Per cap: how many shares it settled at, on any verdict.
+    pub settled_at: Vec<usize>,
+    /// Per cap: true when it settled at every share, on the same verdict.
+    pub share_stable: Vec<bool>,
+    /// Caps that are `share_stable`.
+    pub held_caps: usize,
+    /// Per cap: true when the growing walk gave the newest session the same
+    /// verdict at every share. Where nothing settles this is the reading left,
+    /// and a cap that gains at one share and loses at another was decided by it.
+    pub last_share_stable: Vec<bool>,
+}
+
+/// Run [`window_sweep_share`] at every share on `share_grid`.
+///
+/// Mirrors `share_sweep` in `python/xexeclab/engine.py` operation for
+/// operation, so the two engines report bit-for-bit identical sweeps.
+pub fn share_sweep(
+    sessions: &[Vec<Tick>],
+    bucket_ns: i64,
+    share_grid: &[f64],
+    cap_grid: &[f64],
+    hl_grid: &[f64],
+    coef_bps: f64,
+    perm_coef_bps: f64,
+) -> Result<ShareSweepReport> {
+    // One share is `pov-window-sweep --parent-share`, not a sweep. Each share
+    // is checked against (0, 1] by the walk itself.
+    if share_grid.len() < 2 {
+        return Err(anyhow!(
+            "share_grid needs at least 2 points, got {}",
+            share_grid.len()
+        ));
+    }
+    for w in share_grid.windows(2) {
+        if w[1] <= w[0] {
+            return Err(anyhow!(
+                "share_grid must be strictly increasing, got {} then {}",
+                w[0],
+                w[1]
+            ));
+        }
+    }
+    let mut sweeps: Vec<WindowSweepReport> = Vec::with_capacity(share_grid.len());
+    for share in share_grid {
+        sweeps.push(sweep(
+            sessions,
+            bucket_ns,
+            Parent::Share(*share),
+            cap_grid,
+            hl_grid,
+            coef_bps,
+            perm_coef_bps,
+        )?);
+    }
+    let first = &sweeps[0];
+    let caps = first.caps.len();
+    let shares: Vec<ShareRow> = share_grid
+        .iter()
+        .zip(&sweeps)
+        .map(|(share, s)| ShareRow {
+            parent_share: r8(*share),
+            settled: (0..caps)
+                .map(|c| {
+                    let v = &s.walks[0].consensus[c];
+                    (s.consensus_stable[c] && v != "mixed").then(|| v.clone())
+                })
+                .collect(),
+            settled_caps: s.settled_caps,
+            last_verdicts: s.walks[0].last_verdicts.clone(),
+        })
+        .collect();
+    let settled_at: Vec<usize> = (0..caps)
+        .map(|c| shares.iter().filter(|r| r.settled[c].is_some()).count())
+        .collect();
+    let share_stable: Vec<bool> = (0..caps)
+        .map(|c| {
+            shares[0].settled[c].is_some()
+                && shares.iter().all(|r| r.settled[c] == shares[0].settled[c])
+        })
+        .collect();
+    let held_caps = share_stable.iter().filter(|s| **s).count();
+    let last_share_stable: Vec<bool> = (0..caps)
+        .map(|c| {
+            shares
+                .iter()
+                .all(|r| r.last_verdicts[c] == shares[0].last_verdicts[c])
+        })
+        .collect();
+    Ok(ShareSweepReport {
+        product: first.product.clone(),
+        bucket_ns,
+        buckets: first.buckets,
+        sessions: sessions.len(),
+        coef_bps: first.coef_bps,
+        perm_coef_bps: first.perm_coef_bps,
+        caps: first.caps.clone(),
+        half_lives: first.half_lives.clone(),
+        shares,
+        settled_at,
+        share_stable,
+        held_caps,
+        last_share_stable,
+    })
+}
