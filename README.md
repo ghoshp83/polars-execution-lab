@@ -294,6 +294,13 @@ uv run xexeclab pov-window-sweep \
     --input ${R}_6.ndjson --bucket-ms 10000 --cap-grid 0.05,0.1,0.15,0.2,0.25 \
     --half-life-grid 0.25,0.5,1,2,4 \
     --parent-share 0.085 --coef-bps 25 --perm-coef-bps 5
+# ...and at every share from 5% to 60%: no cap settles at any of them, and
+# the newest session's verdict turns with the share
+uv run xexeclab pov-share-sweep \
+    --history ${R}_1.ndjson,${R}_2.ndjson,${R}_3.ndjson,${R}_4.ndjson,${R}_5.ndjson \
+    --input ${R}_6.ndjson --bucket-ms 10000 --cap-grid 0.05,0.1,0.15,0.2,0.25 \
+    --half-life-grid 0.25,0.5,1,2,4 \
+    --share-grid 0.05,0.085,0.15,0.3,0.6 --coef-bps 25 --perm-coef-bps 5
 
 # the same session benchmarks, folded out of the capture without ever holding it
 # (chunk_rows sets the memory, not the answer; peak_rows_in_memory reports the bound)
@@ -761,6 +768,18 @@ This is a **market-data and execution-analytics** project, not a trading system.
   either, and the 25% cap loses on one step. The one settled result on
   recorded trades depended on the size of the order. The share is no more
   fitted than the half-life or the window, and nothing reports a best one.
+  **Swept across shares, no cap settles at any of them.** `xexeclab
+  pov-share-sweep` runs the window sweep at every share on `--share-grid` and
+  reports, per cap, the verdict it settled on at each share, or `null`. A cap
+  is `share_stable` only when it settled at every share on one verdict, and
+  `last_share_stable` asks the smaller question of the newest session. From 5%
+  to 60%, day one settles nothing, and the newest session's 25% verdict goes
+  `gain`, `gain`, `unstable`, `loss`, `loss` as the share rises. Day two and the
+  two days taken together settle nothing either. As the share grows their
+  verdicts turn `inert` from the tightest cap upward, until a parent that large
+  binds both plans alike at every cap. That makes fifteen sweeps of recorded
+  trades with no settled cap. The rows come in grid order and none is ranked
+  as best.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
