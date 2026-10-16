@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.44.0] - 2026-10-16
+
+### Added
+- **`pov-share-sweep`.** Runs `pov-window-sweep --parent-share` at every share
+  on `--share-grid` (default `0.05,0.1,0.2`; at least two points, strictly
+  increasing, each in (0, 1]). Each row reports the verdict every walk settled
+  on per cap, or `null`, plus the newest session's verdict on the growing walk.
+  Per cap, `settled_at` counts the shares it settled at, and `share_stable`
+  means settled at every share on one verdict (`held_caps` counts these).
+  `last_share_stable` says whether the newest session's verdict stayed the same
+  at every share. Nothing ranks the shares. In Rust the function is
+  `share_sweep`; Python has the same name.
+- **The command takes its parent from the grid alone.** `--parent-qty` and
+  `--parent-share` are refused on both command lines rather than left unread.
+- **What the share does to the recorded days**, pinned in both languages for
+  day one. Swept from 5% to 60%, no cap settles at any share, and the newest
+  session's verdict changes with the share at every cap. At 25% it reads
+  `gain, gain, unstable, loss, loss`.
+- **Two equivalence tests (37 and 38):** the share sweep over day one, and both
+  command lines refusing a parent beside the grid.
+
+### Notes
+- The same grid on day two, and on both days as twelve sessions, also settles
+  nothing. As the share grows, the newest session's verdicts turn `inert` from
+  the tightest cap upward. On day two every cap is inert from a share of 0.3; on
+  both days together, at 0.6. A parent that large makes the cap bind both plans
+  alike. Fifteen sweeps, and no settled cap on recorded trades at any share
+  tried.
+
 ## [0.43.0] - 2026-10-15
 
 ### Added
