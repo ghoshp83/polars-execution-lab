@@ -6,7 +6,8 @@
 use xexec::model::Tick;
 use xexec::replay::read_ticks;
 use xexec::walkforward::{
-    walk_forward, walk_forward_share, window_sweep, window_sweep_share, WindowSweepReport,
+    share_sweep, walk_forward, walk_forward_share, window_sweep, window_sweep_share,
+    WindowSweepReport,
 };
 
 /// Ten seconds per bucket: the widest five-second gap in the run is empty, and
@@ -204,4 +205,32 @@ fn sized_to_its_own_history_day_one_settles_no_cap() {
     assert_eq!(parents, [0.35185609, 0.25819891, 0.21457672, 0.19137286]);
     let at_25: Vec<&str> = grown.folds.iter().map(|f| f.verdicts[4].as_str()).collect();
     assert_eq!(at_25, ["inert", "unstable", "gain", "gain"]);
+}
+
+/// Sizing by share moved the question from the size to the share, and the
+/// share is a number nobody fits either. Swept from 5% to 60% of each fold's
+/// history, day one settles no cap at any share, and the newest session's
+/// verdict changes with the share at every cap: at 25% it gains at the two
+/// smallest shares and loses at the two largest.
+#[test]
+fn across_shares_day_one_settles_nothing_and_the_newest_session_flips() {
+    let report = share_sweep(
+        &sessions(),
+        BUCKET,
+        &[0.05, 0.085, 0.15, 0.3, 0.6],
+        &CAPS,
+        &HALF_LIVES,
+        25.0,
+        5.0,
+    )
+    .unwrap();
+    assert_eq!(report.settled_at, [0; 5]);
+    assert_eq!(report.held_caps, 0);
+    assert_eq!(report.last_share_stable, [false; 5]);
+    let at_25: Vec<&str> = report
+        .shares
+        .iter()
+        .map(|r| r.last_verdicts[4].as_str())
+        .collect();
+    assert_eq!(at_25, ["gain", "gain", "unstable", "loss", "loss"]);
 }

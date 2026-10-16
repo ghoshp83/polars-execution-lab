@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from xexeclab.engine import read_ticks, walk_forward, window_sweep
+from xexeclab.engine import read_ticks, share_sweep, walk_forward, window_sweep
 
 REAL = Path(__file__).parents[2] / "data" / "real"
 # Ten seconds per bucket: the widest five-second gap in the run is empty, and a
@@ -208,3 +208,19 @@ def test_sized_to_the_day_the_parent_grows_with_it_and_still_settles_nothing(day
     assert parents == [1.37807173, 1.41895757, 1.25205563, 1.3017328]
     assert [f["verdicts"][4] for f in walk["folds"]] == ["gain", "loss", "gain", "unstable"]
     assert walk["consensus"] == ["mixed"] * 5
+
+
+def test_across_shares_day_one_settles_nothing_and_the_newest_session_flips(sessions):
+    """Sizing by share moved the question from the size to the share, and the
+    share is a number nobody fits either. Swept from 5% to 60% of each fold's
+    history, day one settles no cap at any share, and the newest session's
+    verdict changes with the share at every cap: at 25% it gains at the two
+    smallest shares and loses at the two largest."""
+    report = share_sweep(
+        sessions, BUCKET, [0.05, 0.085, 0.15, 0.3, 0.6], CAPS, HALF_LIVES, 25.0, 5.0
+    )
+    assert report["settled_at"] == [0] * 5
+    assert report["held_caps"] == 0
+    assert report["last_share_stable"] == [False] * 5
+    at_25 = [r["last_verdicts"][4] for r in report["shares"]]
+    assert at_25 == ["gain", "gain", "unstable", "loss", "loss"]
