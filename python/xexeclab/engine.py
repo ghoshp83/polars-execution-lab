@@ -2241,6 +2241,97 @@ def window_sweep(
     }
 
 
+def share_sweep(
+    sessions: list[pl.DataFrame],
+    bucket_ns: int,
+    share_grid: list[float],
+    cap_grid: list[float],
+    half_life_grid: list[float],
+    coef_bps: float,
+    perm_coef_bps: float = 0.0,
+) -> dict:
+    """Does a settled cap depend on the share the parent was sized at?
+
+    ``parent_share`` replaced a size typed once for every day with a size the
+    desk had before each session opened. It did not replace the typing: the
+    share is a number too, and nothing here fits it. This runs ``window_sweep``
+    at every share on a grid and reports, per cap, what it settled on at each.
+
+    A cap is ``share_stable`` when it settled at every share, on the same
+    verdict. One that settled at some shares and not at others settled because
+    of the share, and ``settled_at`` says at how many. Every share is a fresh
+    sweep: a different parent prices every fold differently, so no fold is
+    shared across rows.
+
+    **There is deliberately no best share.** The rows are listed in grid order
+    and nothing here ranks them: a share picked for the verdict it gives is a
+    verdict picked.
+
+    Mirrors ``share_sweep`` in ``src/walkforward.rs`` operation for operation.
+    """
+    # One share is ``window_sweep(parent_share=...)``, not a sweep. Each share
+    # is checked against (0, 1] by the walk itself.
+    if len(share_grid) < 2:
+        raise ValueError(f"share_grid needs at least 2 points, got {len(share_grid)}")
+    for a, b in zip(share_grid, share_grid[1:], strict=False):
+        if b <= a:
+            raise ValueError(f"share_grid must be strictly increasing, got {a} then {b}")
+    sweeps = [
+        window_sweep(
+            sessions,
+            bucket_ns,
+            None,
+            cap_grid,
+            half_life_grid,
+            coef_bps,
+            perm_coef_bps,
+            share,
+        )
+        for share in share_grid
+    ]
+    first = sweeps[0]
+    caps = range(len(first["caps"]))
+    shares = [
+        {
+            "parent_share": _r8(share),
+            "settled": [
+                s["walks"][0]["consensus"][c]
+                if s["consensus_stable"][c] and s["walks"][0]["consensus"][c] != "mixed"
+                else None
+                for c in caps
+            ],
+            "settled_caps": s["settled_caps"],
+            "last_verdicts": s["walks"][0]["last_verdicts"],
+        }
+        for share, s in zip(share_grid, sweeps, strict=True)
+    ]
+    share_stable = [
+        shares[0]["settled"][c] is not None
+        and all(r["settled"][c] == shares[0]["settled"][c] for r in shares)
+        for c in caps
+    ]
+    return {
+        "product": first["product"],
+        "bucket_ns": bucket_ns,
+        "buckets": first["buckets"],
+        "sessions": len(sessions),
+        "coef_bps": first["coef_bps"],
+        "perm_coef_bps": first["perm_coef_bps"],
+        "caps": first["caps"],
+        "half_lives": first["half_lives"],
+        "shares": shares,
+        "settled_at": [sum(1 for r in shares if r["settled"][c] is not None) for c in caps],
+        "share_stable": share_stable,
+        "held_caps": sum(1 for v in share_stable if v),
+        # Where nothing settles this is the reading left, and a cap that gains
+        # at one share and loses at another was decided by it.
+        "last_share_stable": [
+            all(r["last_verdicts"][c] == shares[0]["last_verdicts"][c] for r in shares)
+            for c in caps
+        ],
+    }
+
+
 def _pooling_weights(sessions: int, half_life: float) -> list[float]:
     """The weight each history session carries, oldest first, summing to one.
 

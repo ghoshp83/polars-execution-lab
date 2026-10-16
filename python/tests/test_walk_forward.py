@@ -7,7 +7,7 @@ import json
 import polars as pl
 import pytest
 
-from xexeclab.engine import holdout, stability, walk_forward, window_sweep
+from xexeclab.engine import holdout, share_sweep, stability, walk_forward, window_sweep
 
 BUCKET = 1_000_000_000
 # An hour between sessions, so captures only line up by time into the session.
@@ -648,3 +648,68 @@ def test_a_sized_sweep_shares_the_fold_its_windows_open_on():
     assert sweep["walks"][0]["consensus"] == grown["consensus"]
     for w in (2, 3):
         assert _sized(sessions, 0.3, window=w)["folds"][0] == grown["folds"][w - 2]
+
+
+SHARES = [0.05, 0.3, 1.0]
+
+
+def _share_sweep(sessions, grid=SHARES):
+    return share_sweep(sessions, BUCKET, grid, CAPS, HALF_LIVES, 25.0, 5.0)
+
+
+def test_each_share_row_is_the_window_sweep_at_that_share():
+    """The share sweep is a re-run, not a new calculation: each row must be
+    what ``pov-window-sweep --parent-share`` prints at that share, with a cap
+    settled exactly where that sweep settled it."""
+    sessions = _in_order(*SIZED)
+    report = _share_sweep(sessions)
+    assert [r["parent_share"] for r in report["shares"]] == SHARES
+    for row in report["shares"]:
+        alone = window_sweep(
+            sessions, BUCKET, None, CAPS, HALF_LIVES, 25.0, 5.0, parent_share=row["parent_share"]
+        )
+        assert row["settled_caps"] == alone["settled_caps"]
+        assert row["last_verdicts"] == alone["walks"][0]["last_verdicts"]
+        for c, settled in enumerate(row["settled"]):
+            verdict = alone["walks"][0]["consensus"][c]
+            if alone["consensus_stable"][c] and verdict != "mixed":
+                assert settled == verdict
+            else:
+                assert settled is None
+        assert row["settled_caps"] == sum(1 for v in row["settled"] if v is not None)
+    assert report["caps"] == CAPS and report["sessions"] == 5
+
+
+def test_a_cap_holds_across_shares_only_when_every_share_settles_it_the_same():
+    """``share_stable`` is the strict reading: settled at every share, and on
+    one verdict. A cap settled at some shares is counted in ``settled_at``
+    and not held, because the share decided it."""
+    report = _share_sweep(_in_order(*SIZED))
+    rows = report["shares"]
+    for c in range(len(CAPS)):
+        column = [r["settled"][c] for r in rows]
+        assert report["settled_at"][c] == sum(1 for v in column if v is not None)
+        held = column[0] is not None and len(set(column)) == 1
+        assert report["share_stable"][c] == held
+        if report["share_stable"][c]:
+            assert report["settled_at"][c] == len(SHARES)
+        newest = {r["last_verdicts"][c] for r in rows}
+        assert report["last_share_stable"][c] == (len(newest) == 1)
+    assert report["held_caps"] == sum(report["share_stable"])
+    # Nothing in the report ranks the shares.
+    assert not any("best" in k for k in report)
+
+
+@pytest.mark.parametrize(
+    ("grid", "match"),
+    [
+        ([0.1], "share_grid needs at least 2 points"),
+        ([0.2, 0.1], "share_grid must be strictly increasing"),
+        ([0.1, 0.1], "share_grid must be strictly increasing"),
+        ([0.5, 1.5], r"parent_share must be in \(0, 1\]"),
+        ([0.0, 0.5], r"parent_share must be in \(0, 1\]"),
+    ],
+)
+def test_a_share_grid_that_is_not_a_sweep_is_refused(grid, match):
+    with pytest.raises(ValueError, match=match):
+        _share_sweep(_in_order(*SIZED[:4]), grid)

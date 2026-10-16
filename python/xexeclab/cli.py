@@ -32,6 +32,7 @@ from .engine import (
     sensitivity,
     session_twap,
     session_vwap,
+    share_sweep,
     shortfall,
     stability,
     stream_session,
@@ -329,6 +330,25 @@ def cmd_pov_window_sweep(a: argparse.Namespace) -> None:
                 a.coef_bps,
                 a.perm_coef_bps,
                 a.parent_share,
+            )
+        )
+    )
+
+
+def cmd_pov_share_sweep(a: argparse.Namespace) -> None:
+    # The same line as ``pov-window-sweep`` with ``--share-grid`` in place of
+    # a parent: the sweep sizes every fold at each share in turn.
+    paths = [p.strip() for p in a.history.split(",")] + [a.input]
+    print(
+        json.dumps(
+            share_sweep(
+                [read_ticks(p) for p in paths],
+                a.bucket_ms * 1_000_000,
+                [float(s) for s in a.share_grid.split(",")],
+                [float(s) for s in a.cap_grid.split(",")],
+                [float(s) for s in a.half_life_grid.split(",")],
+                a.coef_bps,
+                a.perm_coef_bps,
             )
         )
     )
@@ -975,6 +995,43 @@ def main(argv: list[str] | None = None) -> None:
         help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
     )
     pws.set_defaults(fn=cmd_pov_window_sweep)
+
+    pss = sub.add_parser(
+        "pov-share-sweep",
+        help="run pov-window-sweep at every parent share on a grid; never a best share",
+    )
+    pss.add_argument(
+        "--history",
+        required=True,
+        help="comma-separated captures, oldest first and not overlapping in time",
+    )
+    pss.add_argument("--input", required=True, help="the newest session of the walk")
+    pss.add_argument("--bucket-ms", type=int, default=1000, help="bucket width in milliseconds")
+    pss.add_argument(
+        "--share-grid",
+        default="0.05,0.1,0.2",
+        help="comma-separated, strictly increasing grid of parent shares, each in (0, 1]",
+    )
+    pss.add_argument(
+        "--cap-grid",
+        default="0.1,0.2,0.3",
+        help="comma-separated, strictly increasing grid of caps, each in (0, 1]",
+    )
+    pss.add_argument(
+        "--half-life-grid",
+        default="0.25,0.5,1,2,4",
+        help="comma-separated, strictly increasing grid of half-lives, each > 0",
+    )
+    pss.add_argument(
+        "--coef-bps", type=float, default=10.0, help="temporary impact in bps at full participation"
+    )
+    pss.add_argument(
+        "--perm-coef-bps",
+        type=float,
+        default=0.0,
+        help="permanent (linear) impact in bps at full participation (0 = temporary-only)",
+    )
+    pss.set_defaults(fn=cmd_pov_share_sweep)
 
     pim = sub.add_parser(
         "impact", help="square-root market-impact cost curve over a participation schedule"
