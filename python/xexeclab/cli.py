@@ -95,7 +95,16 @@ def cmd_ingest_book(a: argparse.Namespace) -> None:
     from .ingest import stream_coinbase_book
 
     log = EventLog(a.event_log)
-    n = asyncio.run(stream_coinbase_book(a.product, a.out, a.max_snapshots, a.levels, log))
+    n = asyncio.run(
+        stream_coinbase_book(
+            a.product,
+            a.out,
+            _count(a.max_snapshots, a.seconds),
+            a.levels,
+            log,
+            seconds=a.seconds,
+        )
+    )
     print(f"captured {n} book snapshots -> {a.out}")
 
 
@@ -1171,8 +1180,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     pib.add_argument("--product", default="BTC-USD")
     pib.add_argument("--out", required=True)
-    pib.add_argument("--max-snapshots", type=int, default=500)
+    pib.add_argument("--max-snapshots", type=int, default=None, help="default 500 unless --seconds")
     pib.add_argument("--levels", type=int, default=10, help="top levels per side to record")
+    pib.add_argument(
+        "--seconds", type=float, default=None, help="stop after this much exchange time"
+    )
     pib.add_argument("--event-log", default=None)
     pib.set_defaults(fn=cmd_ingest_book)
 

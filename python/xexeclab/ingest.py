@@ -256,12 +256,16 @@ async def stream_coinbase_quotes(
 async def stream_coinbase_book(
     product: str,
     out_path: str | Path,
-    max_snapshots: int,
+    max_snapshots: int | None,
     levels: int = 10,
     log: EventLog | None = None,
     max_reconnects: int = 5,
+    seconds: float | None = None,
 ) -> int:
     """Reconstruct the L2 book live and write its top `levels` as a depth replay.
+
+    `seconds` bounds it by exchange time, as in `stream_coinbase`, so a book
+    taken beside a trade capture with the same `seconds` covers the same stretch.
 
     Subscribes to Coinbase's public `level2_batch` channel: one `snapshot` seeds
     the book, then each `l2update` mutates it in place (`apply_l2_update`). After
@@ -276,20 +280,28 @@ async def stream_coinbase_book(
     import websockets
 
     sub = {"type": "subscribe", "product_ids": [product], "channels": ["level2_batch"]}
+    bound = _Bound(max_snapshots, seconds)
     written = 0
     reconnects = 0
     if log:
-        log.emit("book_ingest_start", product=product, max_snapshots=max_snapshots, levels=levels)
+        log.emit(
+            "book_ingest_start",
+            product=product,
+            max_snapshots=max_snapshots,
+            levels=levels,
+            seconds=seconds,
+        )
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
-        while written < max_snapshots:
+        while not bound.done(written):
             # Reset on (re)connect: the fresh snapshot is the backfill.
             bid_book: dict[float, float] = {}
             ask_book: dict[float, float] = {}
             try:
-                async with websockets.connect(COINBASE_WS, ping_interval=20) as ws:
+                # The snapshot is the whole book, past websockets' 1 MiB default.
+                async with websockets.connect(COINBASE_WS, ping_interval=20, max_size=None) as ws:
                     await ws.send(json.dumps(sub))
-                    while written < max_snapshots:
+                    while not bound.done(written):
                         msg = json.loads(await ws.recv())
                         mtype = msg.get("type")
                         if mtype == "snapshot":
@@ -300,12 +312,11 @@ async def stream_coinbase_book(
                         apply_l2_update(bid_book, ask_book, msg.get("changes", []))
                         if not bid_book or not ask_book:
                             continue
+                        ts_ns = _iso_to_ns(msg["time"])
+                        if bound.expired(ts_ns):
+                            break
                         rows = book_levels(
-                            bid_book,
-                            ask_book,
-                            product=product,
-                            ts_ns=_iso_to_ns(msg["time"]),
-                            levels=levels,
+                            bid_book, ask_book, product=product, ts_ns=ts_ns, levels=levels
                         )
                         for row in rows:
                             f.write(json.dumps(row) + "\n")

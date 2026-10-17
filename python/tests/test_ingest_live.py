@@ -38,11 +38,13 @@ class _Feed:
     def __init__(self, connections: list[list[dict]]):
         self._connections = list(connections)
         self.urls: list[str] = []
+        self.options: list[dict] = []
         self.subscriptions: list[dict] = []
 
-    def connect(self, url: str, **_kwargs):
+    def connect(self, url: str, **options):
         assert self._connections, "the collector connected more often than the feed scripted"
         self.urls.append(url)
+        self.options.append(options)
         return _Socket(self, self._connections.pop(0))
 
 
@@ -235,3 +237,49 @@ def test_a_reconnected_book_is_rebuilt_from_the_fresh_snapshot(feed, tmp_path):
     after = [r for r in rows if r["ts_ns"] != rows[0]["ts_ns"]]
     assert {r["price"] for r in before} == {100.0, 99.0, 101.0}
     assert {r["price"] for r in after} == {90.0, 91.0, 92.0}
+
+
+def _l2update(second: int, price: str) -> dict:
+    return {
+        "type": "l2update",
+        "time": f"2024-07-01T00:00:{second:02d}.000000Z",
+        "changes": [["buy", price, "1.0"]],
+    }
+
+
+def test_a_timed_book_capture_covers_the_same_window_as_the_trades(feed, tmp_path):
+    """A book recorded beside a trade capture is only useful if both cover the
+    same stretch, and a snapshot count cannot promise that: updates come in
+    bursts. The window opens at the first snapshot written and the update that
+    reaches its end is not written."""
+    seed = {"type": "snapshot", "bids": [["100.0", "1.0"]], "asks": [["101.0", "1.0"]]}
+    feed([[seed, *[_l2update(i, f"{90 + i}.0") for i in range(1, 7)]]])
+    out = tmp_path / "book.ndjson"
+    log = EventLog()
+    n = asyncio.run(stream_coinbase_book("BTC-USD", out, None, levels=1, log=log, seconds=3))
+    assert n == 3
+    assert sorted({r["ts_ns"] for r in _lines(out)}) == [
+        1_719_792_001_000_000_000,
+        1_719_792_002_000_000_000,
+        1_719_792_003_000_000_000,
+    ]
+    assert log.events[0]["seconds"] == 3
+    assert log.events[-1]["snapshots"] == 3
+
+
+def test_a_book_capture_with_no_bound_is_refused_before_it_connects(feed, tmp_path):
+    fake = feed([])
+    with pytest.raises(ValueError, match="count, a duration"):
+        asyncio.run(stream_coinbase_book("BTC-USD", tmp_path / "b.ndjson", None))
+    assert fake.urls == []
+
+
+def test_the_book_connection_takes_a_snapshot_of_any_size(feed, tmp_path):
+    """The live BTC-USD `level2_batch` snapshot is the whole book, over a
+    megabyte, and `websockets` closes any connection whose message passes its
+    1 MiB default -- before the collector sees it. Every reconnect asks for the
+    snapshot again, so a capped connection never records a single row."""
+    seed = {"type": "snapshot", "bids": [["100.0", "1.0"]], "asks": [["101.0", "1.0"]]}
+    fake = feed([[seed, _l2update(1, "99.0")]])
+    asyncio.run(stream_coinbase_book("BTC-USD", tmp_path / "book.ndjson", 1))
+    assert fake.options[0]["max_size"] is None
