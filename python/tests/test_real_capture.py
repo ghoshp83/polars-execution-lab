@@ -224,3 +224,68 @@ def test_across_shares_day_one_settles_nothing_and_the_newest_session_flips(sess
     assert report["last_share_stable"] == [False] * 5
     at_25 = [r["last_verdicts"][4] for r in report["shares"]]
     assert at_25 == ["gain", "gain", "unstable", "loss", "loss"]
+
+
+@pytest.fixture(scope="module")
+def day_three():
+    return [read_ticks(REAL / f"btc_usd_d3_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_three_is_its_own_unbroken_run_and_the_quietest(day_two, day_three):
+    # A third unbroken run, two and a half days after the second, and the
+    # quietest of the three: under 3 BTC against 14 and 89, with a last session
+    # that traded less than a tenth of one.
+    ids = [i for s in day_three for i in s["trade_id"].to_list()]
+    ts = [t for s in day_three for t in s["ts_ns"].to_list()]
+    assert len(ids) == 1986
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    assert ts[0] - max(s["ts_ns"].max() for s in day_two) > 48 * 3600 * 10**9
+    assert 2.5 < sum(s["size"].sum() for s in day_three) < 3.0
+    assert day_three[5]["size"].sum() < 0.1
+
+
+def test_on_the_quietest_day_what_holds_across_shares_is_only_inert(day_three):
+    """What holds across every share is the newest session's reading at four
+    caps, and it holds because that session is inert there: a 0.067 BTC session
+    gives every half-life the same figure. `last_share_stable` is a verdict that
+    did not move, not one that says gain or loss."""
+    report = share_sweep(
+        day_three, BUCKET, [0.05, 0.085, 0.15, 0.3, 0.6], CAPS, HALF_LIVES, 25.0, 5.0
+    )
+    assert report["settled_at"] == [0] * 5
+    assert report["held_caps"] == 0
+    assert report["last_share_stable"] == [True, True, True, True, False]
+    assert all(r["last_verdicts"][:4] == ["inert"] * 4 for r in report["shares"])
+    at_25 = [r["last_verdicts"][4] for r in report["shares"]]
+    assert at_25 == ["unstable", "inert", "inert", "inert", "inert"]
+
+
+def test_the_recorded_book_covers_its_session_and_runs_out_of_levels(day_three):
+    """The first recorded book: the top ten levels of each side after every
+    `level2_batch` update, over the same 100 seconds as the first day-three
+    session. Ten levels of BTC-USD hold well under one bitcoin, so the README's
+    0.2 BTC parent swept at once does not always fit, and two never does."""
+    from xexeclab.engine import depth_metrics, read_book, sweep_cost, sweep_curve
+
+    book = read_book(REAL / "btc_usd_d3_1_book.ndjson")
+    session = day_three[0]
+    assert book["ts_ns"].min() // BUCKET == session["ts_ns"].min() // BUCKET
+    assert book["ts_ns"].max() // BUCKET == session["ts_ns"].max() // BUCKET
+
+    depth = depth_metrics(book, "BTC-USD")
+    assert depth["snapshots"] == 1431
+    assert depth["avg_ask_depth"] == 0.66147753
+    assert depth["avg_bid_depth"] == 0.73534154
+    assert depth["avg_spread"] < 0.015
+
+    parent = sweep_cost(book, "BTC-USD", "buy", 0.2)
+    assert parent["filled_snapshots"] == 1279
+    assert sweep_cost(book, "BTC-USD", "buy", 2.0)["filled_snapshots"] == 0
+    # The bid holds more size and still costs more to hit: it sits further out.
+    sell = sweep_cost(book, "BTC-USD", "sell", 0.2)
+    assert sell["avg_slippage_bps"] > 7.0 * parent["avg_slippage_bps"]
+
+    curve = sweep_curve(book, "BTC-USD", "buy", [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0])
+    assert curve["fitted_points"] == 3
+    assert curve["coef_bps"] == 0.0848413

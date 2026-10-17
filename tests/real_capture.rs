@@ -3,8 +3,11 @@
 //! slices. Every other capture in `data/` was written by hand to make a point;
 //! these were not, so what the engine reports on them is a measurement.
 
+use xexec::curve::sweep_curve;
+use xexec::depth::depth_metrics;
 use xexec::model::Tick;
-use xexec::replay::read_ticks;
+use xexec::replay::{read_book, read_ticks};
+use xexec::sweep::sweep_cost;
 use xexec::walkforward::{
     share_sweep, walk_forward, walk_forward_share, window_sweep, window_sweep_share,
     WindowSweepReport,
@@ -233,4 +236,103 @@ fn across_shares_day_one_settles_nothing_and_the_newest_session_flips() {
         .map(|r| r.last_verdicts[4].as_str())
         .collect();
     assert_eq!(at_25, ["gain", "gain", "unstable", "loss", "loss"]);
+}
+
+/// Day three: the same feed, collector and cut, on a Saturday morning.
+fn day_three() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d3_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A third unbroken run, two and a half days after the second, and the
+/// quietest of the three: under 3 BTC against 14 and 89, with a last session
+/// that traded less than a tenth of one.
+#[test]
+fn day_three_is_its_own_unbroken_run_and_the_quietest() {
+    let day_two = day_two();
+    let day_three = day_three();
+    let ticks: Vec<&Tick> = day_three.iter().flatten().collect();
+    assert_eq!(ticks.len(), 1986);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_two = day_two.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_two > 48 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 2.5 && volume < 3.0);
+    let last: f64 = day_three[5].iter().map(|t| t.size).sum();
+    assert!(last < 0.1);
+}
+
+/// On the quietest day the share sweep settles nothing either. What does hold
+/// across every share is the newest session's reading at four caps -- and it
+/// holds because that session is inert there: a 0.067 BTC session gives every
+/// half-life the same figure. `last_share_stable` is a verdict that did not
+/// move, not a verdict that says gain or loss.
+#[test]
+fn on_the_quietest_day_what_holds_across_shares_is_only_inert() {
+    let report = share_sweep(
+        &day_three(),
+        BUCKET,
+        &[0.05, 0.085, 0.15, 0.3, 0.6],
+        &CAPS,
+        &HALF_LIVES,
+        25.0,
+        5.0,
+    )
+    .unwrap();
+    assert_eq!(report.settled_at, [0; 5]);
+    assert_eq!(report.held_caps, 0);
+    assert_eq!(report.last_share_stable, [true, true, true, true, false]);
+    for row in &report.shares {
+        assert!(row.last_verdicts[..4].iter().all(|v| v == "inert"));
+    }
+    let at_25: Vec<&str> = report
+        .shares
+        .iter()
+        .map(|r| r.last_verdicts[4].as_str())
+        .collect();
+    assert_eq!(at_25, ["unstable", "inert", "inert", "inert", "inert"]);
+}
+
+/// The first recorded book: the top ten levels of each side after every
+/// `level2_batch` update, over the same 100 seconds as the first day-three
+/// session. Ten levels of BTC-USD hold well under one bitcoin, so the README's
+/// 0.2 BTC parent swept at once does not always fit, and two never does.
+#[test]
+fn the_recorded_book_covers_its_session_and_runs_out_of_levels() {
+    let book = read_book("data/real/btc_usd_d3_1_book.ndjson").expect("recorded book must load");
+    let session = &day_three()[0];
+    let first = book.iter().map(|l| l.ts_ns).min().unwrap();
+    let last = book.iter().map(|l| l.ts_ns).max().unwrap();
+    assert_eq!(first / BUCKET, session[0].ts_ns / BUCKET);
+    assert_eq!(last / BUCKET, session[session.len() - 1].ts_ns / BUCKET);
+
+    let depth = depth_metrics(&book, "BTC-USD").unwrap();
+    assert_eq!(depth.snapshots, 1431);
+    assert!((depth.avg_ask_depth - 0.66147753).abs() < 1e-8);
+    assert!((depth.avg_bid_depth - 0.73534154).abs() < 1e-8);
+    assert!(depth.avg_spread < 0.015);
+
+    let parent = sweep_cost(&book, "BTC-USD", "buy", 0.2).unwrap();
+    assert_eq!(parent.filled_snapshots, 1279);
+    let two = sweep_cost(&book, "BTC-USD", "buy", 2.0).unwrap();
+    assert_eq!(two.filled_snapshots, 0);
+    // The bid holds more size and still costs more to hit: it sits further out.
+    let sell = sweep_cost(&book, "BTC-USD", "sell", 0.2).unwrap();
+    assert!(sell.avg_slippage_bps > 7.0 * parent.avg_slippage_bps);
+
+    let curve = sweep_curve(
+        &book,
+        "BTC-USD",
+        "buy",
+        &[0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0],
+    )
+    .unwrap();
+    assert_eq!(curve.fitted_points, 3);
+    assert!((curve.coef_bps - 0.0848413).abs() < 1e-8);
 }
