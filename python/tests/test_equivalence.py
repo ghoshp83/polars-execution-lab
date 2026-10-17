@@ -86,6 +86,11 @@ BUCKET_MS = 1000
 # Parent shares for the recorded share sweep, either side of the 8.5% the
 # sized window sweep is checked at.
 SHARE_GRID = [0.05, 0.085, 0.15]
+# The recorded book: 1,431 snapshots from the exchange, where the sample has
+# five. The ladder runs past what ten levels hold, so the short-fill rule is
+# compared on real depth too.
+REAL_BOOK = "data/real/btc_usd_d3_1_book.ndjson"
+REAL_CURVE_SIZES = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0]
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
 
@@ -2103,3 +2108,33 @@ def test_rust_and_python_both_refuse_a_parent_on_a_share_sweep(capsys):
             main(line)
         assert exit_info.value.code == 2
         assert "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_rust_and_python_agree_on_the_recorded_book():
+    """The thirty-ninth: every book metric on the recorded book. The sample book
+    was written to be summed by hand; this one is 1,431 snapshots of uneven
+    depth, long enough that a differently ordered running total would show."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    def rust(*line: str) -> dict:
+        proc = subprocess.run(
+            [binary, line[0], "--input", REAL_BOOK, *line[1:]],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(proc.stdout)
+
+    df = read_book(REAL_BOOK)
+    assert rust("depth") == depth_metrics(df, "BTC-USD")
+    assert rust("queue") == queue_metrics(df, "BTC-USD")
+    for side in ("buy", "sell"):
+        assert rust("sweep", "--side", side, "--size", "0.2") == sweep_cost(
+            df, "BTC-USD", side, 0.2
+        )
+    sizes = ",".join(str(q) for q in REAL_CURVE_SIZES)
+    curve = rust("curve", "--side", "buy", "--sizes", sizes)
+    assert curve == sweep_curve(df, "BTC-USD", "buy", REAL_CURVE_SIZES)
+    assert curve["fitted_points"] < curve["points"]
