@@ -330,8 +330,12 @@ uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --ma
 # minutes whether the market prints 2,000 trades in it or 6,000
 uv run xexeclab ingest        --product BTC-USD --out out/btc.ndjson        --seconds 610
 uv run xexeclab ingest-quotes --product BTC-USD --out out/btc_quotes.ndjson --seconds 610
+uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --seconds 130 --levels 10
 uv run xexeclab summary --input out/btc.ndjson
 uv run xexeclab depth   --input out/btc_book.ndjson
+# ...or the book recorded beside day three: a 0.2 BTC buy swept at once fits
+# the top ten levels in 1,279 of 1,431 snapshots, and 2 BTC in none
+uv run xexeclab sweep   --input data/real/btc_usd_d3_1_book.ndjson --side buy --size 0.2
 
 # --- Rust engine ---------------------------------------------------
 cargo run --release --bin xexec -- summary --input data/sample_ticks.ndjson --bucket-ms 1000
@@ -432,10 +436,15 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
-  to make each command's point on a few rows. `data/real/` holds twelve
-  recorded sessions — two ten-minute runs of consecutive BTC-USD trades a day
-  apart, 1,916 and 5,248 of them — and 100 seconds of recorded quotes. They
-  are real but are not a sample of a market: see `data/real/README.md`.
+  to make each command's point on a few rows. `data/real/` holds eighteen
+  recorded sessions — three ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248 and 1,986 of them — plus 100 seconds of
+  recorded quotes and 100 seconds of recorded book. They are real but are not
+  a sample of a market: see `data/real/README.md`. The book keeps ten levels a
+  side, which averaged 0.66 BTC on the ask. A 2 BTC sweep runs off it in every
+  snapshot, so its cost there is a floor, and `curve` fits its coefficient
+  from the three smallest sizes alone (0.085 bps against displayed depth, a
+  different denominator from the traded volume `--coef-bps` is set against).
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
@@ -779,7 +788,13 @@ This is a **market-data and execution-analytics** project, not a trading system.
   verdicts turn `inert` from the tightest cap upward, until a parent that large
   binds both plans alike at every cap. That makes fifteen sweeps of recorded
   trades with no settled cap. The rows come in grid order and none is ranked
-  as best.
+  as best. **A third day, the quietest, settles nothing either.** A Saturday
+  morning (`data/real/btc_usd_d3_*`) traded 2.76 BTC in ten minutes, and its
+  newest session 0.067 BTC. Swept over the same shares it settles no cap, and
+  neither do all eighteen sessions as one history. There `last_share_stable` is
+  true at every cap, but only because the newest session is `inert` at every
+  share: so little traded that every half-life gives the same figure. A
+  verdict that does not move is not a verdict of gain or loss.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
