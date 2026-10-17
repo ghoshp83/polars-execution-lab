@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.45.0] - 2026-10-17
+
+### Fixed
+- **`ingest-book` records the live feed.** The BTC-USD `level2_batch` snapshot
+  is the whole book, over a megabyte, and `websockets` closes a connection whose
+  message passes its 1 MiB default before the collector reads it. Each reconnect
+  asked for the snapshot again, so the live collector never wrote a row. The
+  book connection now takes a message of any size. The offline tests never sent
+  a snapshot that large; one now checks the connection's limit.
+
+### Added
+- **`ingest-book --seconds`**, as `ingest` and `ingest-quotes` have, so a book
+  recorded beside a trade capture covers the same stretch of exchange time.
+  `--max-snapshots` now defaults to 500 only when no duration is given.
+- **A third recorded day**, `data/real/btc_usd_d3_{1..6}`: a Saturday morning,
+  1,986 trades and 2.76 BTC, the quietest of the three.
+- **The first recorded book**, `data/real/btc_usd_d3_1_book.ndjson`: 1,431
+  snapshots of the top ten levels per side, cut to the first day-three session.
+- **What both do**, pinned in both languages. Over the day-three sessions the
+  share sweep settles no cap, and `last_share_stable` is true at four caps only
+  because the newest session is `inert` there. On the book, a 0.2 BTC buy swept
+  at once fills in 1,279 of 1,431 snapshots and 2 BTC in none; `curve` fits
+  0.0848413 bps from the three sizes that fill.
+- **Equivalence test 39:** depth, queue, both sweeps and the curve on the
+  recorded book, Rust against Python, bit for bit.
+
+### Notes
+- All eighteen recorded sessions as one history, swept over shares 5% to 60%,
+  also settle no cap. The newest session is inert at every cap and every share.
+- The book's coefficient is fitted against displayed depth and the share
+  sweep's `--coef-bps` against traded volume, so the one is not a value for
+  the other.
+
 ## [0.44.0] - 2026-10-16
 
 ### Added
