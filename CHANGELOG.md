@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.46.0] - 2026-10-18
+
+### Added
+- **`ingest-book --every SECONDS`** writes at most one snapshot per that much
+  exchange time. Every update in between is still applied, so each snapshot
+  written is the whole book at its instant; only the ones between are dropped.
+  The feed sends over ten updates a second, so a deep book over a whole run was
+  otherwise too large to keep. A value that is not positive is refused before
+  the collector connects.
+- **A fourth recorded day**, `data/real/btc_usd_d4_{1..6}`: a Sunday morning,
+  938 trades and 4.52 BTC.
+- **A deep recorded book**, `data/real/btc_usd_d4_book.ndjson`: fifty levels a
+  side, one snapshot every five seconds, 119 snapshots over all six day-four
+  sessions.
+- **What both do**, pinned in both languages. Day four settles no cap at any
+  share, and its newest session, which traded over a bitcoin, is inert nowhere,
+  so `last_share_stable` is false at every cap. On the deep book 5 BTC fills on
+  either side in every snapshot; the same snapshots cut to ten levels fill 2 BTC
+  in 32 of 119 and 5 BTC in none.
+- **Equivalence test 40:** depth, queue, 5 BTC sweeps and an eight-point curve
+  on the deep book, Rust against Python, bit for bit.
+
+### Notes
+- `curve` divides by the depth recorded, so the depth recorded sets the
+  coefficient. On the same day-four snapshots it fits 1.744 bps from all eight
+  sizes at fifty levels and 0.483 bps from three at ten. The 0.085 bps v0.45.0
+  fitted on the ten-level day-three book is the same kind of floor.
+- All twenty-four recorded sessions as one history, swept over shares 5% to 60%,
+  settle no cap.
+
 ## [0.45.0] - 2026-10-17
 
 ### Fixed
