@@ -1,9 +1,9 @@
 # Recorded sessions
 
-Three runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
+Four runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
 into six consecutive 100-second sessions, taken with `xexeclab ingest`: a
-weekday morning, a weekday afternoon thirty-one hours later, and a Saturday
-morning.
+weekday morning, a weekday afternoon thirty-one hours later, a Saturday
+morning, and the Sunday morning after it.
 
 **Day one** — 2026-10-13, 08:16:50 to 08:26:50 UTC:
 
@@ -47,6 +47,21 @@ Trade ids 1107335588 to 1107337573: 1,986 trades, 2.76 BTC. About as many
 trades as day one, a fifth of its volume and a thirtieth of day two's. The last
 session traded 0.067 BTC.
 
+**Day four** — 2026-10-18 (a Sunday), 08:49:50 to 08:59:50 UTC:
+
+| File | Trades | Volume (BTC) |
+|---|---|---|
+| `btc_usd_d4_1.ndjson` | 109 | 0.289501 |
+| `btc_usd_d4_2.ndjson` | 135 | 0.432126 |
+| `btc_usd_d4_3.ndjson` | 135 | 1.061810 |
+| `btc_usd_d4_4.ndjson` | 148 | 1.247667 |
+| `btc_usd_d4_5.ndjson` | 257 | 0.423583 |
+| `btc_usd_d4_6.ndjson` | 154 | 1.065455 |
+
+Trade ids 1107571770 to 1107572707: 938 trades, 4.52 BTC. The fewest trades of
+the four days, but larger ones than day three's, and the last session traded
+over a bitcoin.
+
 **Quotes** — `btc_usd_d2_1_quotes.ndjson` is the top of the book from
 Coinbase's `ticker` channel, taken by `xexeclab ingest-quotes` alongside the
 day-two trades and cut to the first day-two session: 776 quotes. The ticker
@@ -66,6 +81,16 @@ or two of the touch: an order of one bitcoin swept at once runs off the
 recorded book in 89% of snapshots. Deeper levels exist on the exchange but are
 not in the file.
 
+**Deep book** — `btc_usd_d4_book.ndjson` is the same channel taken with
+`xexeclab ingest-book --levels 50 --every 5` alongside the day-four trades,
+over all six day-four sessions: 119 snapshots, 11,900 rows. `--every 5` writes
+at most one snapshot per five seconds of exchange time; every update in between
+is still applied to the book, so each snapshot is the book at that instant.
+Fifty levels hold 9.68 BTC on the ask and 10.54 on the bid on average, and an
+order of five bitcoin fills on either side in every snapshot. The same
+snapshots cut to their top ten levels hold 1.50 and 1.82, and fill a 2 BTC buy
+in 32 of 119.
+
 Each session file is 100 seconds, cut on a 10-second boundary, so every session
 has the same ten 10-second buckets. Within each run the trade ids are
 contiguous: nothing dropped, reordered or edited. The partial buckets at either
@@ -80,17 +105,21 @@ Two things were done to the day-one capture, and one to each of the others:
   sent. The collector at the time converted through a float and wrote values
   up to 128 ns off; it now converts in integers, and days two and three were
   recorded after that fix.
+- The deep book was cut to the six day-four sessions; the snapshots after the
+  last whole bucket were left out.
 
 ## What these are, and are not
 
 They are real trades, which the hand-written `data/sample_*.ndjson` captures are
-not. They are also thirty minutes of one product: a weekday morning, a weekday
-afternoon and a Saturday morning. A "session" here is a 100-second slice, not a trading
+not. They are also forty minutes of one product: a weekday morning, a weekday
+afternoon, a Saturday morning and a Sunday morning. A "session" here is a 100-second slice, not a trading
 day, and the six in each run are neighbours in time, so they are far from
-independent. Three days is enough to show that a result on one does not have to
-hold on another. It is not enough to say which one is typical, and the three
-traded volumes thirty times apart. The book is ten levels of one 100-second
+independent. Four days is enough to show that a result on one does not have to
+hold on another. It is not enough to say which one is typical, and the four
+traded volumes thirty times apart. The ten-level book is one 100-second
 stretch, so it says how shallow the touch was that morning, not how deep the
-market is. Use them to see how the
+market is. The deep book is fifty levels sampled every five seconds over ten
+minutes of a Sunday: deep enough that the sizes here fill, too sparse to see
+what happens between two snapshots. Use them to see how the
 commands behave on real prices and sizes; do not read a result on them as a
 property of the strategy.
