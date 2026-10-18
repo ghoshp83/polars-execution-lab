@@ -261,11 +261,17 @@ async def stream_coinbase_book(
     log: EventLog | None = None,
     max_reconnects: int = 5,
     seconds: float | None = None,
+    every: float | None = None,
 ) -> int:
     """Reconstruct the L2 book live and write its top `levels` as a depth replay.
 
     `seconds` bounds it by exchange time, as in `stream_coinbase`, so a book
     taken beside a trade capture with the same `seconds` covers the same stretch.
+
+    `every` thins what is written, not what is applied: every update still moves
+    the book, but a snapshot is written only once `every` seconds of exchange time
+    have passed since the last one written. The feed sends over ten updates a
+    second, so a deep book over a whole run is otherwise too large to keep.
 
     Subscribes to Coinbase's public `level2_batch` channel: one `snapshot` seeds
     the book, then each `l2update` mutates it in place (`apply_l2_update`). After
@@ -280,7 +286,11 @@ async def stream_coinbase_book(
     import websockets
 
     sub = {"type": "subscribe", "product_ids": [product], "channels": ["level2_batch"]}
+    if every is not None and not every > 0:
+        raise ValueError("every must be a positive number of seconds")
     bound = _Bound(max_snapshots, seconds)
+    every_ns = None if every is None else round(every * 1e9)
+    last_ns: int | None = None
     written = 0
     reconnects = 0
     if log:
@@ -290,6 +300,7 @@ async def stream_coinbase_book(
             max_snapshots=max_snapshots,
             levels=levels,
             seconds=seconds,
+            every=every,
         )
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
@@ -315,6 +326,10 @@ async def stream_coinbase_book(
                         ts_ns = _iso_to_ns(msg["time"])
                         if bound.expired(ts_ns):
                             break
+                        thinned = every_ns is not None and last_ns is not None
+                        if thinned and ts_ns - last_ns < every_ns:
+                            continue
+                        last_ns = ts_ns
                         rows = book_levels(
                             bid_book, ask_book, product=product, ts_ns=ts_ns, levels=levels
                         )

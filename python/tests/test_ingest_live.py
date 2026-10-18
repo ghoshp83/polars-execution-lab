@@ -283,3 +283,32 @@ def test_the_book_connection_takes_a_snapshot_of_any_size(feed, tmp_path):
     fake = feed([[seed, _l2update(1, "99.0")]])
     asyncio.run(stream_coinbase_book("BTC-USD", tmp_path / "book.ndjson", 1))
     assert fake.options[0]["max_size"] is None
+
+
+def test_a_thinned_book_still_applies_every_update_it_does_not_write(feed, tmp_path):
+    """`every` drops snapshots, not updates. The feed only sends deltas, so an
+    update skipped instead of applied would leave the next snapshot written
+    wrong for the rest of the run: the levels added at seconds 2 and 3 must
+    still be in the book written at second 4."""
+    seed = {"type": "snapshot", "bids": [["100.0", "1.0"]], "asks": [["101.0", "1.0"]]}
+    feed([[seed, *[_l2update(i, f"{90 + i}.0") for i in range(1, 7)]]])
+    out = tmp_path / "book.ndjson"
+    log = EventLog()
+    n = asyncio.run(
+        stream_coinbase_book("BTC-USD", out, None, levels=10, log=log, seconds=5, every=2.5)
+    )
+    assert n == 2
+    rows = _lines(out)
+    stamps = sorted({r["ts_ns"] for r in rows})
+    assert stamps == [1_719_792_001_000_000_000, 1_719_792_004_000_000_000]
+    bids = {r["price"] for r in rows if r["ts_ns"] == stamps[1] and r["side"] == "bid"}
+    assert bids == {100.0, 94.0, 93.0, 92.0, 91.0}
+    assert log.events[0]["every"] == 2.5
+
+
+@pytest.mark.parametrize("every", [0, -1.0])
+def test_a_book_thinned_to_no_interval_is_refused_before_it_connects(feed, tmp_path, every):
+    fake = feed([])
+    with pytest.raises(ValueError, match="positive number of seconds"):
+        asyncio.run(stream_coinbase_book("BTC-USD", tmp_path / "b.ndjson", 5, every=every))
+    assert fake.urls == []

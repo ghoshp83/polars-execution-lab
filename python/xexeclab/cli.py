@@ -103,6 +103,7 @@ def cmd_ingest_book(a: argparse.Namespace) -> None:
             a.levels,
             log,
             seconds=a.seconds,
+            every=a.every,
         )
     )
     print(f"captured {n} book snapshots -> {a.out}")
@@ -1184,6 +1185,9 @@ def main(argv: list[str] | None = None) -> None:
     pib.add_argument("--levels", type=int, default=10, help="top levels per side to record")
     pib.add_argument(
         "--seconds", type=float, default=None, help="stop after this much exchange time"
+    )
+    pib.add_argument(
+        "--every", type=float, default=None, help="write at most one snapshot per this many seconds"
     )
     pib.add_argument("--event-log", default=None)
     pib.set_defaults(fn=cmd_ingest_book)
