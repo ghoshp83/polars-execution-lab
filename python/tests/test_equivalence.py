@@ -91,6 +91,8 @@ SHARE_GRID = [0.05, 0.085, 0.15]
 # compared on real depth too.
 REAL_BOOK = "data/real/btc_usd_d3_1_book.ndjson"
 REAL_CURVE_SIZES = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0]
+DEEP_BOOK = "data/real/btc_usd_d4_book.ndjson"
+DEEP_CURVE_SIZES = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
 
@@ -2138,3 +2140,33 @@ def test_rust_and_python_agree_on_the_recorded_book():
     curve = rust("curve", "--side", "buy", "--sizes", sizes)
     assert curve == sweep_curve(df, "BTC-USD", "buy", REAL_CURVE_SIZES)
     assert curve["fitted_points"] < curve["points"]
+
+
+def test_rust_and_python_agree_on_the_deep_book():
+    """The fortieth: the fifty-level book, where every size fills and a sweep
+    walks two dozen levels deep, so the running totals are four times longer
+    than on the ten-level book and every curve point is fitted."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    def rust(*line: str) -> dict:
+        proc = subprocess.run(
+            [binary, line[0], "--input", DEEP_BOOK, *line[1:]],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(proc.stdout)
+
+    df = read_book(DEEP_BOOK)
+    assert rust("depth") == depth_metrics(df, "BTC-USD")
+    assert rust("queue") == queue_metrics(df, "BTC-USD")
+    for side in ("buy", "sell"):
+        assert rust("sweep", "--side", side, "--size", "5.0") == sweep_cost(
+            df, "BTC-USD", side, 5.0
+        )
+    sizes = ",".join(str(q) for q in DEEP_CURVE_SIZES)
+    curve = rust("curve", "--side", "buy", "--sizes", sizes)
+    assert curve == sweep_curve(df, "BTC-USD", "buy", DEEP_CURVE_SIZES)
+    assert curve["fitted_points"] == curve["points"]
