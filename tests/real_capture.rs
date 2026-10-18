@@ -336,3 +336,105 @@ fn the_recorded_book_covers_its_session_and_runs_out_of_levels() {
     assert_eq!(curve.fitted_points, 3);
     assert!((curve.coef_bps - 0.0848413).abs() < 1e-8);
 }
+
+/// Day four: the same feed, collector and cut, on the Sunday morning after.
+fn day_four() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d4_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A fourth unbroken run, the morning after the third: 938 trades and about
+/// four and a half BTC, with no session so quiet that it goes inert.
+#[test]
+fn day_four_is_its_own_unbroken_run_the_morning_after() {
+    let day_three = day_three();
+    let day_four = day_four();
+    let ticks: Vec<&Tick> = day_four.iter().flatten().collect();
+    assert_eq!(ticks.len(), 938);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_three = day_three.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_three > 20 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 4.5 && volume < 4.6);
+    assert!(day_four[5].iter().map(|t| t.size).sum::<f64>() > 1.0);
+}
+
+/// Day three's `last_share_stable` held only where its newest session was
+/// inert. Day four's newest session traded over a bitcoin, and the reading
+/// moves with the share at every cap: nothing holds once nothing is inert.
+#[test]
+fn when_the_newest_session_trades_nothing_holds_across_shares() {
+    let report = share_sweep(
+        &day_four(),
+        BUCKET,
+        &[0.05, 0.085, 0.15, 0.3, 0.6],
+        &CAPS,
+        &HALF_LIVES,
+        25.0,
+        5.0,
+    )
+    .unwrap();
+    assert_eq!(report.settled_at, [0; 5]);
+    assert_eq!(report.held_caps, 0);
+    assert_eq!(report.last_share_stable, [false; 5]);
+    for row in &report.shares {
+        assert!(row.last_verdicts.iter().all(|v| v != "inert"));
+    }
+    let at_25: Vec<&str> = report
+        .shares
+        .iter()
+        .map(|r| r.last_verdicts[4].as_str())
+        .collect();
+    assert_eq!(at_25, ["loss", "unstable", "unstable", "gain", "unstable"]);
+}
+
+/// The deep book: fifty levels a side, one snapshot every five seconds, over
+/// all six day-four sessions. Every size to 5 BTC fills in every snapshot. Cut
+/// to its own top ten levels, the same snapshots fill 2 BTC in 32 of 119 and
+/// 5 BTC in none, and the curve fits three points to a coefficient under a
+/// third of the deep one: a shallow recording sets a floor, not a measurement.
+#[test]
+fn fifty_levels_fill_what_ten_levels_of_the_same_book_could_not() {
+    let book = read_book("data/real/btc_usd_d4_book.ndjson").expect("recorded book must load");
+    let day = day_four();
+    let first = book.iter().map(|l| l.ts_ns).min().unwrap();
+    let last = book.iter().map(|l| l.ts_ns).max().unwrap();
+    assert_eq!(first / BUCKET, day[0][0].ts_ns / BUCKET);
+    assert!(last < (day[0][0].ts_ns / BUCKET + 60) * BUCKET);
+    assert_eq!(book.iter().map(|l| l.level).max(), Some(49));
+
+    let depth = depth_metrics(&book, "BTC-USD").unwrap();
+    assert_eq!(depth.snapshots, 119);
+    assert!((depth.avg_ask_depth - 9.67633378).abs() < 1e-8);
+    for side in ["buy", "sell"] {
+        let five = sweep_cost(&book, "BTC-USD", side, 5.0).unwrap();
+        assert_eq!(five.filled_snapshots, 119);
+    }
+    let top: Vec<_> = book.iter().filter(|l| l.level < 10).cloned().collect();
+    assert_eq!(
+        sweep_cost(&top, "BTC-USD", "buy", 2.0)
+            .unwrap()
+            .filled_snapshots,
+        32
+    );
+    assert_eq!(
+        sweep_cost(&top, "BTC-USD", "buy", 5.0)
+            .unwrap()
+            .filled_snapshots,
+        0
+    );
+
+    let sizes = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0];
+    let deep = sweep_curve(&book, "BTC-USD", "buy", &sizes).unwrap();
+    assert_eq!(deep.fitted_points, 8);
+    assert!((deep.coef_bps - 1.74400041).abs() < 1e-8);
+    let shallow = sweep_curve(&top, "BTC-USD", "buy", &sizes).unwrap();
+    assert_eq!(shallow.fitted_points, 3);
+    assert!((shallow.coef_bps - 0.48342117).abs() < 1e-8);
+}

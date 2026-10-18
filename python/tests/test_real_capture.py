@@ -289,3 +289,70 @@ def test_the_recorded_book_covers_its_session_and_runs_out_of_levels(day_three):
     curve = sweep_curve(book, "BTC-USD", "buy", [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0])
     assert curve["fitted_points"] == 3
     assert curve["coef_bps"] == 0.0848413
+
+
+@pytest.fixture(scope="module")
+def day_four():
+    return [read_ticks(REAL / f"btc_usd_d4_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_four_is_its_own_unbroken_run_the_morning_after(day_three, day_four):
+    # A fourth unbroken run, the morning after the third: 938 trades and about
+    # four and a half BTC, with no session so quiet that it goes inert.
+    ids = [i for s in day_four for i in s["trade_id"].to_list()]
+    ts = [t for s in day_four for t in s["ts_ns"].to_list()]
+    assert len(ids) == 938
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    assert ts[0] - max(s["ts_ns"].max() for s in day_three) > 20 * 3600 * 10**9
+    assert 4.5 < sum(s["size"].sum() for s in day_four) < 4.6
+    assert day_four[5]["size"].sum() > 1.0
+
+
+def test_when_the_newest_session_trades_nothing_holds_across_shares(day_four):
+    """Day three's `last_share_stable` held only where its newest session was
+    inert. Day four's newest session traded over a bitcoin, and the reading
+    moves with the share at every cap: nothing holds once nothing is inert."""
+    report = share_sweep(
+        day_four, BUCKET, [0.05, 0.085, 0.15, 0.3, 0.6], CAPS, HALF_LIVES, 25.0, 5.0
+    )
+    assert report["settled_at"] == [0] * 5
+    assert report["held_caps"] == 0
+    assert report["last_share_stable"] == [False] * 5
+    assert all("inert" not in r["last_verdicts"] for r in report["shares"])
+    at_25 = [r["last_verdicts"][4] for r in report["shares"]]
+    assert at_25 == ["loss", "unstable", "unstable", "gain", "unstable"]
+
+
+def test_fifty_levels_fill_what_ten_levels_of_the_same_book_could_not(day_four):
+    """The deep book: fifty levels a side, one snapshot every five seconds, over
+    all six day-four sessions. Every size to 5 BTC fills in every snapshot. Cut
+    to its own top ten levels, the same snapshots fill 2 BTC in 32 of 119 and
+    5 BTC in none, and the curve fits three points to a coefficient under a
+    third of the deep one: a shallow recording sets a floor, not a measurement."""
+    import polars as pl
+
+    from xexeclab.engine import depth_metrics, read_book, sweep_cost, sweep_curve
+
+    book = read_book(REAL / "btc_usd_d4_book.ndjson")
+    start = day_four[0]["ts_ns"].min() // BUCKET
+    assert book["ts_ns"].min() // BUCKET == start
+    assert book["ts_ns"].max() < (start + 60) * BUCKET
+    assert book["level"].max() == 49
+
+    depth = depth_metrics(book, "BTC-USD")
+    assert depth["snapshots"] == 119
+    assert depth["avg_ask_depth"] == 9.67633378
+    for side in ("buy", "sell"):
+        assert sweep_cost(book, "BTC-USD", side, 5.0)["filled_snapshots"] == 119
+    top = book.filter(pl.col("level") < 10)
+    assert sweep_cost(top, "BTC-USD", "buy", 2.0)["filled_snapshots"] == 32
+    assert sweep_cost(top, "BTC-USD", "buy", 5.0)["filled_snapshots"] == 0
+
+    sizes = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
+    deep = sweep_curve(book, "BTC-USD", "buy", sizes)
+    assert deep["fitted_points"] == 8
+    assert deep["coef_bps"] == 1.74400041
+    shallow = sweep_curve(top, "BTC-USD", "buy", sizes)
+    assert shallow["fitted_points"] == 3
+    assert shallow["coef_bps"] == 0.48342117
