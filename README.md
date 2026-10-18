@@ -331,11 +331,16 @@ uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --ma
 uv run xexeclab ingest        --product BTC-USD --out out/btc.ndjson        --seconds 610
 uv run xexeclab ingest-quotes --product BTC-USD --out out/btc_quotes.ndjson --seconds 610
 uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --seconds 130 --levels 10
+# ...a deep book over a whole run: every update is applied, one snapshot in
+# five seconds is written, so fifty levels for ten minutes stay a small file
+uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --seconds 610 --levels 50 --every 5
 uv run xexeclab summary --input out/btc.ndjson
 uv run xexeclab depth   --input out/btc_book.ndjson
 # ...or the book recorded beside day three: a 0.2 BTC buy swept at once fits
 # the top ten levels in 1,279 of 1,431 snapshots, and 2 BTC in none
 uv run xexeclab sweep   --input data/real/btc_usd_d3_1_book.ndjson --side buy --size 0.2
+# ...and the fifty-level book beside day four, where 5 BTC fills every time
+uv run xexeclab sweep   --input data/real/btc_usd_d4_book.ndjson   --side buy --size 5
 
 # --- Rust engine ---------------------------------------------------
 cargo run --release --bin xexec -- summary --input data/sample_ticks.ndjson --bucket-ms 1000
@@ -436,15 +441,20 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
-  to make each command's point on a few rows. `data/real/` holds eighteen
-  recorded sessions — three ten-minute runs of consecutive BTC-USD trades on
-  different days, 1,916, 5,248 and 1,986 of them — plus 100 seconds of
-  recorded quotes and 100 seconds of recorded book. They are real but are not
-  a sample of a market: see `data/real/README.md`. The book keeps ten levels a
-  side, which averaged 0.66 BTC on the ask. A 2 BTC sweep runs off it in every
-  snapshot, so its cost there is a floor, and `curve` fits its coefficient
-  from the three smallest sizes alone (0.085 bps against displayed depth, a
-  different denominator from the traded volume `--coef-bps` is set against).
+  to make each command's point on a few rows. `data/real/` holds twenty-four
+  recorded sessions — four ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248, 1,986 and 938 of them — plus 100 seconds of
+  recorded quotes and two recorded books. They are real but are not a sample
+  of a market: see `data/real/README.md`. The day-three book keeps ten levels
+  a side, which averaged 0.66 BTC on the ask: a 2 BTC sweep runs off it in
+  every snapshot, so its cost there is a floor. The day-four book keeps fifty,
+  sampled every five seconds, and fills 5 BTC on either side every time.
+  **How deep the file is changes the fitted coefficient.** `curve` divides by
+  the depth recorded, so on the same day-four snapshots it fits 1.744 bps from
+  all eight sizes at fifty levels and 0.483 bps from the three that fill at
+  ten. The 0.085 bps fitted on the ten-level day-three book is the same kind
+  of floor. Neither is in the units of `--coef-bps`, which is set against
+  traded volume.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
@@ -794,7 +804,13 @@ This is a **market-data and execution-analytics** project, not a trading system.
   neither do all eighteen sessions as one history. There `last_share_stable` is
   true at every cap, but only because the newest session is `inert` at every
   share: so little traded that every half-life gives the same figure. A
-  verdict that does not move is not a verdict of gain or loss.
+  verdict that does not move is not a verdict of gain or loss. **A fourth day
+  shows it.** On the Sunday morning after (`data/real/btc_usd_d4_*`, 4.52 BTC)
+  the newest session traded over a bitcoin and is inert at no cap and no share.
+  Day four settles nothing, and `last_share_stable` is false at every cap: the
+  newest session's verdict at the 25% cap runs `loss`, `unstable`, `unstable`,
+  `gain`, `unstable` as the share rises. All twenty-four sessions as one
+  history settle nothing either.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
