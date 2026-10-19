@@ -356,3 +356,85 @@ def test_fifty_levels_fill_what_ten_levels_of_the_same_book_could_not(day_four):
     shallow = sweep_curve(top, "BTC-USD", "buy", sizes)
     assert shallow["fitted_points"] == 3
     assert shallow["coef_bps"] == 0.48342117
+
+
+@pytest.fixture(scope="module")
+def day_five():
+    return [read_ticks(REAL / f"btc_usd_d5_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_five_is_its_own_unbroken_run_on_a_weekday(day_four, day_five):
+    # A fifth unbroken run, the weekday after the weekend: 2,425 trades and five
+    # times day four's volume, the busiest run since day two.
+    ids = [i for s in day_five for i in s["trade_id"].to_list()]
+    ts = [t for s in day_five for t in s["ts_ns"].to_list()]
+    assert len(ids) == 2425
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    assert ts[0] - max(s["ts_ns"].max() for s in day_four) > 20 * 3600 * 10**9
+    assert 22.7 < sum(s["size"].sum() for s in day_five) < 22.8
+
+
+def test_on_day_five_only_the_inert_cap_holds_across_shares(day_five):
+    """Day five's newest session is inert at the tightest cap at every share, so
+    that cap reads the same at every share's newest step; the other four move
+    with the share. One share settles the inert cap, and none settles the rest."""
+    report = share_sweep(
+        day_five, BUCKET, [0.05, 0.085, 0.15, 0.3, 0.6], CAPS, HALF_LIVES, 25.0, 5.0
+    )
+    assert report["held_caps"] == 0
+    assert report["settled_at"] == [1, 0, 0, 0, 0]
+    assert report["last_share_stable"] == [True, False, False, False, False]
+    assert all(r["last_verdicts"][0] == "inert" for r in report["shares"])
+
+
+def test_a_five_second_grid_keeps_the_curve_and_loses_the_top_of_book():
+    """Thirty seconds of the fifty-level book at the full update rate, with
+    copies of the previous snapshot left out, beside the five-second grid
+    `--every 5` would have kept from it. The grid keeps the depth and the curve:
+    the coefficient moves under 4%. It loses the top of book, which moves faster
+    than five seconds: the spread averages a quarter of the full-rate figure,
+    and the queue imbalance changes sign."""
+    import polars as pl
+
+    from xexeclab.engine import (
+        depth_metrics,
+        queue_metrics,
+        read_book,
+        sweep_cost,
+        sweep_curve,
+    )
+
+    book = read_book(REAL / "btc_usd_d5_book_full.ndjson")
+    snapshots = [
+        g.select("side", "level", "price", "size").rows()
+        for _, g in book.group_by("ts_ns", maintain_order=True)
+    ]
+    assert len(snapshots) == 330
+    assert all(a != b for a, b in zip(snapshots, snapshots[1:], strict=False))
+
+    kept: list[int] = []
+    for ts in book["ts_ns"].unique().sort().to_list():
+        if not kept or ts - kept[-1] >= 5 * 10**9:
+            kept.append(ts)
+    grid = book.filter(pl.col("ts_ns").is_in(kept))
+    assert len(kept) == 6
+
+    sizes = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
+    full = sweep_curve(book, "BTC-USD", "buy", sizes)
+    thin = sweep_curve(grid, "BTC-USD", "buy", sizes)
+    assert (full["fitted_points"], thin["fitted_points"]) == (7, 7)
+    assert full["coef_bps"] == 1.9721695
+    assert thin["coef_bps"] == 2.03941096
+    assert abs(thin["coef_bps"] / full["coef_bps"] - 1.0) < 0.04
+
+    full_depth = depth_metrics(book, "BTC-USD")
+    assert full_depth["avg_spread"] == 0.0400303
+    assert full_depth["avg_spread"] > 4 * depth_metrics(grid, "BTC-USD")["avg_spread"]
+    assert queue_metrics(book, "BTC-USD")["avg_queue_imbalance"] == 0.17003025
+    assert queue_metrics(grid, "BTC-USD")["avg_queue_imbalance"] < 0
+
+    # Monday's ask is thinner than Sunday's: 5 BTC lifts all fifty levels and
+    # does not fill, while the deeper bid takes it in every snapshot.
+    assert sweep_cost(book, "BTC-USD", "buy", 5.0)["filled_snapshots"] == 0
+    assert sweep_cost(book, "BTC-USD", "sell", 5.0)["filled_snapshots"] == 330

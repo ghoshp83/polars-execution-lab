@@ -4,7 +4,7 @@
 //! these were not, so what the engine reports on them is a measurement.
 
 use xexec::curve::sweep_curve;
-use xexec::depth::depth_metrics;
+use xexec::depth::{depth_metrics, queue_metrics};
 use xexec::model::Tick;
 use xexec::replay::{read_book, read_ticks};
 use xexec::sweep::sweep_cost;
@@ -437,4 +437,110 @@ fn fifty_levels_fill_what_ten_levels_of_the_same_book_could_not() {
     let shallow = sweep_curve(&top, "BTC-USD", "buy", &sizes).unwrap();
     assert_eq!(shallow.fitted_points, 3);
     assert!((shallow.coef_bps - 0.48342117).abs() < 1e-8);
+}
+
+/// Day five: the same feed, collector and cut, on the Monday morning after.
+fn day_five() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d5_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A fifth unbroken run, the weekday after the weekend: 2,425 trades and five
+/// times day four's volume, the busiest run since day two.
+#[test]
+fn day_five_is_its_own_unbroken_run_on_a_weekday() {
+    let day_four = day_four();
+    let day_five = day_five();
+    let ticks: Vec<&Tick> = day_five.iter().flatten().collect();
+    assert_eq!(ticks.len(), 2425);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_four = day_four.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_four > 20 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 22.7 && volume < 22.8);
+}
+
+/// Day five's newest session is inert at the tightest cap at every share, so
+/// that cap reads the same at every share's newest step; the other four move
+/// with the share. One share settles the inert cap, and none settles the rest.
+#[test]
+fn on_day_five_only_the_inert_cap_holds_across_shares() {
+    let report = share_sweep(
+        &day_five(),
+        BUCKET,
+        &[0.05, 0.085, 0.15, 0.3, 0.6],
+        &CAPS,
+        &HALF_LIVES,
+        25.0,
+        5.0,
+    )
+    .unwrap();
+    assert_eq!(report.held_caps, 0);
+    assert_eq!(report.settled_at, [1, 0, 0, 0, 0]);
+    assert_eq!(report.last_share_stable, [true, false, false, false, false]);
+    for row in &report.shares {
+        assert_eq!(row.last_verdicts[0], "inert");
+    }
+}
+
+/// Thirty seconds of the fifty-level book at the full update rate, with copies
+/// of the previous snapshot left out, beside the five-second grid `--every 5`
+/// would have kept from it. The grid keeps the depth and the curve: the
+/// coefficient moves under 4%. It loses the top of book, which moves faster
+/// than five seconds: the spread averages a quarter of the full-rate figure,
+/// and the queue imbalance changes sign.
+#[test]
+fn a_five_second_grid_keeps_the_curve_and_loses_the_top_of_book() {
+    let book = read_book("data/real/btc_usd_d5_book_full.ndjson").expect("recorded book must load");
+    let mut snapshots: std::collections::BTreeMap<i64, Vec<(String, i64, u64, u64)>> =
+        Default::default();
+    for l in &book {
+        let row = (l.side.clone(), l.level, l.price.to_bits(), l.size.to_bits());
+        snapshots.entry(l.ts_ns).or_default().push(row);
+    }
+    assert_eq!(snapshots.len(), 330);
+    let written: Vec<_> = snapshots.values().collect();
+    assert!(written.windows(2).all(|pair| pair[0] != pair[1]));
+
+    let mut kept = Vec::new();
+    for &ts in snapshots.keys() {
+        if kept.last().is_none_or(|&last| ts - last >= 5_000_000_000) {
+            kept.push(ts);
+        }
+    }
+    let grid: Vec<_> = book
+        .iter()
+        .filter(|l| kept.contains(&l.ts_ns))
+        .cloned()
+        .collect();
+    assert_eq!(kept.len(), 6);
+
+    let sizes = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0];
+    let full = sweep_curve(&book, "BTC-USD", "buy", &sizes).unwrap();
+    let thin = sweep_curve(&grid, "BTC-USD", "buy", &sizes).unwrap();
+    assert_eq!((full.fitted_points, thin.fitted_points), (7, 7));
+    assert!((full.coef_bps - 1.9721695).abs() < 1e-8);
+    assert!((thin.coef_bps - 2.03941096).abs() < 1e-8);
+    assert!((thin.coef_bps / full.coef_bps - 1.0).abs() < 0.04);
+
+    let full_depth = depth_metrics(&book, "BTC-USD").unwrap();
+    let thin_depth = depth_metrics(&grid, "BTC-USD").unwrap();
+    assert!((full_depth.avg_spread - 0.0400303).abs() < 1e-8);
+    assert!(full_depth.avg_spread > 4.0 * thin_depth.avg_spread);
+    let full_queue = queue_metrics(&book, "BTC-USD").unwrap();
+    let thin_queue = queue_metrics(&grid, "BTC-USD").unwrap();
+    assert!((full_queue.avg_queue_imbalance - 0.17003025).abs() < 1e-8);
+    assert!(thin_queue.avg_queue_imbalance < 0.0);
+
+    // Monday's ask is thinner than Sunday's: 5 BTC lifts all fifty levels and
+    // does not fill, while the deeper bid takes it in every snapshot.
+    let lift = sweep_cost(&book, "BTC-USD", "buy", 5.0).unwrap();
+    let hit = sweep_cost(&book, "BTC-USD", "sell", 5.0).unwrap();
+    assert_eq!((lift.filled_snapshots, hit.filled_snapshots), (0, 330));
 }
