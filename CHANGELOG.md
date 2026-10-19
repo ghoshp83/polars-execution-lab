@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.47.0] - 2026-10-19
+
+### Changed
+- **`ingest-book` without `--every` writes only snapshots that moved.** Most
+  updates change a price below the levels recorded, and the collector used to
+  write a copy of the previous snapshot for each of them. A copy says nothing
+  new about the book; it only weights a stretch by how busy the deeper book was.
+  The completion event counts the copies skipped as `unchanged`. With `--every`
+  the snapshots are a time grid, and each step is still written whether it
+  moved or not.
+
+### Added
+- **A fifth recorded day**, `data/real/btc_usd_d5_{1..6}`: a Monday morning,
+  2,425 trades and 22.73 BTC, five times the Sunday's volume.
+- **A full-rate book**, `data/real/btc_usd_d5_book_full.ndjson`: fifty levels a
+  side for thirty seconds with no `--every`, 330 snapshots. 132 more updates
+  moved nothing recorded and were not written.
+- **What both do**, pinned in both languages. On day five the tightest cap is
+  inert on the newest session at every share, so it is the only cap whose
+  newest reading holds across shares; no cap settles across them. On the
+  full-rate book 5 BTC fills on the bid in every snapshot and on the ask in
+  none.
+- **Equivalence test 41:** depth, queue, 5 BTC sweeps and the eight-point curve
+  on the full-rate book, Rust against Python, bit for bit. One curve point is
+  unfilled and left out of the fit.
+
+### Notes
+- What `--every 5` hides, measured on the full-rate book against the six
+  snapshots a five-second grid keeps from it: the curve coefficient moves from
+  1.972 to 2.039 bps, under 4%. The average spread falls from 0.040 to 0.010,
+  and the queue imbalance changes sign, from +0.170 to -0.081. A grid is fine
+  for depth and impact. It is not fine for anything read at the touch.
+
 ## [0.46.0] - 2026-10-18
 
 ### Added
