@@ -1,9 +1,9 @@
 # Recorded sessions
 
-Four runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
+Five runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
 into six consecutive 100-second sessions, taken with `xexeclab ingest`: a
 weekday morning, a weekday afternoon thirty-one hours later, a Saturday
-morning, and the Sunday morning after it.
+morning, the Sunday morning after it, and the Monday morning after that.
 
 **Day one** — 2026-10-13, 08:16:50 to 08:26:50 UTC:
 
@@ -62,6 +62,20 @@ Trade ids 1107571770 to 1107572707: 938 trades, 4.52 BTC. The fewest trades of
 the four days, but larger ones than day three's, and the last session traded
 over a bitcoin.
 
+**Day five** — 2026-10-19 (a Monday), 08:35:10 to 08:45:10 UTC:
+
+| File | Trades | Volume (BTC) |
+|---|---|---|
+| `btc_usd_d5_1.ndjson` | 261 | 1.853192 |
+| `btc_usd_d5_2.ndjson` | 546 | 4.233804 |
+| `btc_usd_d5_3.ndjson` | 597 | 6.458224 |
+| `btc_usd_d5_4.ndjson` | 503 | 4.958949 |
+| `btc_usd_d5_5.ndjson` | 350 | 3.252453 |
+| `btc_usd_d5_6.ndjson` | 168 | 1.974468 |
+
+Trade ids 1107875909 to 1107878333: 2,425 trades, 22.73 BTC. Five times the
+Sunday's volume, at about the same hour on the next working day.
+
 **Quotes** — `btc_usd_d2_1_quotes.ndjson` is the top of the book from
 Coinbase's `ticker` channel, taken by `xexeclab ingest-quotes` alongside the
 day-two trades and cut to the first day-two session: 776 quotes. The ticker
@@ -91,6 +105,17 @@ order of five bitcoin fills on either side in every snapshot. The same
 snapshots cut to their top ten levels hold 1.50 and 1.82, and fill a 2 BTC buy
 in 32 of 119.
 
+**Full-rate book** — `btc_usd_d5_book_full.ndjson` is the same channel taken
+with `xexeclab ingest-book --levels 50 --seconds 30` at the start of the
+day-five capture, with no `--every`: 330 snapshots, 33,000 rows, in thirty
+seconds. The collector writes a snapshot only when the fifty levels it records
+have changed; 132 more updates moved only deeper prices and were not written.
+The five-second grid `--every 5` would have kept from the same thirty seconds
+is six snapshots. Its curve coefficient is within 4% of the full-rate one, but
+its average spread is a quarter of the full-rate figure and its queue
+imbalance has the opposite sign: the top of the book moves faster than five
+seconds.
+
 Each session file is 100 seconds, cut on a 10-second boundary, so every session
 has the same ten 10-second buckets. Within each run the trade ids are
 contiguous: nothing dropped, reordered or edited. The partial buckets at either
@@ -107,19 +132,22 @@ Two things were done to the day-one capture, and one to each of the others:
   recorded after that fix.
 - The deep book was cut to the six day-four sessions; the snapshots after the
   last whole bucket were left out.
+- The full-rate book is the whole thirty-second capture, uncut. It starts before
+  the first day-five session, which opens on the next 10-second boundary.
 
 ## What these are, and are not
 
 They are real trades, which the hand-written `data/sample_*.ndjson` captures are
-not. They are also forty minutes of one product: a weekday morning, a weekday
-afternoon, a Saturday morning and a Sunday morning. A "session" here is a 100-second slice, not a trading
-day, and the six in each run are neighbours in time, so they are far from
-independent. Four days is enough to show that a result on one does not have to
-hold on another. It is not enough to say which one is typical, and the four
-traded volumes thirty times apart. The ten-level book is one 100-second
+not. They are also fifty minutes of one product: two weekday mornings, a
+weekday afternoon, a Saturday morning and a Sunday morning. A "session" here is
+a 100-second slice, not a trading day, and the six in each run are neighbours
+in time, so they are far from independent. Five days is enough to show that a
+result on one does not have to hold on another. It is not enough to say which
+one is typical, and the five traded volumes thirty times apart. The ten-level book is one 100-second
 stretch, so it says how shallow the touch was that morning, not how deep the
 market is. The deep book is fifty levels sampled every five seconds over ten
 minutes of a Sunday: deep enough that the sizes here fill, too sparse to see
-what happens between two snapshots. Use them to see how the
+what happens between two snapshots. The full-rate book shows what happens
+between them, but only for thirty seconds. Use them to see how the
 commands behave on real prices and sizes; do not read a result on them as a
 property of the strategy.
