@@ -93,6 +93,7 @@ REAL_BOOK = "data/real/btc_usd_d3_1_book.ndjson"
 REAL_CURVE_SIZES = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0]
 DEEP_BOOK = "data/real/btc_usd_d4_book.ndjson"
 DEEP_CURVE_SIZES = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
+FULL_RATE_BOOK = "data/real/btc_usd_d5_book_full.ndjson"
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
 
@@ -2170,3 +2171,34 @@ def test_rust_and_python_agree_on_the_deep_book():
     curve = rust("curve", "--side", "buy", "--sizes", sizes)
     assert curve == sweep_curve(df, "BTC-USD", "buy", DEEP_CURVE_SIZES)
     assert curve["fitted_points"] == curve["points"]
+
+
+def test_rust_and_python_agree_on_the_full_rate_book():
+    """The forty-first: the fifty-level book at the full update rate, 330
+    snapshots in thirty seconds, where 5 BTC fills on the bid and not on the
+    ask, so one curve point is left out of the fit and both sweeps' unfilled
+    branches run on real data."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+
+    def rust(*line: str) -> dict:
+        proc = subprocess.run(
+            [binary, line[0], "--input", FULL_RATE_BOOK, *line[1:]],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(proc.stdout)
+
+    df = read_book(FULL_RATE_BOOK)
+    assert rust("depth") == depth_metrics(df, "BTC-USD")
+    assert rust("queue") == queue_metrics(df, "BTC-USD")
+    for side in ("buy", "sell"):
+        assert rust("sweep", "--side", side, "--size", "5.0") == sweep_cost(
+            df, "BTC-USD", side, 5.0
+        )
+    sizes = ",".join(str(q) for q in DEEP_CURVE_SIZES)
+    curve = rust("curve", "--side", "buy", "--sizes", sizes)
+    assert curve == sweep_curve(df, "BTC-USD", "buy", DEEP_CURVE_SIZES)
+    assert curve["fitted_points"] == curve["points"] - 1
