@@ -256,7 +256,7 @@ def test_a_timed_book_capture_covers_the_same_window_as_the_trades(feed, tmp_pat
     feed([[seed, *[_l2update(i, f"{90 + i}.0") for i in range(1, 7)]]])
     out = tmp_path / "book.ndjson"
     log = EventLog()
-    n = asyncio.run(stream_coinbase_book("BTC-USD", out, None, levels=1, log=log, seconds=3))
+    n = asyncio.run(stream_coinbase_book("BTC-USD", out, None, levels=10, log=log, seconds=3))
     assert n == 3
     assert sorted({r["ts_ns"] for r in _lines(out)}) == [
         1_719_792_001_000_000_000,
@@ -304,6 +304,42 @@ def test_a_thinned_book_still_applies_every_update_it_does_not_write(feed, tmp_p
     bids = {r["price"] for r in rows if r["ts_ns"] == stamps[1] and r["side"] == "bid"}
     assert bids == {100.0, 94.0, 93.0, 92.0, 91.0}
     assert log.events[0]["every"] == 2.5
+
+
+def test_a_full_rate_book_writes_only_the_snapshots_that_moved(feed, tmp_path):
+    """The update at second 2 rests a bid below the one level recorded, so the
+    top of book raised at second 3 is the only change after the first snapshot.
+    A copy written per deeper update would count each second of a busy deep book
+    as another observation of a top that did not move."""
+    seed = {"type": "snapshot", "bids": [["100.0", "1.0"]], "asks": [["101.0", "1.0"]]}
+    updates = [_l2update(1, "91.0"), _l2update(2, "92.0"), _l2update(3, "100.5")]
+    feed([[seed, *updates, _l2update(4, "94.0")]])
+    out = tmp_path / "book.ndjson"
+    log = EventLog()
+    n = asyncio.run(stream_coinbase_book("BTC-USD", out, None, levels=1, log=log, seconds=3))
+    assert n == 2
+    rows = _lines(out)
+    assert sorted({r["ts_ns"] for r in rows}) == [
+        1_719_792_001_000_000_000,
+        1_719_792_003_000_000_000,
+    ]
+    assert [r["price"] for r in rows if r["side"] == "bid"] == [100.0, 100.5]
+    assert log.events[-1]["unchanged"] == 1
+
+
+def test_a_thinned_book_writes_its_step_even_when_nothing_moved(feed, tmp_path):
+    """With `every` the file is a time grid: a step where the recorded levels
+    held is still an observation, and skipping it would leave a hole in the grid
+    exactly where the book was quiet."""
+    seed = {"type": "snapshot", "bids": [["100.0", "1.0"]], "asks": [["101.0", "1.0"]]}
+    feed([[seed, *[_l2update(i, f"{90 + i}.0") for i in range(1, 6)]]])
+    out = tmp_path / "book.ndjson"
+    log = EventLog()
+    n = asyncio.run(
+        stream_coinbase_book("BTC-USD", out, None, levels=1, log=log, seconds=4, every=1)
+    )
+    assert n == 4
+    assert log.events[-1]["unchanged"] == 0
 
 
 @pytest.mark.parametrize("every", [0, -1.0])

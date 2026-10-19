@@ -273,6 +273,13 @@ async def stream_coinbase_book(
     have passed since the last one written. The feed sends over ten updates a
     second, so a deep book over a whole run is otherwise too large to keep.
 
+    Without `every`, a snapshot is written only when the recorded levels differ
+    from the last one written. Most updates move a price below the top `levels`,
+    and a copy of the previous snapshot says nothing about the book; it only
+    weights the stretch by how busy the deeper book was. The copies skipped are
+    counted as `unchanged` in the completion event. With `every` the snapshots
+    are a time grid, so one is written at each step whether it moved or not.
+
     Subscribes to Coinbase's public `level2_batch` channel: one `snapshot` seeds
     the book, then each `l2update` mutates it in place (`apply_l2_update`). After
     every update the top `levels` of each side are flattened (`book_levels`) and
@@ -291,7 +298,9 @@ async def stream_coinbase_book(
     bound = _Bound(max_snapshots, seconds)
     every_ns = None if every is None else round(every * 1e9)
     last_ns: int | None = None
+    last_recorded: list | None = None
     written = 0
+    unchanged = 0
     reconnects = 0
     if log:
         log.emit(
@@ -329,10 +338,15 @@ async def stream_coinbase_book(
                         thinned = every_ns is not None and last_ns is not None
                         if thinned and ts_ns - last_ns < every_ns:
                             continue
-                        last_ns = ts_ns
                         rows = book_levels(
                             bid_book, ask_book, product=product, ts_ns=ts_ns, levels=levels
                         )
+                        recorded = [(r["side"], r["price"], r["size"]) for r in rows]
+                        if every_ns is None and recorded == last_recorded:
+                            unchanged += 1
+                            continue
+                        last_ns = ts_ns
+                        last_recorded = recorded
                         for row in rows:
                             f.write(json.dumps(row) + "\n")
                         f.flush()
@@ -347,7 +361,11 @@ async def stream_coinbase_book(
                     log.emit("book_ingest_reconnect", attempt=reconnects, snapshots=written)
     if log:
         log.emit(
-            "book_ingest_complete", snapshots=written, reconnects=reconnects, out=str(out_path)
+            "book_ingest_complete",
+            snapshots=written,
+            unchanged=unchanged,
+            reconnects=reconnects,
+            out=str(out_path),
         )
     return written
 
