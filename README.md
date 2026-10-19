@@ -334,6 +334,9 @@ uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --se
 # ...a deep book over a whole run: every update is applied, one snapshot in
 # five seconds is written, so fifty levels for ten minutes stay a small file
 uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --seconds 610 --levels 50 --every 5
+# ...or every change at the full rate, for a short stretch: without --every a
+# snapshot is written only when the recorded levels moved
+uv run xexeclab ingest-book   --product BTC-USD --out out/btc_book.ndjson   --seconds 30 --levels 50
 uv run xexeclab summary --input out/btc.ndjson
 uv run xexeclab depth   --input out/btc_book.ndjson
 # ...or the book recorded beside day three: a 0.2 BTC buy swept at once fits
@@ -441,10 +444,10 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
-  to make each command's point on a few rows. `data/real/` holds twenty-four
-  recorded sessions — four ten-minute runs of consecutive BTC-USD trades on
-  different days, 1,916, 5,248, 1,986 and 938 of them — plus 100 seconds of
-  recorded quotes and two recorded books. They are real but are not a sample
+  to make each command's point on a few rows. `data/real/` holds thirty
+  recorded sessions — five ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248, 1,986, 938 and 2,425 of them — plus 100 seconds
+  of recorded quotes and three recorded books. They are real but are not a sample
   of a market: see `data/real/README.md`. The day-three book keeps ten levels
   a side, which averaged 0.66 BTC on the ask: a 2 BTC sweep runs off it in
   every snapshot, so its cost there is a floor. The day-four book keeps fifty,
@@ -454,7 +457,12 @@ This is a **market-data and execution-analytics** project, not a trading system.
   all eight sizes at fifty levels and 0.483 bps from the three that fill at
   ten. The 0.085 bps fitted on the ten-level day-three book is the same kind
   of floor. Neither is in the units of `--coef-bps`, which is set against
-  traded volume.
+  traded volume. **A five-second grid keeps the depth and loses the touch.**
+  The third book is thirty seconds of fifty levels at the full update rate,
+  330 snapshots. The six a five-second grid keeps from it fit a curve
+  coefficient within 4% of the full-rate one. Their average spread is a
+  quarter of the full-rate figure, though, and their queue imbalance has the
+  opposite sign. Record the touch at the full rate.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
@@ -810,7 +818,11 @@ This is a **market-data and execution-analytics** project, not a trading system.
   Day four settles nothing, and `last_share_stable` is false at every cap: the
   newest session's verdict at the 25% cap runs `loss`, `unstable`, `unstable`,
   `gain`, `unstable` as the share rises. All twenty-four sessions as one
-  history settle nothing either.
+  history settle nothing either. **A fifth day, the busiest since day two,
+  repeats it.** On the Monday morning (`data/real/btc_usd_d5_*`, 22.73 BTC) the
+  only newest-session verdict that holds across shares is at the 5% cap, which
+  is inert there at every share. The other four caps move with the share, and
+  no cap settles.
   Two steps are also not a sample — four captures
   is the minimum the command accepts, and it reports the same `consensus` with
   the same refusal of a pooled figure or a best step.
