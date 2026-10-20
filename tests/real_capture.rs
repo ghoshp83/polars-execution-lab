@@ -5,6 +5,7 @@
 
 use xexec::curve::sweep_curve;
 use xexec::depth::{depth_metrics, queue_metrics};
+use xexec::grid::book_grid_sweep;
 use xexec::model::Tick;
 use xexec::replay::{read_book, read_ticks};
 use xexec::sweep::sweep_cost;
@@ -543,4 +544,80 @@ fn a_five_second_grid_keeps_the_curve_and_loses_the_top_of_book() {
     let lift = sweep_cost(&book, "BTC-USD", "buy", 5.0).unwrap();
     let hit = sweep_cost(&book, "BTC-USD", "sell", 5.0).unwrap();
     assert_eq!((lift.filled_snapshots, hit.filled_snapshots), (0, 330));
+}
+
+fn day_six() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d6_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A sixth unbroken run, the Tuesday after day five: 1,738 trades and under
+/// sixteen BTC, quieter than Monday.
+#[test]
+fn day_six_is_its_own_unbroken_run() {
+    let day_five = day_five();
+    let day_six = day_six();
+    let ticks: Vec<&Tick> = day_six.iter().flatten().collect();
+    assert_eq!(ticks.len(), 1738);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_five = day_five.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_five > 20 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 15.97 && volume < 15.98);
+}
+
+const GRID: [f64; 6] = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
+
+/// Two full-rate books, thirty seconds each, swept from a quarter second to ten.
+/// No spacing keeps the touch on both days: the spread a grid sees runs more
+/// than twice the book's at one spacing and under half of it at another, and
+/// it does not settle as the grid tightens. The depth imbalance stays within
+/// 0.035 of full rate to five seconds on both days.
+#[test]
+fn no_grid_spacing_keeps_the_touch_on_both_full_rate_books() {
+    for day in ["d5", "d6"] {
+        let book = read_book(format!("data/real/btc_usd_{day}_book_full.ndjson")).unwrap();
+        let sweep = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+        let ratios: Vec<f64> = sweep.rows.iter().map(|r| r.spread_ratio).collect();
+        assert!(ratios.iter().any(|&r| r > 2.0), "{day} {ratios:?}");
+        assert!(ratios.iter().any(|&r| r < 0.5), "{day} {ratios:?}");
+        for r in sweep.rows.iter().filter(|r| r.every_s <= 5.0) {
+            let drift = r.avg_depth_imbalance - sweep.full.avg_depth_imbalance;
+            assert!(drift.abs() < 0.035, "{day} {} {drift}", r.every_s);
+        }
+    }
+}
+
+/// Whether a grid keeps the queue's side depends on the day. Monday's
+/// bid-heavy queue (+0.170) reads ask-heavy from five seconds out; Tuesday's
+/// ask-heavy queue (-0.297) keeps its side at every spacing, but ten seconds
+/// reads it more than twice as heavy.
+#[test]
+fn the_queue_keeps_its_side_on_one_day_and_loses_it_on_the_other() {
+    let book = read_book("data/real/btc_usd_d5_book_full.ndjson").unwrap();
+    let monday = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    let kept: Vec<usize> = monday.rows.iter().map(|r| r.snapshots).collect();
+    assert_eq!(kept, [95, 53, 28, 15, 6, 3]);
+    let sides: Vec<bool> = monday.rows.iter().map(|r| r.queue_sign_kept).collect();
+    assert_eq!(sides, [true, true, true, true, false, false]);
+    assert_eq!(monday.sign_flips, 2);
+    // The five-second row is v0.47.0's hand-thinned grid, now the engine's.
+    assert!((monday.rows[4].spread_ratio - 0.24981077).abs() < 1e-8);
+
+    let book = read_book("data/real/btc_usd_d6_book_full.ndjson").unwrap();
+    let tuesday = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(tuesday.full.snapshots, 440);
+    assert_eq!(tuesday.sign_flips, 0);
+    assert!((tuesday.full.avg_queue_imbalance + 0.29748286).abs() < 1e-8);
+    assert!(tuesday.rows[5].avg_queue_imbalance < 2.0 * tuesday.full.avg_queue_imbalance);
+    // Two seconds and wider only ever land on a one-cent touch.
+    for r in &tuesday.rows[3..] {
+        assert!((r.avg_spread - 0.01).abs() < 1e-8);
+    }
 }

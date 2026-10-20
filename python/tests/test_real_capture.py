@@ -10,7 +10,14 @@ from pathlib import Path
 
 import pytest
 
-from xexeclab.engine import read_ticks, share_sweep, walk_forward, window_sweep
+from xexeclab.engine import (
+    book_grid_sweep,
+    read_book,
+    read_ticks,
+    share_sweep,
+    walk_forward,
+    window_sweep,
+)
 
 REAL = Path(__file__).parents[2] / "data" / "real"
 # Ten seconds per bucket: the widest five-second gap in the run is empty, and a
@@ -438,3 +445,60 @@ def test_a_five_second_grid_keeps_the_curve_and_loses_the_top_of_book():
     # does not fill, while the deeper bid takes it in every snapshot.
     assert sweep_cost(book, "BTC-USD", "buy", 5.0)["filled_snapshots"] == 0
     assert sweep_cost(book, "BTC-USD", "sell", 5.0)["filled_snapshots"] == 330
+
+
+@pytest.fixture(scope="module")
+def day_six():
+    return [read_ticks(REAL / f"btc_usd_d6_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_six_is_its_own_unbroken_run(day_five, day_six):
+    # A sixth unbroken run, the Tuesday after day five: 1,738 trades and under
+    # sixteen BTC, quieter than Monday.
+    ids = [i for s in day_six for i in s["trade_id"].to_list()]
+    ts = [t for s in day_six for t in s["ts_ns"].to_list()]
+    assert len(ids) == 1738
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    assert ts[0] - max(s["ts_ns"].max() for s in day_five) > 20 * 3600 * 10**9
+    assert 15.97 < sum(s["size"].sum() for s in day_six) < 15.98
+
+
+GRID = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0]
+
+
+@pytest.mark.parametrize("day", ["d5", "d6"])
+def test_no_grid_spacing_keeps_the_touch_on_both_full_rate_books(day):
+    """No spacing keeps the touch on both days: the spread a grid sees runs more
+    than twice the book's at one spacing and under half of it at another, and it
+    does not settle as the grid tightens. The depth imbalance stays within 0.035
+    of full rate to five seconds on both days."""
+    sweep = book_grid_sweep(read_book(REAL / f"btc_usd_{day}_book_full.ndjson"), "BTC-USD", GRID)
+    ratios = [r["spread_ratio"] for r in sweep["rows"]]
+    assert any(r > 2.0 for r in ratios), ratios
+    assert any(r < 0.5 for r in ratios), ratios
+    for r in sweep["rows"]:
+        if r["every_s"] <= 5.0:
+            drift = r["avg_depth_imbalance"] - sweep["full"]["avg_depth_imbalance"]
+            assert abs(drift) < 0.035, (r["every_s"], drift)
+
+
+def test_the_queue_keeps_its_side_on_one_day_and_loses_it_on_the_other():
+    """Monday's bid-heavy queue (+0.170) reads ask-heavy from five seconds out;
+    Tuesday's ask-heavy queue (-0.297) keeps its side at every spacing, but ten
+    seconds reads it more than twice as heavy."""
+    monday = book_grid_sweep(read_book(REAL / "btc_usd_d5_book_full.ndjson"), "BTC-USD", GRID)
+    assert [r["snapshots"] for r in monday["rows"]] == [95, 53, 28, 15, 6, 3]
+    assert [r["queue_sign_kept"] for r in monday["rows"]] == [True] * 4 + [False] * 2
+    assert monday["sign_flips"] == 2
+    # The five-second row is v0.47.0's hand-thinned grid, now the engine's.
+    assert monday["rows"][4]["spread_ratio"] == pytest.approx(0.24981077, abs=1e-8)
+
+    tuesday = book_grid_sweep(read_book(REAL / "btc_usd_d6_book_full.ndjson"), "BTC-USD", GRID)
+    assert tuesday["full"]["snapshots"] == 440
+    assert tuesday["sign_flips"] == 0
+    assert tuesday["full"]["avg_queue_imbalance"] == pytest.approx(-0.29748286, abs=1e-8)
+    assert tuesday["rows"][5]["avg_queue_imbalance"] < 2.0 * tuesday["full"]["avg_queue_imbalance"]
+    # Two seconds and wider only ever land on a one-cent touch.
+    for r in tuesday["rows"][3:]:
+        assert r["avg_spread"] == pytest.approx(0.01, abs=1e-8)
