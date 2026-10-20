@@ -145,6 +145,9 @@ uv run xexeclab depth   --input data/sample_book.ndjson
 # top-of-book queue position (touch size / fill-priority imbalance)
 uv run xexeclab queue   --input data/sample_book.ndjson
 
+# what thinning a full-rate book to a time grid hides (depth and queue at each spacing)
+uv run xexeclab book-grid --input data/real/btc_usd_d6_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10
+
 # cost of sweeping a marketable order through the L2 book (realised VWAP / slippage)
 uv run xexeclab sweep   --input data/sample_book.ndjson --side buy --size 2.0
 
@@ -444,10 +447,10 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
-  to make each command's point on a few rows. `data/real/` holds thirty
-  recorded sessions — five ten-minute runs of consecutive BTC-USD trades on
-  different days, 1,916, 5,248, 1,986, 938 and 2,425 of them — plus 100 seconds
-  of recorded quotes and three recorded books. They are real but are not a sample
+  to make each command's point on a few rows. `data/real/` holds thirty-six
+  recorded sessions — six ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248, 1,986, 938, 2,425 and 1,738 of them — plus 100
+  seconds of recorded quotes and four recorded books. They are real but are not a sample
   of a market: see `data/real/README.md`. The day-three book keeps ten levels
   a side, which averaged 0.66 BTC on the ask: a 2 BTC sweep runs off it in
   every snapshot, so its cost there is a floor. The day-four book keeps fifty,
@@ -462,7 +465,17 @@ This is a **market-data and execution-analytics** project, not a trading system.
   330 snapshots. The six a five-second grid keeps from it fit a curve
   coefficient within 4% of the full-rate one. Their average spread is a
   quarter of the full-rate figure, though, and their queue imbalance has the
-  opposite sign. Record the touch at the full rate.
+  opposite sign. Record the touch at the full rate. **No grid spacing keeps
+  the touch.** `book-grid` thins a full-rate book to each spacing on a grid
+  and reports depth and queue at each beside the book as recorded, with the
+  spread ratio and whether the queue imbalance kept its side. On the day-five
+  book and a second one from day six, from a quarter second to ten, the spread
+  a grid sees does not settle as the grid tightens: it runs more than twice the
+  full-rate figure at one spacing and under half of it at another on both
+  days. The depth imbalance stays within 0.035 to five seconds. The queue
+  keeps its side at every spacing on day six and loses it from five seconds
+  on day five, so a spacing that held on one day is no evidence for the next.
+  The command names no best spacing.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
