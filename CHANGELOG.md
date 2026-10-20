@@ -4,6 +4,37 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.48.0] - 2026-10-20
+
+### Added
+- **`book-grid`** (Rust `xexec book-grid`, Python `xexeclab book-grid`): a
+  full-rate book thinned to each spacing on `--every-grid` (seconds, each > 0,
+  default `1,2,5`) the way `ingest-book --every` thins its writes, with depth
+  and queue metrics at each beside the book as recorded. Each row reports
+  `spread_ratio` (its spread over the full-rate one) and `queue_sign_kept`;
+  `sign_flips` counts the rows whose queue imbalance changed side. No spacing
+  is named best. Offline the grid keeps the first snapshot that moved after
+  each step, which is the book `--every` would have written unless a copy was
+  skipped in between.
+- **A sixth recorded day**, `data/real/btc_usd_d6_{1..6}`: a Tuesday morning,
+  1,738 trades and 15.97 BTC.
+- **A second full-rate book**, `data/real/btc_usd_d6_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 440 snapshots; 47 unchanged updates were
+  not written.
+- **What the grid hides on both books**, pinned in both languages, and
+  equivalence test 42: every row of `book-grid` on both full-rate books, Rust
+  against Python, bit for bit.
+
+### Notes
+- From a quarter second to ten, the spread a grid sees does not settle as the
+  grid tightens. Day five reads 1.13, 1.20, 1.45, 2.50, 0.25 and 0.25 times the
+  full-rate spread; day six 0.61, 1.19, 3.60, then 0.08 from two seconds on,
+  where every kept snapshot is at a one-cent touch. The depth imbalance stays
+  within 0.035 of full rate to five seconds. The queue keeps its side at every
+  spacing on day six (-0.297 at full rate, -0.616 at ten seconds) and loses it
+  from five seconds on day five. v0.47.0's hand-thinned five-second grid is
+  the day-five row at 5 s, unchanged.
+
 ## [0.47.0] - 2026-10-19
 
 ### Changed
