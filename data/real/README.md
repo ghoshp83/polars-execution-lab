@@ -1,9 +1,10 @@
 # Recorded sessions
 
-Five runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
+Six runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
 into six consecutive 100-second sessions, taken with `xexeclab ingest`: a
 weekday morning, a weekday afternoon thirty-one hours later, a Saturday
-morning, the Sunday morning after it, and the Monday morning after that.
+morning, the Sunday morning after it, the Monday morning after that, and the
+Tuesday morning after that.
 
 **Day one** — 2026-10-13, 08:16:50 to 08:26:50 UTC:
 
@@ -76,6 +77,20 @@ over a bitcoin.
 Trade ids 1107875909 to 1107878333: 2,425 trades, 22.73 BTC. Five times the
 Sunday's volume, at about the same hour on the next working day.
 
+**Day six** — 2026-10-20 (a Tuesday), 08:55:30 to 09:05:30 UTC:
+
+| File | Trades | Volume (BTC) |
+|---|---|---|
+| `btc_usd_d6_1.ndjson` | 180 | 2.007030 |
+| `btc_usd_d6_2.ndjson` | 182 | 0.613340 |
+| `btc_usd_d6_3.ndjson` | 343 | 3.912187 |
+| `btc_usd_d6_4.ndjson` | 480 | 3.651674 |
+| `btc_usd_d6_5.ndjson` | 316 | 3.275120 |
+| `btc_usd_d6_6.ndjson` | 237 | 2.513207 |
+
+Trade ids 1108309641 to 1108311378: 1,738 trades, 15.97 BTC. Quieter than the
+Monday, twenty minutes later in the morning.
+
 **Quotes** — `btc_usd_d2_1_quotes.ndjson` is the top of the book from
 Coinbase's `ticker` channel, taken by `xexeclab ingest-quotes` alongside the
 day-two trades and cut to the first day-two session: 776 quotes. The ticker
@@ -116,6 +131,15 @@ its average spread is a quarter of the full-rate figure and its queue
 imbalance has the opposite sign: the top of the book moves faster than five
 seconds.
 
+`btc_usd_d6_book_full.ndjson` is the same thirty seconds at the start of the
+day-six capture: 440 snapshots, 44,000 rows, 47 unchanged updates not written.
+`xexec book-grid` thins both books from a quarter second to ten. On neither day
+does the spread a grid sees settle as the grid tightens: on day six it is 0.61
+of the full-rate figure at a quarter second, 3.60 at one second and 0.08 from
+two seconds on, where every kept snapshot sits at a one-cent touch. The queue
+imbalance keeps its sign at every spacing on day six (the ask queue is the
+heavier, -0.297) and loses it from five seconds on day five.
+
 Each session file is 100 seconds, cut on a 10-second boundary, so every session
 has the same ten 10-second buckets. Within each run the trade ids are
 contiguous: nothing dropped, reordered or edited. The partial buckets at either
@@ -132,8 +156,9 @@ Two things were done to the day-one capture, and one to each of the others:
   recorded after that fix.
 - The deep book was cut to the six day-four sessions; the snapshots after the
   last whole bucket were left out.
-- The full-rate book is the whole thirty-second capture, uncut. It starts before
-  the first day-five session, which opens on the next 10-second boundary.
+- The full-rate books are the whole thirty-second captures, uncut. Each starts
+  before the first session of its day, which opens on the next 10-second
+  boundary.
 
 ## What these are, and are not
 
