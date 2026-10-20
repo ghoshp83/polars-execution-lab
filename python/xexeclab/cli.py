@@ -9,6 +9,7 @@ import json
 from . import __version__
 from .engine import (
     bars,
+    book_grid_sweep,
     calibrate_impact,
     calibrate_impact_robust,
     cap_sweep,
@@ -143,6 +144,13 @@ def cmd_queue(a: argparse.Namespace) -> None:
     df = read_book(a.input)
     product = df["product"][0] if df.height else a.product
     print(json.dumps(queue_metrics(df, product)))
+
+
+def cmd_book_grid(a: argparse.Namespace) -> None:
+    df = read_book(a.input)
+    product = df["product"][0] if df.height else a.product
+    grid = [float(s) for s in a.every_grid.split(",")]
+    print(json.dumps(book_grid_sweep(df, product, grid)))
 
 
 def cmd_sweep(a: argparse.Namespace) -> None:
@@ -615,6 +623,19 @@ def main(argv: list[str] | None = None) -> None:
     pq.add_argument("--input", required=True, help="book replay (.ndjson/.jsonl/.parquet)")
     pq.add_argument("--product", default="BTC-USD")
     pq.set_defaults(fn=cmd_queue)
+
+    pbg = sub.add_parser(
+        "book-grid",
+        help="a full-rate book thinned to each spacing on a grid, depth and queue at each",
+    )
+    pbg.add_argument(
+        "--input", required=True, help="full-rate book replay (.ndjson/.jsonl/.parquet)"
+    )
+    pbg.add_argument(
+        "--every-grid", default="1,2,5", help="comma-separated spacings in seconds, each > 0"
+    )
+    pbg.add_argument("--product", default="BTC-USD")
+    pbg.set_defaults(fn=cmd_book_grid)
 
     psw = sub.add_parser(
         "sweep",

@@ -12,6 +12,7 @@ pub mod counterfactual;
 pub mod curve;
 pub mod depth;
 pub mod execution;
+pub mod grid;
 pub mod hlsweep;
 pub mod holdout;
 pub mod impact;

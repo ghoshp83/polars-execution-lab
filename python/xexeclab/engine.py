@@ -420,6 +420,65 @@ def queue_metrics(df: pl.DataFrame, product: str) -> dict:
     }
 
 
+def _thin_book(df: pl.DataFrame, every_ns: int) -> pl.DataFrame:
+    """The snapshots a grid of ``every_ns`` keeps: the first, then each one at
+    least ``every_ns`` after the last kept. Mirrors the Rust ``thin``."""
+    kept: list[int] = []
+    for t in df["ts_ns"].unique().sort().to_list():
+        if not kept or t - kept[-1] >= every_ns:
+            kept.append(t)
+    return df.filter(pl.col("ts_ns").is_in(kept))
+
+
+def _grid_row(df: pl.DataFrame, product: str, every_s: float, full: dict | None) -> dict:
+    depth = depth_metrics(df, product)
+    queue = queue_metrics(df, product)
+    if full is None:
+        spread_ratio, queue_sign_kept = 1.0, True
+    else:
+        spread_ratio = _r8(depth["avg_spread"] / full["avg_spread"])
+        queue_sign_kept = queue["avg_queue_imbalance"] * full["avg_queue_imbalance"] > 0.0
+    return {
+        "every_s": every_s,
+        "snapshots": depth["snapshots"],
+        "avg_bid_depth": depth["avg_bid_depth"],
+        "avg_ask_depth": depth["avg_ask_depth"],
+        "avg_depth_imbalance": depth["avg_depth_imbalance"],
+        "avg_spread": depth["avg_spread"],
+        "avg_bid_queue": queue["avg_bid_queue"],
+        "avg_ask_queue": queue["avg_ask_queue"],
+        "avg_queue_imbalance": queue["avg_queue_imbalance"],
+        "spread_ratio": spread_ratio,
+        "queue_sign_kept": queue_sign_kept,
+    }
+
+
+def book_grid_sweep(df: pl.DataFrame, product: str, every_grid: list[float]) -> dict:
+    """A full-rate book thinned to each spacing on ``every_grid`` (seconds, each
+    > 0), the way ``ingest-book --every`` thins its writes, and measured at
+    each beside the book as recorded. No spacing is named best. Mirrors the
+    Rust ``book_grid_sweep``; see its ``GridRow`` doc for the field meanings.
+    """
+    if not every_grid:
+        raise ValueError("empty --every-grid")
+    for s in every_grid:
+        if not s > 0.0:
+            raise ValueError(f"--every-grid spacings must be > 0, got {s}")
+    full = _grid_row(df, product, 0.0, None)
+    if not full["avg_spread"] > 0.0:
+        raise ValueError(f"full-rate spread {full['avg_spread']} is not positive")
+    rows = [
+        _grid_row(_thin_book(df, int(math.floor(s * 1e9 + 0.5))), product, s, full)
+        for s in every_grid
+    ]
+    return {
+        "product": product,
+        "full": full,
+        "rows": rows,
+        "sign_flips": sum(1 for r in rows if not r["queue_sign_kept"]),
+    }
+
+
 def sweep_cost(df: pl.DataFrame, product: str, side: str, order_size: float) -> dict:
     """Session book-sweep cost for a marketable order, rounded to match Rust.
 
