@@ -479,6 +479,36 @@ def book_grid_sweep(df: pl.DataFrame, product: str, every_grid: list[float]) -> 
     }
 
 
+def book_grid_across(books: list[pl.DataFrame], product: str, every_grid: list[float]) -> dict:
+    """``book_grid_sweep`` on each book (two or more), then read per spacing:
+    how many books keep their queue side, the ``spread_ratio`` range, and the
+    widest depth-imbalance drift. No spacing is named best. Mirrors the Rust
+    ``book_grid_across``; see its ``GridSpacing`` doc for the field meanings.
+    """
+    if len(books) < 2:
+        raise ValueError(f"book-grid-across needs two or more books, got {len(books)}")
+    sweeps = [book_grid_sweep(df, product, every_grid) for df in books]
+    spacings = []
+    for i, s in enumerate(every_grid):
+        rows = [(b["rows"][i], b["full"]) for b in sweeps]
+        spacings.append(
+            {
+                "every_s": s,
+                "sign_kept_books": sum(1 for r, _ in rows if r["queue_sign_kept"]),
+                "spread_ratio_min": min(r["spread_ratio"] for r, _ in rows),
+                "spread_ratio_max": max(r["spread_ratio"] for r, _ in rows),
+                "imbalance_drift_max": max(
+                    _r8(abs(r["avg_depth_imbalance"] - f["avg_depth_imbalance"])) for r, f in rows
+                ),
+            }
+        )
+    return {
+        "books": sweeps,
+        "spacings": spacings,
+        "held_spacings": sum(1 for s in spacings if s["sign_kept_books"] == len(sweeps)),
+    }
+
+
 def sweep_cost(df: pl.DataFrame, product: str, side: str, order_size: float) -> dict:
     """Session book-sweep cost for a marketable order, rounded to match Rust.
 

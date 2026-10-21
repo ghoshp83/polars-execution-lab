@@ -1,7 +1,7 @@
 import polars as pl
 import pytest
 
-from xexeclab.engine import book_grid_sweep
+from xexeclab.engine import book_grid_across, book_grid_sweep
 
 S = 1_000_000_000
 
@@ -57,3 +57,36 @@ def test_a_grid_that_lands_on_one_kind_of_touch_moves_the_queue_to_the_other_sid
 def test_a_grid_spacing_must_be_positive(grid):
     with pytest.raises(ValueError):
         book_grid_sweep(_book(), "BTC-USD", grid)
+
+
+def _steady_book() -> pl.DataFrame:
+    """Five bid-heavy snapshots: the queue rests on the bid at every spacing."""
+    rows = []
+    for i in range(5):
+        rows += [(i * S, "BTC-USD", "bid", 0, 100.0, 3.0), (i * S, "BTC-USD", "ask", 0, 101.0, 1.0)]
+    return pl.DataFrame(rows, schema=_SCHEMA, orient="row")
+
+
+def test_a_spacing_holds_across_books_only_when_every_book_keeps_its_queue_side():
+    across = book_grid_across([_book(), _steady_book()], "BTC-USD", [1.0, 2.0])
+    assert len(across["books"]) == 2
+    one = across["spacings"][0]
+    assert one["sign_kept_books"] == 2
+    assert (one["spread_ratio_min"], one["spread_ratio_max"]) == (1.0, 1.0)
+    assert one["imbalance_drift_max"] == 0.0
+    # At two seconds the first book flips and the steady one does not.
+    two = across["spacings"][1]
+    assert two["sign_kept_books"] == 1
+    assert two["spread_ratio_min"] == pytest.approx(0.625, abs=1e-8)
+    assert two["spread_ratio_max"] == 1.0
+    first = across["books"][0]
+    drift = abs(first["rows"][1]["avg_depth_imbalance"] - first["full"]["avg_depth_imbalance"])
+    assert two["imbalance_drift_max"] == pytest.approx(drift, abs=1e-8)
+    assert two["imbalance_drift_max"] > 0.0
+    assert across["held_spacings"] == 1
+
+
+@pytest.mark.parametrize("books", [[], [_book()]])
+def test_a_grid_across_books_needs_two_of_them(books):
+    with pytest.raises(ValueError):
+        book_grid_across(books, "BTC-USD", [1.0])

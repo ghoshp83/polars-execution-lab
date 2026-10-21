@@ -132,3 +132,77 @@ pub fn book_grid_sweep(
         sign_flips,
     })
 }
+
+/// One spacing of a [`GridAcross`], read over every book at once.
+/// - `sign_kept_books` -- how many books keep their full-rate queue side here.
+/// - `spread_ratio_min` / `spread_ratio_max` -- the range of `spread_ratio`.
+/// - `imbalance_drift_max` -- the widest gap between this row's depth
+///   imbalance and its own book's full-rate figure.
+#[derive(Debug, Serialize)]
+pub struct GridSpacing {
+    pub every_s: f64,
+    pub sign_kept_books: usize,
+    pub spread_ratio_min: f64,
+    pub spread_ratio_max: f64,
+    pub imbalance_drift_max: f64,
+}
+
+/// One grid over several full-rate books. `held_spacings` counts the spacings
+/// at which every book keeps its queue side. A spacing held on the books
+/// recorded so far is not shown to hold on the next one, so none is named best.
+#[derive(Debug, Serialize)]
+pub struct GridAcross {
+    pub books: Vec<GridSweep>,
+    pub spacings: Vec<GridSpacing>,
+    pub held_spacings: usize,
+}
+
+/// [`book_grid_sweep`] on each book (two or more), then read per spacing.
+/// Mirrors `book_grid_across` in `python/xexeclab/engine.py`.
+pub fn book_grid_across(
+    books: &[Vec<BookLevel>],
+    product: &str,
+    every_grid: &[f64],
+) -> Result<GridAcross> {
+    if books.len() < 2 {
+        return Err(anyhow!(
+            "book-grid-across needs two or more books, got {}",
+            books.len()
+        ));
+    }
+    let books = books
+        .iter()
+        .map(|levels| book_grid_sweep(levels, product, every_grid))
+        .collect::<Result<Vec<_>>>()?;
+    let spacings: Vec<GridSpacing> = (0..every_grid.len())
+        .map(|i| {
+            let rows: Vec<(&GridRow, &GridRow)> =
+                books.iter().map(|b| (&b.rows[i], &b.full)).collect();
+            GridSpacing {
+                every_s: every_grid[i],
+                sign_kept_books: rows.iter().filter(|(r, _)| r.queue_sign_kept).count(),
+                spread_ratio_min: rows
+                    .iter()
+                    .map(|(r, _)| r.spread_ratio)
+                    .fold(f64::INFINITY, f64::min),
+                spread_ratio_max: rows
+                    .iter()
+                    .map(|(r, _)| r.spread_ratio)
+                    .fold(f64::NEG_INFINITY, f64::max),
+                imbalance_drift_max: rows
+                    .iter()
+                    .map(|(r, f)| r8((r.avg_depth_imbalance - f.avg_depth_imbalance).abs()))
+                    .fold(f64::NEG_INFINITY, f64::max),
+            }
+        })
+        .collect();
+    let held_spacings = spacings
+        .iter()
+        .filter(|s| s.sign_kept_books == books.len())
+        .count();
+    Ok(GridAcross {
+        books,
+        spacings,
+        held_spacings,
+    })
+}

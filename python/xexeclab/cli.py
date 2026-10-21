@@ -9,6 +9,7 @@ import json
 from . import __version__
 from .engine import (
     bars,
+    book_grid_across,
     book_grid_sweep,
     calibrate_impact,
     calibrate_impact_robust,
@@ -151,6 +152,13 @@ def cmd_book_grid(a: argparse.Namespace) -> None:
     product = df["product"][0] if df.height else a.product
     grid = [float(s) for s in a.every_grid.split(",")]
     print(json.dumps(book_grid_sweep(df, product, grid)))
+
+
+def cmd_book_grid_across(a: argparse.Namespace) -> None:
+    books = [read_book(p.strip()) for p in a.input.split(",")]
+    product = books[0]["product"][0] if books[0].height else a.product
+    grid = [float(s) for s in a.every_grid.split(",")]
+    print(json.dumps(book_grid_across(books, product, grid)))
 
 
 def cmd_sweep(a: argparse.Namespace) -> None:
@@ -636,6 +644,19 @@ def main(argv: list[str] | None = None) -> None:
     )
     pbg.add_argument("--product", default="BTC-USD")
     pbg.set_defaults(fn=cmd_book_grid)
+
+    pba = sub.add_parser(
+        "book-grid-across",
+        help="one grid over several full-rate books, each spacing read over all of them",
+    )
+    pba.add_argument(
+        "--input", required=True, help="comma-separated full-rate book replays, two or more"
+    )
+    pba.add_argument(
+        "--every-grid", default="1,2,5", help="comma-separated spacings in seconds, each > 0"
+    )
+    pba.add_argument("--product", default="BTC-USD")
+    pba.set_defaults(fn=cmd_book_grid_across)
 
     psw = sub.add_parser(
         "sweep",

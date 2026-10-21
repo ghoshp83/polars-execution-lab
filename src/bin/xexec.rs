@@ -5,7 +5,7 @@ use xexec::counterfactual::counterfactual;
 use xexec::curve::sweep_curve;
 use xexec::depth::{depth_metrics, queue_metrics};
 use xexec::execution::{bars, session_twap, session_vwap, summary};
-use xexec::grid::book_grid_sweep;
+use xexec::grid::{book_grid_across, book_grid_sweep};
 use xexec::hlsweep::hl_sweep;
 use xexec::holdout::holdout;
 use xexec::impact::impact_curve;
@@ -32,7 +32,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 const USAGE: &str =
-    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|book-grid|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|pov-sweep|pov-hl-sweep|pov-stability|pov-holdout|pov-walkforward|pov-window-sweep|pov-share-sweep|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--parent-share N] [--share-grid N,N,N] [--every-grid N,N,N] [--cap N] [--half-life N] [--shortfall-bps N] [--cap-grid N,N,N] [--half-life-grid N,N,N] [--window N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
+    "usage: xexec <summary|vwap|twap|bars|book|depth|queue|book-grid|book-grid-across|sweep|curve|impact|calibrate|schedule|pov-plan|pov-backtest|pov-forecast|pov-sweep|pov-hl-sweep|pov-stability|pov-holdout|pov-walkforward|pov-window-sweep|pov-share-sweep|shortfall|counterfactual|sensitivity|stream> --input <ndjson> [--plan-input <ndjson>] [--history <ndjson,ndjson,...>] [--bucket-ms N] [--side buy|sell] [--size N] [--sizes N,N,N] [--coef-bps N] [--perm-coef-bps N] [--huber-delta N] [--ridge-lambda N] [--max-iters N] [--slices N] [--total-size N] [--slice-volume N] [--sigma-bps N] [--parent-qty N] [--parent-share N] [--share-grid N,N,N] [--every-grid N,N,N] [--cap N] [--half-life N] [--shortfall-bps N] [--cap-grid N,N,N] [--half-life-grid N,N,N] [--window N] [--arrival N] [--coef-grid N,N,N] [--chunk-rows N]";
 
 /// Parse a `--key value` float, falling back to `default` when absent.
 fn arg_f64(args: &[String], key: &str, default: f64) -> Result<f64> {
@@ -164,6 +164,32 @@ fn main() -> Result<()> {
         println!(
             "{}",
             serde_json::to_string(&book_grid_sweep(&levels, &product, &every_grid)?)?
+        );
+        return Ok(());
+    }
+
+    // `book-grid-across` runs the same grid over several full-rate books, given
+    // as a comma-separated `--input`, and reads each spacing over all of them.
+    if cmd == "book-grid-across" {
+        let books = input
+            .split(',')
+            .map(|p| {
+                let levels = read_book(p.trim())?;
+                if levels.is_empty() {
+                    return Err(anyhow!("no book levels in {p}"));
+                }
+                Ok(levels)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let product = books[0][0].product.clone();
+        let every_grid: Vec<f64> = arg_value(&args, "--every-grid")
+            .unwrap_or_else(|| "1,2,5".to_string())
+            .split(',')
+            .map(|s| s.trim().parse::<f64>())
+            .collect::<Result<_, _>>()?;
+        println!(
+            "{}",
+            serde_json::to_string(&book_grid_across(&books, &product, &every_grid)?)?
         );
         return Ok(());
     }
