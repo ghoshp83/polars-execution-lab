@@ -1,10 +1,10 @@
 # Recorded sessions
 
-Six runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
+Seven runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
 into six consecutive 100-second sessions, taken with `xexeclab ingest`: a
 weekday morning, a weekday afternoon thirty-one hours later, a Saturday
-morning, the Sunday morning after it, the Monday morning after that, and the
-Tuesday morning after that.
+morning, the Sunday morning after it, and the Monday, Tuesday and Wednesday
+mornings after that.
 
 **Day one** — 2026-10-13, 08:16:50 to 08:26:50 UTC:
 
@@ -91,6 +91,20 @@ Sunday's volume, at about the same hour on the next working day.
 Trade ids 1108309641 to 1108311378: 1,738 trades, 15.97 BTC. Quieter than the
 Monday, twenty minutes later in the morning.
 
+**Day seven** — 2026-10-21 (a Wednesday), 07:33:00 to 07:43:00 UTC:
+
+| File | Trades | Volume (BTC) |
+|---|---|---|
+| `btc_usd_d7_1.ndjson` | 515 | 6.778031 |
+| `btc_usd_d7_2.ndjson` | 623 | 19.130327 |
+| `btc_usd_d7_3.ndjson` | 591 | 12.570241 |
+| `btc_usd_d7_4.ndjson` | 480 | 3.655013 |
+| `btc_usd_d7_5.ndjson` | 303 | 1.331359 |
+| `btc_usd_d7_6.ndjson` | 266 | 1.163548 |
+
+Trade ids 1108714839 to 1108717616: 2,778 trades, 44.63 BTC, 38.48 of it in
+the first three sessions.
+
 **Quotes** — `btc_usd_d2_1_quotes.ndjson` is the top of the book from
 Coinbase's `ticker` channel, taken by `xexeclab ingest-quotes` alongside the
 day-two trades and cut to the first day-two session: 776 quotes. The ticker
@@ -140,6 +154,16 @@ two seconds on, where every kept snapshot sits at a one-cent touch. The queue
 imbalance keeps its sign at every spacing on day six (the ask queue is the
 heavier, -0.297) and loses it from five seconds on day five.
 
+`btc_usd_d7_book_full.ndjson` is the same thirty seconds at the start of the
+day-seven capture: 490 snapshots, 49,000 rows, 13 unchanged updates not
+written. Its queue sits almost level (+0.017), and a grid flips it at a quarter
+second, one second and two seconds. `xexec book-grid-across` reads one grid
+over all three books: the two earlier books keep their queue's side together
+at four spacings of six (a quarter second to two seconds); with day seven, at
+one (half a second), whose spread still runs 1.04 to 1.20 of each book's
+full-rate figure. Day seven's depth imbalance also drifts 0.043 from its
+full-rate figure at five seconds, where the earlier two stayed within 0.035.
+
 Each session file is 100 seconds, cut on a 10-second boundary, so every session
 has the same ten 10-second buckets. Within each run the trade ids are
 contiguous: nothing dropped, reordered or edited. The partial buckets at either
@@ -163,16 +187,16 @@ Two things were done to the day-one capture, and one to each of the others:
 ## What these are, and are not
 
 They are real trades, which the hand-written `data/sample_*.ndjson` captures are
-not. They are also fifty minutes of one product: two weekday mornings, a
+not. They are also seventy minutes of one product: four weekday mornings, a
 weekday afternoon, a Saturday morning and a Sunday morning. A "session" here is
 a 100-second slice, not a trading day, and the six in each run are neighbours
-in time, so they are far from independent. Five days is enough to show that a
+in time, so they are far from independent. Seven days is enough to show that a
 result on one does not have to hold on another. It is not enough to say which
-one is typical, and the five traded volumes thirty times apart. The ten-level book is one 100-second
+one is typical, and the seven traded volumes run thirty times apart. The ten-level book is one 100-second
 stretch, so it says how shallow the touch was that morning, not how deep the
 market is. The deep book is fifty levels sampled every five seconds over ten
 minutes of a Sunday: deep enough that the sizes here fill, too sparse to see
 what happens between two snapshots. The full-rate book shows what happens
-between them, but only for thirty seconds. Use them to see how the
+between them, but only for thirty seconds on each of three days. Use them to see how the
 commands behave on real prices and sizes; do not read a result on them as a
 property of the strategy.
