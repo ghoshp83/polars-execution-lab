@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.49.0] - 2026-10-21
+
+### Added
+- **`book-grid-across`** (Rust `xexec book-grid-across`, Python `xexeclab
+  book-grid-across`): one `--every-grid` over two or more full-rate books,
+  given as a comma-separated `--input`. Each book's `book-grid` sweep is kept
+  whole; per spacing it reports `sign_kept_books`, `spread_ratio_min` /
+  `spread_ratio_max`, and `imbalance_drift_max` (the widest depth-imbalance
+  gap from a book's own full-rate figure). `held_spacings` counts the spacings
+  at which every book keeps its queue's side. Fewer than two books is refused.
+  No spacing is named best.
+- **A seventh recorded day**, `data/real/btc_usd_d7_{1..6}`: a Wednesday
+  morning, 2,778 trades and 44.63 BTC.
+- **A third full-rate book**, `data/real/btc_usd_d7_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 490 snapshots; 13 unchanged updates were
+  not written.
+- **What a third book changes**, pinned in both languages, and equivalence
+  test 43: `book-grid-across` on all three full-rate books, Rust against
+  Python, bit for bit. Equivalence test 42 now covers the day-seven book too.
+
+### Notes
+- Days five and six keep their queue's side together at four spacings of six
+  (a quarter second to two seconds). Day seven's queue sits almost level
+  (+0.017) and flips at a quarter, one and two seconds, so across all three
+  books one spacing holds: half a second, where the spread still reads 1.04 to
+  1.20 of each book's own. The held count is a property of the books recorded.
+- Day seven's depth imbalance drifts 0.043 from full rate at five seconds;
+  days five and six stayed within 0.035 to five seconds, and their test still
+  pins that for those two books only.
+
 ## [0.48.0] - 2026-10-20
 
 ### Added
