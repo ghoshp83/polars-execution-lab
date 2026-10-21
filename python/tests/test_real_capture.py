@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from xexeclab.engine import (
+    book_grid_across,
     book_grid_sweep,
     read_book,
     read_ticks,
@@ -502,3 +503,54 @@ def test_the_queue_keeps_its_side_on_one_day_and_loses_it_on_the_other():
     # Two seconds and wider only ever land on a one-cent touch.
     for r in tuesday["rows"][3:]:
         assert r["avg_spread"] == pytest.approx(0.01, abs=1e-8)
+
+
+@pytest.fixture(scope="module")
+def day_seven():
+    return [read_ticks(REAL / f"btc_usd_d7_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_seven_is_its_own_unbroken_run(day_six, day_seven):
+    # A seventh unbroken run, the Wednesday after day six: 2,778 trades and over
+    # forty-four BTC, most of it in the first three sessions.
+    ids = [i for s in day_seven for i in s["trade_id"].to_list()]
+    ts = [t for s in day_seven for t in s["ts_ns"].to_list()]
+    assert len(ids) == 2778
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    assert ts[0] - max(s["ts_ns"].max() for s in day_six) > 20 * 3600 * 10**9
+    assert 44.62 < sum(s["size"].sum() for s in day_seven) < 44.63
+
+
+def _full_rate_books(days):
+    return [read_book(REAL / f"btc_usd_{d}_book_full.ndjson") for d in days]
+
+
+def test_a_near_level_queue_flips_at_a_quarter_second():
+    """Wednesday's queue sits almost level (+0.017), so a grid flips it from a
+    quarter second out -- and its depth imbalance drifts past 0.035 at five
+    seconds, which neither earlier book did."""
+    wednesday = book_grid_sweep(read_book(REAL / "btc_usd_d7_book_full.ndjson"), "BTC-USD", GRID)
+    assert wednesday["full"]["snapshots"] == 490
+    assert wednesday["full"]["avg_queue_imbalance"] == pytest.approx(0.01660519, abs=1e-8)
+    sides = [r["queue_sign_kept"] for r in wednesday["rows"]]
+    assert sides == [False, True, False, False, True, True]
+    assert wednesday["sign_flips"] == 3
+    drift = wednesday["rows"][4]["avg_depth_imbalance"] - wednesday["full"]["avg_depth_imbalance"]
+    assert abs(drift) > 0.035, drift
+
+
+def test_a_third_book_leaves_one_spacing_held_of_the_four_two_books_held():
+    """Two books held four spacings out of six; the third holds one. A spacing
+    that keeps the queue's side on every book recorded so far is not shown to
+    keep it on the next."""
+    two = book_grid_across(_full_rate_books(["d5", "d6"]), "BTC-USD", GRID)
+    assert [s["sign_kept_books"] for s in two["spacings"]] == [2, 2, 2, 2, 1, 1]
+    assert two["held_spacings"] == 4
+
+    three = book_grid_across(_full_rate_books(["d5", "d6", "d7"]), "BTC-USD", GRID)
+    assert [s["sign_kept_books"] for s in three["spacings"]] == [2, 3, 2, 2, 2, 2]
+    assert three["held_spacings"] == 1
+    # Even the one held spacing does not keep the touch: its spread runs high
+    # on every book.
+    assert three["spacings"][1]["spread_ratio_min"] > 1.0

@@ -5,8 +5,8 @@
 
 use xexec::curve::sweep_curve;
 use xexec::depth::{depth_metrics, queue_metrics};
-use xexec::grid::book_grid_sweep;
-use xexec::model::Tick;
+use xexec::grid::{book_grid_across, book_grid_sweep};
+use xexec::model::{BookLevel, Tick};
 use xexec::replay::{read_book, read_ticks};
 use xexec::sweep::sweep_cost;
 use xexec::walkforward::{
@@ -620,4 +620,71 @@ fn the_queue_keeps_its_side_on_one_day_and_loses_it_on_the_other() {
     for r in &tuesday.rows[3..] {
         assert!((r.avg_spread - 0.01).abs() < 1e-8);
     }
+}
+
+fn day_seven() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d7_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A seventh unbroken run, the Wednesday after day six: 2,778 trades and over
+/// forty-four BTC, most of it in the first three sessions.
+#[test]
+fn day_seven_is_its_own_unbroken_run() {
+    let day_six = day_six();
+    let day_seven = day_seven();
+    let ticks: Vec<&Tick> = day_seven.iter().flatten().collect();
+    assert_eq!(ticks.len(), 2778);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_six = day_six.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_six > 20 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 44.62 && volume < 44.63);
+}
+
+fn full_rate_books(days: &[&str]) -> Vec<Vec<BookLevel>> {
+    days.iter()
+        .map(|d| read_book(format!("data/real/btc_usd_{d}_book_full.ndjson")).unwrap())
+        .collect()
+}
+
+/// Wednesday's queue sits almost level (+0.017), so a grid flips it from a
+/// quarter second out -- and its depth imbalance drifts past 0.035 at five
+/// seconds, which neither earlier book did.
+#[test]
+fn a_near_level_queue_flips_at_a_quarter_second() {
+    let book = read_book("data/real/btc_usd_d7_book_full.ndjson").unwrap();
+    let wednesday = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(wednesday.full.snapshots, 490);
+    assert!((wednesday.full.avg_queue_imbalance - 0.01660519).abs() < 1e-8);
+    let sides: Vec<bool> = wednesday.rows.iter().map(|r| r.queue_sign_kept).collect();
+    assert_eq!(sides, [false, true, false, false, true, true]);
+    assert_eq!(wednesday.sign_flips, 3);
+    let drift = wednesday.rows[4].avg_depth_imbalance - wednesday.full.avg_depth_imbalance;
+    assert!(drift.abs() > 0.035, "{drift}");
+}
+
+/// Two books held four spacings out of six; the third holds one. A spacing
+/// that keeps the queue's side on every book recorded so far is not shown to
+/// keep it on the next.
+#[test]
+fn a_third_book_leaves_one_spacing_held_of_the_four_two_books_held() {
+    let two = book_grid_across(&full_rate_books(&["d5", "d6"]), "BTC-USD", &GRID).unwrap();
+    let kept: Vec<usize> = two.spacings.iter().map(|s| s.sign_kept_books).collect();
+    assert_eq!(kept, [2, 2, 2, 2, 1, 1]);
+    assert_eq!(two.held_spacings, 4);
+
+    let three = book_grid_across(&full_rate_books(&["d5", "d6", "d7"]), "BTC-USD", &GRID).unwrap();
+    let kept: Vec<usize> = three.spacings.iter().map(|s| s.sign_kept_books).collect();
+    assert_eq!(kept, [2, 3, 2, 2, 2, 2]);
+    assert_eq!(three.held_spacings, 1);
+    // Even the one held spacing does not keep the touch: its spread runs high
+    // on every book.
+    assert!(three.spacings[1].spread_ratio_min > 1.0);
 }
