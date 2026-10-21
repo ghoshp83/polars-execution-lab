@@ -14,6 +14,7 @@ import pytest
 
 from xexeclab.cli import main
 from xexeclab.engine import (
+    book_grid_across,
     book_grid_sweep,
     calibrate_impact,
     calibrate_impact_robust,
@@ -95,7 +96,11 @@ REAL_CURVE_SIZES = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0]
 DEEP_BOOK = "data/real/btc_usd_d4_book.ndjson"
 DEEP_CURVE_SIZES = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
 FULL_RATE_BOOK = "data/real/btc_usd_d5_book_full.ndjson"
-FULL_RATE_BOOKS = (FULL_RATE_BOOK, "data/real/btc_usd_d6_book_full.ndjson")
+FULL_RATE_BOOKS = (
+    FULL_RATE_BOOK,
+    "data/real/btc_usd_d6_book_full.ndjson",
+    "data/real/btc_usd_d7_book_full.ndjson",
+)
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
 
@@ -2207,7 +2212,7 @@ def test_rust_and_python_agree_on_the_full_rate_book():
 
 
 def test_rust_and_python_agree_on_the_book_grid():
-    """The forty-second: both full-rate books thinned from a quarter second to
+    """The forty-second: every full-rate book thinned from a quarter second to
     ten, every row of depth and queue, the spread ratio and the queue's side."""
     binary = _find_binary()
     if not binary:
@@ -2221,3 +2226,27 @@ def test_rust_and_python_agree_on_the_book_grid():
             check=True,
         )
         assert json.loads(proc.stdout) == book_grid_sweep(read_book(path), "BTC-USD", grid)
+
+
+def test_rust_and_python_agree_on_the_book_grid_across_books():
+    """The forty-third: one grid over every full-rate book, each spacing read
+    over all of them -- the books, the per-spacing ranges and the held count."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    grid = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0]
+    proc = subprocess.run(
+        [
+            binary,
+            "book-grid-across",
+            "--input",
+            ",".join(FULL_RATE_BOOKS),
+            "--every-grid",
+            ",".join(str(s) for s in grid),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    books = [read_book(p) for p in FULL_RATE_BOOKS]
+    assert json.loads(proc.stdout) == book_grid_across(books, "BTC-USD", grid)
