@@ -688,3 +688,59 @@ fn a_third_book_leaves_one_spacing_held_of_the_four_two_books_held() {
     // on every book.
     assert!(three.spacings[1].spread_ratio_min > 1.0);
 }
+
+fn day_eight() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d8_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// An eighth unbroken run, the Thursday after day seven: 2,987 trades and
+/// over thirty-three BTC, most of it in the third and fourth sessions.
+#[test]
+fn day_eight_is_its_own_unbroken_run() {
+    let day_seven = day_seven();
+    let day_eight = day_eight();
+    let ticks: Vec<&Tick> = day_eight.iter().flatten().collect();
+    assert_eq!(ticks.len(), 2987);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_seven = day_seven.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_seven > 20 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 33.19 && volume < 33.20);
+}
+
+/// Thursday's queue rests firmly on the bid (+0.114) and keeps its side to
+/// five seconds, so a fourth book takes no held spacing away. Leaving each
+/// book out in turn shows where the losses came from: without Wednesday four
+/// spacings hold, without any other book one or two.
+#[test]
+fn a_fourth_book_takes_nothing_away_and_one_book_takes_three() {
+    let book = read_book("data/real/btc_usd_d8_book_full.ndjson").unwrap();
+    let thursday = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(thursday.full.snapshots, 470);
+    let sides: Vec<bool> = thursday.rows.iter().map(|r| r.queue_sign_kept).collect();
+    assert_eq!(sides, [true, true, true, true, true, false]);
+    assert_eq!(thursday.sign_flips, 1);
+    // Thursday's depth imbalance drifts past 0.035 at five seconds too.
+    let drift = thursday.rows[4].avg_depth_imbalance - thursday.full.avg_depth_imbalance;
+    assert!(drift.abs() > 0.035, "{drift}");
+
+    let three = book_grid_across(&full_rate_books(&["d5", "d6", "d7"]), "BTC-USD", &GRID).unwrap();
+    assert_eq!(three.held_without, [3, 1, 4]);
+    let four = book_grid_across(
+        &full_rate_books(&["d5", "d6", "d7", "d8"]),
+        "BTC-USD",
+        &GRID,
+    )
+    .unwrap();
+    let kept: Vec<usize> = four.spacings.iter().map(|s| s.sign_kept_books).collect();
+    assert_eq!(kept, [3, 4, 3, 3, 3, 2]);
+    assert_eq!(four.held_spacings, three.held_spacings);
+    assert_eq!(four.held_without, [2, 1, 4, 1]);
+}

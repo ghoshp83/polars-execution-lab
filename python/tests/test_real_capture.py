@@ -554,3 +554,46 @@ def test_a_third_book_leaves_one_spacing_held_of_the_four_two_books_held():
     # Even the one held spacing does not keep the touch: its spread runs high
     # on every book.
     assert three["spacings"][1]["spread_ratio_min"] > 1.0
+
+
+@pytest.fixture(scope="module")
+def day_eight():
+    return [read_ticks(REAL / f"btc_usd_d8_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_eight_is_its_own_unbroken_run(day_seven, day_eight):
+    # An eighth unbroken run, the Thursday after day seven: 2,987 trades and
+    # over thirty-three BTC, most of it in the third and fourth sessions.
+    ids = [i for s in day_eight for i in s["trade_id"].to_list()]
+    ts = [t for s in day_eight for t in s["ts_ns"].to_list()]
+    assert len(ids) == 2987
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_seven = max(t for s in day_seven for t in s["ts_ns"].to_list())
+    assert ts[0] - last_day_seven > 20 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_eight:
+        for size in s["size"].to_list():
+            volume += size
+    assert 33.19 < volume < 33.20
+
+
+def test_a_fourth_book_takes_nothing_away_and_one_book_takes_three():
+    """Thursday's queue rests firmly on the bid (+0.114) and keeps its side to
+    five seconds, so a fourth book takes no held spacing away. Leaving each
+    book out in turn shows where the losses came from: without Wednesday four
+    spacings hold, without any other book one or two."""
+    thursday = book_grid_sweep(read_book(REAL / "btc_usd_d8_book_full.ndjson"), "BTC-USD", GRID)
+    assert thursday["full"]["snapshots"] == 470
+    assert [r["queue_sign_kept"] for r in thursday["rows"]] == [True, True, True, True, True, False]
+    assert thursday["sign_flips"] == 1
+    # Thursday's depth imbalance drifts past 0.035 at five seconds too.
+    drift = thursday["rows"][4]["avg_depth_imbalance"] - thursday["full"]["avg_depth_imbalance"]
+    assert abs(drift) > 0.035, drift
+
+    three = book_grid_across(_full_rate_books(["d5", "d6", "d7"]), "BTC-USD", GRID)
+    assert three["held_without"] == [3, 1, 4]
+    four = book_grid_across(_full_rate_books(["d5", "d6", "d7", "d8"]), "BTC-USD", GRID)
+    assert [s["sign_kept_books"] for s in four["spacings"]] == [3, 4, 3, 3, 3, 2]
+    assert four["held_spacings"] == three["held_spacings"]
+    assert four["held_without"] == [2, 1, 4, 1]
