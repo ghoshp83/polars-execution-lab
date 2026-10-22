@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.50.0] - 2026-10-22
+
+### Added
+- **`held_without`** on `book-grid-across` (Rust and Python): per book, the
+  number of spacings at which every other book keeps its queue's side. A book
+  whose absence raises the count above `held_spacings` is the one taking
+  spacings away. No book is named an outlier.
+- **An eighth recorded day**, `data/real/btc_usd_d8_{1..6}`: a Thursday
+  morning, 2,987 trades and 33.19 BTC.
+- **A fourth full-rate book**, `data/real/btc_usd_d8_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 470 snapshots; 38 unchanged updates were
+  not written.
+- **What a fourth book changes**, pinned in both languages, and equivalence
+  test 44: each full-rate book left out in turn, Rust against Python, with
+  each run's held count checked against `held_without`. Equivalence tests 42
+  and 43 now cover the day-eight book too.
+
+### Notes
+- Day eight's queue rests on the bid (+0.114) and flips only at ten seconds,
+  so across four books one spacing still holds, the same half second.
+- `held_without` over days five to eight is `[2, 1, 4, 1]`: without day seven
+  four spacings hold, so one near-level book accounts for three of the losses.
+- Day eight's depth imbalance drifts 0.044 at five seconds; day seven was not
+  the only book past 0.035.
+
 ## [0.49.0] - 2026-10-21
 
 ### Added
