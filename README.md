@@ -149,7 +149,7 @@ uv run xexeclab queue   --input data/sample_book.ndjson
 uv run xexeclab book-grid --input data/real/btc_usd_d6_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10
 
 # one grid over several full-rate books: which spacings keep the queue's side on every one
-uv run xexeclab book-grid-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10
+uv run xexeclab book-grid-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10
 
 # cost of sweeping a marketable order through the L2 book (realised VWAP / slippage)
 uv run xexeclab sweep   --input data/sample_book.ndjson --side buy --size 2.0
@@ -450,10 +450,10 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
-  to make each command's point on a few rows. `data/real/` holds forty-two
-  recorded sessions — seven ten-minute runs of consecutive BTC-USD trades on
-  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738 and 2,778 of them — plus
-  100 seconds of recorded quotes and five recorded books. They are real but are not a sample
+  to make each command's point on a few rows. `data/real/` holds forty-eight
+  recorded sessions — eight ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778 and 2,987 of them —
+  plus 100 seconds of recorded quotes and six recorded books. They are real but are not a sample
   of a market: see `data/real/README.md`. The day-three book keeps ten levels
   a side, which averaged 0.66 BTC on the ask: a 2 BTC sweep runs off it in
   every snapshot, so its cost there is a floor. The day-four book keeps fifty,
@@ -488,7 +488,14 @@ This is a **market-data and execution-analytics** project, not a trading system.
   each book's own. Day seven's depth imbalance also drifts 0.043 at five
   seconds, past the 0.035 the first two books stayed within. How many
   spacings hold depends on which books were recorded, so the count is a
-  property of the sample, not of the market.
+  property of the sample, not of the market. **A fourth book takes nothing
+  away, and one book took three.** Day eight's queue rests on the bid
+  (+0.114) and keeps its side to five seconds, so across four books the same
+  half second still holds. `held_without` reports, per book, how many
+  spacings hold with that book left out: without day seven four do; without
+  day five, two; without day six or day eight, one. Day eight's depth
+  imbalance also drifts 0.044 at five seconds, so passing 0.035 was not day
+  seven's alone.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
