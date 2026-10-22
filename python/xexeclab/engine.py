@@ -506,6 +506,14 @@ def book_grid_across(books: list[pl.DataFrame], product: str, every_grid: list[f
         "books": sweeps,
         "spacings": spacings,
         "held_spacings": sum(1 for s in spacings if s["sign_kept_books"] == len(sweeps)),
+        "held_without": [
+            sum(
+                1
+                for i in range(len(every_grid))
+                if all(b["rows"][i]["queue_sign_kept"] for j, b in enumerate(sweeps) if j != out)
+            )
+            for out in range(len(sweeps))
+        ],
     }
 
 

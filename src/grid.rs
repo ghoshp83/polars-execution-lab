@@ -148,13 +148,16 @@ pub struct GridSpacing {
 }
 
 /// One grid over several full-rate books. `held_spacings` counts the spacings
-/// at which every book keeps its queue side. A spacing held on the books
-/// recorded so far is not shown to hold on the next one, so none is named best.
+/// at which every book keeps its queue side; `held_without[i]` counts them
+/// with book `i` left out, so a book whose absence raises the count is the
+/// one taking spacings away. A spacing held on the books recorded so far is
+/// not shown to hold on the next one, so none is named best.
 #[derive(Debug, Serialize)]
 pub struct GridAcross {
     pub books: Vec<GridSweep>,
     pub spacings: Vec<GridSpacing>,
     pub held_spacings: usize,
+    pub held_without: Vec<usize>,
 }
 
 /// [`book_grid_sweep`] on each book (two or more), then read per spacing.
@@ -200,9 +203,22 @@ pub fn book_grid_across(
         .iter()
         .filter(|s| s.sign_kept_books == books.len())
         .count();
+    let held_without = (0..books.len())
+        .map(|out| {
+            (0..every_grid.len())
+                .filter(|&i| {
+                    books
+                        .iter()
+                        .enumerate()
+                        .all(|(j, b)| j == out || b.rows[i].queue_sign_kept)
+                })
+                .count()
+        })
+        .collect();
     Ok(GridAcross {
         books,
         spacings,
         held_spacings,
+        held_without,
     })
 }

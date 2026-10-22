@@ -84,6 +84,9 @@ def test_a_spacing_holds_across_books_only_when_every_book_keeps_its_queue_side(
     assert two["imbalance_drift_max"] == pytest.approx(drift, abs=1e-8)
     assert two["imbalance_drift_max"] > 0.0
     assert across["held_spacings"] == 1
+    # Leaving out the flipping book frees its spacing; leaving out the steady
+    # one frees nothing.
+    assert across["held_without"] == [2, 1]
 
 
 @pytest.mark.parametrize("books", [[], [_book()]])
