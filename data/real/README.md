@@ -1,6 +1,6 @@
 # Recorded sessions
 
-Seven runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
+Eight runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
 into six consecutive 100-second sessions, taken with `xexeclab ingest`: a
 weekday morning, a weekday afternoon thirty-one hours later, a Saturday
 morning, the Sunday morning after it, and the Monday, Tuesday and Wednesday
@@ -105,6 +105,20 @@ Monday, twenty minutes later in the morning.
 Trade ids 1108714839 to 1108717616: 2,778 trades, 44.63 BTC, 38.48 of it in
 the first three sessions.
 
+**Day eight** — 2026-10-22 (a Thursday), 07:45:30 to 07:55:30 UTC:
+
+| File | Trades | Volume (BTC) |
+|---|---|---|
+| `btc_usd_d8_1.ndjson` | 383 | 1.752600 |
+| `btc_usd_d8_2.ndjson` | 433 | 2.433280 |
+| `btc_usd_d8_3.ndjson` | 643 | 10.417283 |
+| `btc_usd_d8_4.ndjson` | 713 | 12.833209 |
+| `btc_usd_d8_5.ndjson` | 415 | 2.961415 |
+| `btc_usd_d8_6.ndjson` | 400 | 2.793895 |
+
+Trade ids 1109226897 to 1109229883: 2,987 trades, 33.19 BTC, 23.25 of it in
+the third and fourth sessions.
+
 **Quotes** — `btc_usd_d2_1_quotes.ndjson` is the top of the book from
 Coinbase's `ticker` channel, taken by `xexeclab ingest-quotes` alongside the
 day-two trades and cut to the first day-two session: 776 quotes. The ticker
@@ -164,6 +178,16 @@ one (half a second), whose spread still runs 1.04 to 1.20 of each book's
 full-rate figure. Day seven's depth imbalance also drifts 0.043 from its
 full-rate figure at five seconds, where the earlier two stayed within 0.035.
 
+`btc_usd_d8_book_full.ndjson` is the same thirty seconds at the start of the
+day-eight capture: 470 snapshots, 47,000 rows, 38 unchanged updates not
+written. Its queue rests on the bid (+0.114) and keeps that side to five
+seconds, flipping only at ten. Across all four books one spacing still holds,
+the same half second: day eight takes nothing away. Leaving each book out in
+turn (`held_without`) shows where the losses came from: without day seven four
+spacings hold; without day five, two; without day six or day eight, one. Day
+eight's depth imbalance drifts 0.044 at five seconds, so day seven was not
+alone in passing 0.035.
+
 Each session file is 100 seconds, cut on a 10-second boundary, so every session
 has the same ten 10-second buckets. Within each run the trade ids are
 contiguous: nothing dropped, reordered or edited. The partial buckets at either
@@ -187,16 +211,16 @@ Two things were done to the day-one capture, and one to each of the others:
 ## What these are, and are not
 
 They are real trades, which the hand-written `data/sample_*.ndjson` captures are
-not. They are also seventy minutes of one product: four weekday mornings, a
+not. They are also eighty minutes of one product: five weekday mornings, a
 weekday afternoon, a Saturday morning and a Sunday morning. A "session" here is
 a 100-second slice, not a trading day, and the six in each run are neighbours
-in time, so they are far from independent. Seven days is enough to show that a
+in time, so they are far from independent. Eight days is enough to show that a
 result on one does not have to hold on another. It is not enough to say which
-one is typical, and the seven traded volumes run thirty times apart. The ten-level book is one 100-second
+one is typical, and the eight traded volumes run thirty times apart. The ten-level book is one 100-second
 stretch, so it says how shallow the touch was that morning, not how deep the
 market is. The deep book is fifty levels sampled every five seconds over ten
 minutes of a Sunday: deep enough that the sizes here fill, too sparse to see
 what happens between two snapshots. The full-rate book shows what happens
-between them, but only for thirty seconds on each of three days. Use them to see how the
+between them, but only for thirty seconds on each of four days. Use them to see how the
 commands behave on real prices and sizes; do not read a result on them as a
 property of the strategy.
