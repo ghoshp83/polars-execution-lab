@@ -100,6 +100,7 @@ FULL_RATE_BOOKS = (
     FULL_RATE_BOOK,
     "data/real/btc_usd_d6_book_full.ndjson",
     "data/real/btc_usd_d7_book_full.ndjson",
+    "data/real/btc_usd_d8_book_full.ndjson",
 )
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -2250,3 +2251,35 @@ def test_rust_and_python_agree_on_the_book_grid_across_books():
     )
     books = [read_book(p) for p in FULL_RATE_BOOKS]
     assert json.loads(proc.stdout) == book_grid_across(books, "BTC-USD", grid)
+
+
+def test_rust_and_python_agree_on_every_book_left_out():
+    """The forty-fourth: each full-rate book left out in turn. Both engines
+    agree on every run, and each run's held count is the full run's
+    ``held_without`` for the book it leaves out."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    grid = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0]
+    books = [read_book(p) for p in FULL_RATE_BOOKS]
+    held_without = book_grid_across(books, "BTC-USD", grid)["held_without"]
+    for out in range(len(FULL_RATE_BOOKS)):
+        kept = [p for i, p in enumerate(FULL_RATE_BOOKS) if i != out]
+        proc = subprocess.run(
+            [
+                binary,
+                "book-grid-across",
+                "--input",
+                ",".join(kept),
+                "--every-grid",
+                ",".join(str(s) for s in grid),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        rust = json.loads(proc.stdout)
+        assert rust == book_grid_across(
+            [b for i, b in enumerate(books) if i != out], "BTC-USD", grid
+        )
+        assert rust["held_spacings"] == held_without[out]
