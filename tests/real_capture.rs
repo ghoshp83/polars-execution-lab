@@ -744,3 +744,66 @@ fn a_fourth_book_takes_nothing_away_and_one_book_takes_three() {
     assert_eq!(four.held_spacings, three.held_spacings);
     assert_eq!(four.held_without, [2, 1, 4, 1]);
 }
+
+fn day_nine() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d9_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A ninth unbroken run, a week after day eight: 2,355 trades and over thirty
+/// BTC, more than half of it in the last session alone.
+#[test]
+fn day_nine_is_its_own_unbroken_run() {
+    let day_eight = day_eight();
+    let day_nine = day_nine();
+    let ticks: Vec<&Tick> = day_nine.iter().flatten().collect();
+    assert_eq!(ticks.len(), 2355);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_eight = day_eight.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_eight > 6 * 24 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 30.73 && volume < 30.74);
+    let last: f64 = day_nine[5].iter().map(|t| t.size).sum();
+    assert!(last > volume / 2.0);
+}
+
+/// The second Thursday's queue rests deep on the ask (-0.536) and is the first
+/// book to keep its side at every spacing, so a fifth book takes nothing away:
+/// one spacing still holds. `sign_lost_by` names who breaks the rest -- the
+/// Wednesday book alone at 0.25, 1 and 2 s, the Monday book alone at 5 s, and
+/// two books at 10 s, which is why no single absence frees that one.
+#[test]
+fn a_book_that_never_flips_still_holds_one_spacing_and_the_losers_are_named() {
+    let book = read_book("data/real/btc_usd_d9_book_full.ndjson").unwrap();
+    let second_thursday = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(second_thursday.full.snapshots, 393);
+    assert!(second_thursday.full.avg_queue_imbalance < -0.5);
+    assert!(second_thursday.rows.iter().all(|r| r.queue_sign_kept));
+    assert_eq!(second_thursday.sign_flips, 0);
+    // A one-tick spread throughout, so every grid keeps the touch here.
+    assert!(second_thursday.rows.iter().all(|r| r.spread_ratio == 1.0));
+
+    let five = book_grid_across(
+        &full_rate_books(&["d5", "d6", "d7", "d8", "d9"]),
+        "BTC-USD",
+        &GRID,
+    )
+    .unwrap();
+    let lost: Vec<Vec<usize>> = five
+        .spacings
+        .iter()
+        .map(|s| s.sign_lost_by.clone())
+        .collect();
+    assert_eq!(
+        lost,
+        [vec![2], vec![], vec![2], vec![2], vec![0], vec![0, 3]]
+    );
+    assert_eq!(five.held_spacings, 1);
+    assert_eq!(five.held_without, [2, 1, 4, 1, 1]);
+}

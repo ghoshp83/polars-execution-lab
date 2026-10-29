@@ -597,3 +597,50 @@ def test_a_fourth_book_takes_nothing_away_and_one_book_takes_three():
     assert [s["sign_kept_books"] for s in four["spacings"]] == [3, 4, 3, 3, 3, 2]
     assert four["held_spacings"] == three["held_spacings"]
     assert four["held_without"] == [2, 1, 4, 1]
+
+
+@pytest.fixture(scope="module")
+def day_nine():
+    return [read_ticks(REAL / f"btc_usd_d9_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_nine_is_its_own_unbroken_run(day_eight, day_nine):
+    # A ninth unbroken run, a week after day eight: 2,355 trades and over thirty
+    # BTC, more than half of it in the last session alone.
+    ids = [i for s in day_nine for i in s["trade_id"].to_list()]
+    ts = [t for s in day_nine for t in s["ts_ns"].to_list()]
+    assert len(ids) == 2355
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_eight = max(t for s in day_eight for t in s["ts_ns"].to_list())
+    assert ts[0] - last_day_eight > 6 * 24 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_nine:
+        for size in s["size"].to_list():
+            volume += size
+    assert 30.73 < volume < 30.74
+    last = 0.0
+    for size in day_nine[5]["size"].to_list():
+        last += size
+    assert last > volume / 2
+
+
+def test_a_book_that_never_flips_still_holds_one_spacing_and_the_losers_are_named():
+    """The second Thursday's queue rests deep on the ask (-0.536) and is the
+    first book to keep its side at every spacing, so a fifth book takes nothing
+    away: one spacing still holds. ``sign_lost_by`` names who breaks the rest --
+    the Wednesday book alone at 0.25, 1 and 2 s, the Monday book alone at 5 s,
+    and two books at 10 s, which is why no single absence frees that one."""
+    book = read_book(REAL / "btc_usd_d9_book_full.ndjson")
+    second_thursday = book_grid_sweep(book, "BTC-USD", GRID)
+    assert second_thursday["full"]["snapshots"] == 393
+    assert second_thursday["full"]["avg_queue_imbalance"] < -0.5
+    assert all(r["queue_sign_kept"] for r in second_thursday["rows"])
+    assert second_thursday["sign_flips"] == 0
+    # A one-tick spread throughout, so every grid keeps the touch here.
+    assert all(r["spread_ratio"] == 1.0 for r in second_thursday["rows"])
+
+    five = book_grid_across(_full_rate_books(["d5", "d6", "d7", "d8", "d9"]), "BTC-USD", GRID)
+    assert [s["sign_lost_by"] for s in five["spacings"]] == [[2], [], [2], [2], [0], [0, 3]]
+    assert five["held_spacings"] == 1
+    assert five["held_without"] == [2, 1, 4, 1, 1]
