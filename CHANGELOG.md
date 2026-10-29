@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.51.0] - 2026-10-29
+
+### Added
+- **`sign_lost_by`** on each `book-grid-across` spacing (Rust and Python): the
+  indices, in input order, of the books that lose their queue's side there.
+  `held_without[i]` is the number of spacings lost by book `i` alone or by
+  nobody, and equivalence test 45 checks the two agree on the Rust binary's
+  own output.
+- **A ninth recorded day**, `data/real/btc_usd_d9_{1..6}`: the Thursday a week
+  after day eight, 2,355 trades and 30.73 BTC, 18.63 of it in the last session.
+- **A fifth full-rate book**, `data/real/btc_usd_d9_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 393 snapshots; 68 unchanged updates were
+  not written. Equivalence tests 42 to 44 now cover it too.
+
+### Notes
+- Day nine's queue rests deep on the ask (-0.536) and is the first recorded
+  book to keep its side at every spacing, at a one-cent spread throughout.
+- Across five books one spacing still holds, the same half second.
+  `held_without` is `[2, 1, 4, 1, 1]`.
+- `sign_lost_by` over the five books: day seven alone at 0.25, 1 and 2 s; day
+  five alone at 5 s; days five and eight at 10 s, so no single absence frees
+  ten seconds.
+
 ## [0.50.0] - 2026-10-22
 
 ### Added
