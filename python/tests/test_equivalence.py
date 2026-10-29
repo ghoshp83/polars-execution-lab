@@ -101,6 +101,7 @@ FULL_RATE_BOOKS = (
     "data/real/btc_usd_d6_book_full.ndjson",
     "data/real/btc_usd_d7_book_full.ndjson",
     "data/real/btc_usd_d8_book_full.ndjson",
+    "data/real/btc_usd_d9_book_full.ndjson",
 )
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -2283,3 +2284,34 @@ def test_rust_and_python_agree_on_every_book_left_out():
             [b for i, b in enumerate(books) if i != out], "BTC-USD", grid
         )
         assert rust["held_spacings"] == held_without[out]
+
+
+def test_rust_names_the_books_that_explain_held_without():
+    """The forty-fifth: Rust's ``sign_lost_by`` on every full-rate book matches
+    Python's, and accounts for ``held_without`` -- leaving book i out holds a
+    spacing exactly when nobody but i lost its queue side there."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    grid = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0]
+    proc = subprocess.run(
+        [
+            binary,
+            "book-grid-across",
+            "--input",
+            ",".join(FULL_RATE_BOOKS),
+            "--every-grid",
+            ",".join(str(s) for s in grid),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rust = json.loads(proc.stdout)
+    books = [read_book(p) for p in FULL_RATE_BOOKS]
+    python = book_grid_across(books, "BTC-USD", grid)
+    lost = [s["sign_lost_by"] for s in rust["spacings"]]
+    assert lost == [s["sign_lost_by"] for s in python["spacings"]]
+    for out in range(len(FULL_RATE_BOOKS)):
+        freed = sum(1 for names in lost if set(names) <= {out})
+        assert rust["held_without"][out] == freed
