@@ -135,6 +135,8 @@ pub fn book_grid_sweep(
 
 /// One spacing of a [`GridAcross`], read over every book at once.
 /// - `sign_kept_books` -- how many books keep their full-rate queue side here.
+/// - `sign_lost_by` -- the indices of the books that do not, in input order;
+///   a spacing lost by one book alone is the one its absence would hold.
 /// - `spread_ratio_min` / `spread_ratio_max` -- the range of `spread_ratio`.
 /// - `imbalance_drift_max` -- the widest gap between this row's depth
 ///   imbalance and its own book's full-rate figure.
@@ -142,6 +144,7 @@ pub fn book_grid_sweep(
 pub struct GridSpacing {
     pub every_s: f64,
     pub sign_kept_books: usize,
+    pub sign_lost_by: Vec<usize>,
     pub spread_ratio_min: f64,
     pub spread_ratio_max: f64,
     pub imbalance_drift_max: f64,
@@ -184,6 +187,9 @@ pub fn book_grid_across(
             GridSpacing {
                 every_s: every_grid[i],
                 sign_kept_books: rows.iter().filter(|(r, _)| r.queue_sign_kept).count(),
+                sign_lost_by: (0..rows.len())
+                    .filter(|&j| !rows[j].0.queue_sign_kept)
+                    .collect(),
                 spread_ratio_min: rows
                     .iter()
                     .map(|(r, _)| r.spread_ratio)

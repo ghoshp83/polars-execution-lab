@@ -89,6 +89,18 @@ def test_a_spacing_holds_across_books_only_when_every_book_keeps_its_queue_side(
     assert across["held_without"] == [2, 1]
 
 
+def test_each_spacing_names_the_books_that_lose_their_queue_side():
+    across = book_grid_across([_book(), _steady_book()], "BTC-USD", [1.0, 2.0])
+    assert across["spacings"][0]["sign_lost_by"] == []
+    assert across["spacings"][1]["sign_lost_by"] == [0]
+    # The names follow input order, not the book: swap them and the index moves.
+    swapped = book_grid_across([_steady_book(), _book()], "BTC-USD", [1.0, 2.0])
+    assert swapped["spacings"][1]["sign_lost_by"] == [1]
+    # Kept and lost partition the books at every spacing.
+    for s in across["spacings"] + swapped["spacings"]:
+        assert s["sign_kept_books"] + len(s["sign_lost_by"]) == 2
+
+
 @pytest.mark.parametrize("books", [[], [_book()]])
 def test_a_grid_across_books_needs_two_of_them(books):
     with pytest.raises(ValueError):

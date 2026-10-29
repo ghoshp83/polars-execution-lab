@@ -99,6 +99,20 @@ fn a_spacing_holds_across_books_only_when_every_book_keeps_its_queue_side() {
 }
 
 #[test]
+fn each_spacing_names_the_books_that_lose_their_queue_side() {
+    let across = book_grid_across(&[book(), steady_book()], "BTC-USD", &[1.0, 2.0]).unwrap();
+    assert!(across.spacings[0].sign_lost_by.is_empty());
+    assert_eq!(across.spacings[1].sign_lost_by, vec![0]);
+    // The names follow input order, not the book: swap them and the index moves.
+    let swapped = book_grid_across(&[steady_book(), book()], "BTC-USD", &[1.0, 2.0]).unwrap();
+    assert_eq!(swapped.spacings[1].sign_lost_by, vec![1]);
+    // Kept and lost partition the books at every spacing.
+    for s in across.spacings.iter().chain(&swapped.spacings) {
+        assert_eq!(s.sign_kept_books + s.sign_lost_by.len(), 2);
+    }
+}
+
+#[test]
 fn a_grid_across_books_needs_two_of_them() {
     assert!(book_grid_across(&[book()], "BTC-USD", &[1.0]).is_err());
     assert!(book_grid_across(&[], "BTC-USD", &[1.0]).is_err());

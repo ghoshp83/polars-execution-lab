@@ -495,6 +495,7 @@ def book_grid_across(books: list[pl.DataFrame], product: str, every_grid: list[f
             {
                 "every_s": s,
                 "sign_kept_books": sum(1 for r, _ in rows if r["queue_sign_kept"]),
+                "sign_lost_by": [j for j, (r, _) in enumerate(rows) if not r["queue_sign_kept"]],
                 "spread_ratio_min": min(r["spread_ratio"] for r, _ in rows),
                 "spread_ratio_max": max(r["spread_ratio"] for r, _ in rows),
                 "imbalance_drift_max": max(
