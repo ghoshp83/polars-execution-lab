@@ -4,6 +4,42 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.52.0] - 2026-10-30
+
+### Added
+- **`book-grid-phase`** (Rust and Python): each spacing on `--every-grid` started
+  `--phases` ways (default 4, two or more) evenly across itself. Per spacing it
+  reports `phases_run`, `sign_kept_phases`, `first_phase_kept` (the verdict
+  `book-grid` gives) and the range of snapshots, `spread_ratio` and queue
+  imbalance; overall `held_spacings`, `lost_spacings` and `split_spacings`, which
+  partition the grid. A start past the end of the book keeps nothing and is left
+  out of `phases_run`. No start or spacing is named best.
+- **A tenth recorded day**, `data/real/btc_usd_d10_{1..6}`: the Friday after day
+  nine, 3,042 trades and 30.64 BTC, with no session holding a third of it.
+- **A sixth full-rate book**, `data/real/btc_usd_d10_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 356 snapshots; 102 unchanged updates were
+  not written. Equivalence tests 42 to 45 now cover it too; 46 and 47 are new.
+
+### Fixed
+- `--every-grid inf` answered in Rust and raised `OverflowError` in Python. Both
+  now refuse a non-finite spacing with the same kind of error.
+- A repeated spacing such as `--every-grid 1,1` was counted twice in
+  `held_spacings` and `held_without`. Both engines now refuse it, as
+  `--share-grid` already refused its own repeats.
+
+### Notes
+- Six books at ten starts: 24 of 36 book-and-spacing verdicts held at every start,
+  one lost at every start (day seven at 0.25 s), 11 split. Three verdicts that
+  `book-grid` reports as flips are kept by most starts: day five at 5 and 10 s,
+  day eight at 10 s.
+- The half second is the only spacing held at every start on every book, and
+  across six books `held_spacings` is still 1. `held_without` is
+  `[2, 1, 4, 1, 1, 1]`.
+- Day ten's queue rests on the bid (+0.489) and keeps its side at every spacing
+  but not its touch: the spread averages 0.13 at full rate, 0.01 at 5 s.
+- Starts are a sample: day eight's 1 and 2 s pass all of four starts and lose one
+  of ten.
+
 ## [0.51.0] - 2026-10-29
 
 ### Added
