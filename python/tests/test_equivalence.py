@@ -15,6 +15,7 @@ import pytest
 from xexeclab.cli import main
 from xexeclab.engine import (
     book_grid_across,
+    book_grid_phase,
     book_grid_sweep,
     calibrate_impact,
     calibrate_impact_robust,
@@ -102,6 +103,7 @@ FULL_RATE_BOOKS = (
     "data/real/btc_usd_d7_book_full.ndjson",
     "data/real/btc_usd_d8_book_full.ndjson",
     "data/real/btc_usd_d9_book_full.ndjson",
+    "data/real/btc_usd_d10_book_full.ndjson",
 )
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -2315,3 +2317,60 @@ def test_rust_names_the_books_that_explain_held_without():
     for out in range(len(FULL_RATE_BOOKS)):
         freed = sum(1 for names in lost if set(names) <= {out})
         assert rust["held_without"][out] == freed
+
+
+def test_rust_and_python_agree_on_every_start_of_every_grid():
+    """The forty-sixth: every full-rate book at four and ten starts per spacing,
+    every range and count. A start of one spacing is another book entirely, so
+    this reaches thinned books the earlier tests never built."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    grid = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0]
+    for path in FULL_RATE_BOOKS:
+        book = read_book(path)
+        for phases in (4, 10):
+            proc = subprocess.run(
+                [
+                    binary,
+                    "book-grid-phase",
+                    "--input",
+                    path,
+                    "--every-grid",
+                    ",".join(str(s) for s in grid),
+                    "--phases",
+                    str(phases),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            assert json.loads(proc.stdout) == book_grid_phase(book, "BTC-USD", grid, phases)
+
+
+def test_both_engines_refuse_the_same_grids():
+    """The forty-seventh: an infinite spacing once answered in Rust and raised
+    ``OverflowError`` in Python; a repeated one was counted twice as held by both.
+    Each is now a refusal on both sides, and so is a single start."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    path = FULL_RATE_BOOKS[0]
+    book = read_book(path)
+    for spacing, grid in (("inf", [float("inf")]), ("1,1", [1.0, 1.0])):
+        proc = subprocess.run(
+            [binary, "book-grid", "--input", path, "--every-grid", spacing],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0
+        with pytest.raises(ValueError):
+            book_grid_sweep(book, "BTC-USD", grid)
+    proc = subprocess.run(
+        [binary, "book-grid-phase", "--input", path, "--phases", "1"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    with pytest.raises(ValueError):
+        book_grid_phase(book, "BTC-USD", [1.0], 1)
