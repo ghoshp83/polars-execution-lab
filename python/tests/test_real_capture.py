@@ -12,6 +12,7 @@ import pytest
 
 from xexeclab.engine import (
     book_grid_across,
+    book_grid_phase,
     book_grid_sweep,
     read_book,
     read_ticks,
@@ -644,3 +645,88 @@ def test_a_book_that_never_flips_still_holds_one_spacing_and_the_losers_are_name
     assert [s["sign_lost_by"] for s in five["spacings"]] == [[2], [], [2], [2], [0], [0, 3]]
     assert five["held_spacings"] == 1
     assert five["held_without"] == [2, 1, 4, 1, 1]
+
+
+@pytest.fixture(scope="module")
+def day_ten():
+    return [read_ticks(REAL / f"btc_usd_d10_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_ten_is_its_own_unbroken_run(day_nine, day_ten):
+    # A tenth unbroken run, the morning after day nine: 3,042 trades and the same
+    # thirty BTC, but spread out -- no session holds a third of it, where day
+    # nine's last session held more than half.
+    ids = [i for s in day_ten for i in s["trade_id"].to_list()]
+    ts = [t for s in day_ten for t in s["ts_ns"].to_list()]
+    assert len(ids) == 3042
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_nine = max(t for s in day_nine for t in s["ts_ns"].to_list())
+    assert ts[0] - last_day_nine > 23 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_ten:
+        for size in s["size"].to_list():
+            volume += size
+    assert 30.63 < volume < 30.65
+    for s in day_ten:
+        v = 0.0
+        for size in s["size"].to_list():
+            v += size
+        assert v < volume / 3
+
+
+def test_a_sixth_book_keeps_its_side_and_loses_its_touch():
+    """The Friday's queue rests on the bid (+0.489) and keeps its side at every
+    spacing, the second book in a row to do so, but unlike day nine it loses the
+    touch: five seconds lands on one-cent spreads against 0.13 at full rate. A
+    sixth book takes nothing away."""
+    friday = book_grid_sweep(read_book(REAL / "btc_usd_d10_book_full.ndjson"), "BTC-USD", GRID)
+    assert friday["full"]["snapshots"] == 356
+    assert friday["full"]["avg_queue_imbalance"] > 0.4
+    assert friday["sign_flips"] == 0
+    assert friday["rows"][4]["spread_ratio"] < 0.1
+
+    six = book_grid_across(_full_rate_books(["d5", "d6", "d7", "d8", "d9", "d10"]), "BTC-USD", GRID)
+    assert six["held_spacings"] == 1
+    assert six["held_without"] == [2, 1, 4, 1, 1, 1]
+
+
+def test_where_a_grid_starts_decides_eleven_of_thirty_six_verdicts():
+    """Each book at ten starts per spacing. Eleven of the thirty-six
+    book-and-spacing verdicts depend on where the grid began, and three that
+    ``book-grid`` reports as flips are kept by most starts. Only the half second
+    holds at every start on every book. Day seven's quarter second is the one
+    thing the start cannot move."""
+    names = ["d5", "d6", "d7", "d8", "d9", "d10"]
+    runs = [book_grid_phase(b, "BTC-USD", GRID, 10) for b in _full_rate_books(names)]
+    assert [[s["sign_kept_phases"] for s in p["spacings"]] for p in runs] == [
+        [10, 10, 10, 10, 7, 6],
+        [10, 10, 10, 10, 10, 8],
+        [0, 10, 4, 3, 6, 7],
+        [10, 10, 9, 9, 6, 7],
+        [10] * 6,
+        [10] * 6,
+    ]
+    assert [(p["held_spacings"], p["lost_spacings"], p["split_spacings"]) for p in runs] == [
+        (4, 0, 2),
+        (5, 0, 1),
+        (1, 1, 4),
+        (2, 0, 4),
+        (6, 0, 0),
+        (6, 0, 0),
+    ]
+    # Flipped at start 0, kept by most starts: day five at 5 s and 10 s, day
+    # eight at 10 s.
+    misread = [
+        (n, s["every_s"])
+        for n, p in zip(names, runs, strict=True)
+        for s in p["spacings"]
+        if not s["first_phase_kept"] and s["sign_kept_phases"] * 2 > s["phases_run"]
+    ]
+    assert misread == [("d5", 5.0), ("d5", 10.0), ("d8", 10.0)]
+    held_everywhere = [
+        g
+        for i, g in enumerate(GRID)
+        if all(p["spacings"][i]["sign_kept_phases"] == 10 for p in runs)
+    ]
+    assert held_everywhere == [0.5]

@@ -5,7 +5,7 @@
 
 use xexec::curve::sweep_curve;
 use xexec::depth::{depth_metrics, queue_metrics};
-use xexec::grid::{book_grid_across, book_grid_sweep};
+use xexec::grid::{book_grid_across, book_grid_phase, book_grid_sweep};
 use xexec::model::{BookLevel, Tick};
 use xexec::replay::{read_book, read_ticks};
 use xexec::sweep::sweep_cost;
@@ -806,4 +806,118 @@ fn a_book_that_never_flips_still_holds_one_spacing_and_the_losers_are_named() {
     );
     assert_eq!(five.held_spacings, 1);
     assert_eq!(five.held_without, [2, 1, 4, 1, 1]);
+}
+
+fn day_ten() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d10_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A tenth unbroken run, the morning after day nine: 3,042 trades and the same
+/// thirty BTC, but spread out -- no session holds a third of it, where day
+/// nine's last session held more than half.
+#[test]
+fn day_ten_is_its_own_unbroken_run() {
+    let day_nine = day_nine();
+    let day_ten = day_ten();
+    let ticks: Vec<&Tick> = day_ten.iter().flatten().collect();
+    assert_eq!(ticks.len(), 3042);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_nine = day_nine.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_nine > 23 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 30.63 && volume < 30.65);
+    for session in &day_ten {
+        let v: f64 = session.iter().map(|t| t.size).sum();
+        assert!(v < volume / 3.0);
+    }
+}
+
+/// The Friday's queue rests on the bid (+0.489) and keeps its side at every
+/// spacing, the second book in a row to do so, but unlike day nine it loses the
+/// touch: five seconds lands on one-cent spreads against 0.13 at full rate. A
+/// sixth book takes nothing away.
+#[test]
+fn a_sixth_book_keeps_its_side_and_loses_its_touch() {
+    let book = read_book("data/real/btc_usd_d10_book_full.ndjson").unwrap();
+    let friday = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(friday.full.snapshots, 356);
+    assert!(friday.full.avg_queue_imbalance > 0.4);
+    assert_eq!(friday.sign_flips, 0);
+    assert!(friday.rows[4].spread_ratio < 0.1);
+
+    let six = book_grid_across(
+        &full_rate_books(&["d5", "d6", "d7", "d8", "d9", "d10"]),
+        "BTC-USD",
+        &GRID,
+    )
+    .unwrap();
+    assert_eq!(six.held_spacings, 1);
+    assert_eq!(six.held_without, [2, 1, 4, 1, 1, 1]);
+}
+
+/// Each book at ten starts per spacing. Eleven of the thirty-six book-and-spacing
+/// verdicts depend on where the grid began, and three that `book-grid` reports as
+/// flips are kept by most starts. Only the half second holds at every start on
+/// every book. Day seven's quarter second is the one thing the start cannot move.
+#[test]
+fn where_a_grid_starts_decides_eleven_of_thirty_six_verdicts() {
+    let names = ["d5", "d6", "d7", "d8", "d9", "d10"];
+    let books = full_rate_books(&names);
+    let runs: Vec<_> = books
+        .iter()
+        .map(|b| book_grid_phase(b, "BTC-USD", &GRID, 10).unwrap())
+        .collect();
+    let kept: Vec<Vec<usize>> = runs
+        .iter()
+        .map(|p| p.spacings.iter().map(|s| s.sign_kept_phases).collect())
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            vec![10, 10, 10, 10, 7, 6],
+            vec![10, 10, 10, 10, 10, 8],
+            vec![0, 10, 4, 3, 6, 7],
+            vec![10, 10, 9, 9, 6, 7],
+            vec![10; 6],
+            vec![10; 6],
+        ]
+    );
+    let counts: Vec<(usize, usize, usize)> = runs
+        .iter()
+        .map(|p| (p.held_spacings, p.lost_spacings, p.split_spacings))
+        .collect();
+    assert_eq!(
+        counts,
+        [
+            (4, 0, 2),
+            (5, 0, 1),
+            (1, 1, 4),
+            (2, 0, 4),
+            (6, 0, 0),
+            (6, 0, 0)
+        ]
+    );
+    // Flipped at start 0, kept by most starts: day five at 5 s and 10 s, day
+    // eight at 10 s.
+    let mut misread = Vec::new();
+    for (name, p) in names.iter().zip(&runs) {
+        for s in &p.spacings {
+            if !s.first_phase_kept && s.sign_kept_phases * 2 > s.phases_run {
+                misread.push((*name, s.every_s));
+            }
+        }
+    }
+    assert_eq!(misread, [("d5", 5.0), ("d5", 10.0), ("d8", 10.0)]);
+    let held_everywhere: Vec<f64> = (0..GRID.len())
+        .filter(|&i| runs.iter().all(|p| p.spacings[i].sign_kept_phases == 10))
+        .map(|i| GRID[i])
+        .collect();
+    assert_eq!(held_everywhere, [0.5]);
 }
