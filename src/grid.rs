@@ -42,17 +42,19 @@ pub struct GridSweep {
     pub sign_flips: usize,
 }
 
-/// The snapshots a grid of `every_ns` keeps: the first, then each one at least
-/// `every_ns` after the last kept. Offline this keeps the first snapshot that
-/// moved after the step; live, `--every` writes the book as it stood at the
-/// first update after it, which is the same book unless a copy was skipped.
-fn thin(levels: &[BookLevel], every_ns: i64) -> Vec<BookLevel> {
+/// The snapshots a grid of `every_ns` keeps: the first at least `offset_ns`
+/// into the book, then each one at least `every_ns` after the last kept.
+/// Offline this keeps the first snapshot that moved after the step; live,
+/// `--every` writes the book as it stood at the first update after it, which is
+/// the same book unless a copy was skipped.
+fn thin(levels: &[BookLevel], every_ns: i64, offset_ns: i64) -> Vec<BookLevel> {
     let mut ts: Vec<i64> = levels.iter().map(|l| l.ts_ns).collect();
     ts.sort_unstable();
     ts.dedup();
+    let start = ts.first().map_or(0, |&t| t.saturating_add(offset_ns));
     let mut kept: Vec<i64> = Vec::new();
     for t in ts {
-        if kept.last().is_none_or(|&last| t - last >= every_ns) {
+        if t >= start && kept.last().is_none_or(|&last| t - last >= every_ns) {
             kept.push(t);
         }
     }
@@ -93,19 +95,27 @@ fn row(
     })
 }
 
-/// Sweep a recorded book over `every_grid` (seconds, each > 0). Mirrors
-/// `book_grid_sweep` in `python/xexeclab/engine.py`.
-pub fn book_grid_sweep(
-    levels: &[BookLevel],
-    product: &str,
-    every_grid: &[f64],
-) -> Result<GridSweep> {
+/// A grid is positive, finite spacings, none twice: a spacing listed twice would
+/// count twice in every held figure read over the grid.
+fn check_every_grid(every_grid: &[f64]) -> Result<()> {
     if every_grid.is_empty() {
         return Err(anyhow!("empty --every-grid"));
     }
-    if let Some(bad) = every_grid.iter().find(|&&s| s.is_nan() || s <= 0.0) {
-        return Err(anyhow!("--every-grid spacings must be > 0, got {bad}"));
+    if let Some(bad) = every_grid.iter().find(|&&s| !s.is_finite() || s <= 0.0) {
+        return Err(anyhow!(
+            "--every-grid spacings must be finite and > 0, got {bad}"
+        ));
     }
+    for (i, s) in every_grid.iter().enumerate() {
+        if every_grid[..i].contains(s) {
+            return Err(anyhow!("--every-grid repeats {s}"));
+        }
+    }
+    Ok(())
+}
+
+/// The book as recorded, the row every spacing is read against.
+fn full_row(levels: &[BookLevel], product: &str) -> Result<GridRow> {
     let full = row(levels, product, 0.0, None)?;
     if full.avg_spread.is_nan() || full.avg_spread <= 0.0 {
         return Err(anyhow!(
@@ -113,11 +123,23 @@ pub fn book_grid_sweep(
             full.avg_spread
         ));
     }
+    Ok(full)
+}
+
+/// Sweep a recorded book over `every_grid` (seconds, each > 0). Mirrors
+/// `book_grid_sweep` in `python/xexeclab/engine.py`.
+pub fn book_grid_sweep(
+    levels: &[BookLevel],
+    product: &str,
+    every_grid: &[f64],
+) -> Result<GridSweep> {
+    check_every_grid(every_grid)?;
+    let full = full_row(levels, product)?;
     let rows = every_grid
         .iter()
         .map(|&s| {
             row(
-                &thin(levels, (s * 1e9).round() as i64),
+                &thin(levels, (s * 1e9).round() as i64, 0),
                 product,
                 s,
                 Some(&full),
@@ -226,5 +248,107 @@ pub fn book_grid_across(
         spacings,
         held_spacings,
         held_without,
+    })
+}
+
+/// One spacing of a [`GridPhase`], read over every start the grid was given.
+/// - `phases_run` -- the starts that kept a snapshot; one past the end of the
+///   book keeps nothing and is left out, so this can be under `phases`.
+/// - `sign_kept_phases` -- how many of those keep the full-rate queue side.
+/// - `first_phase_kept` -- the verdict at offset 0, the one `book-grid` reports.
+/// - `snapshots_min` / `snapshots_max`, `spread_ratio_min` / `spread_ratio_max`,
+///   `queue_imbalance_min` / `queue_imbalance_max` -- the range over the starts.
+#[derive(Debug, Serialize)]
+pub struct PhaseSpacing {
+    pub every_s: f64,
+    pub phases_run: usize,
+    pub snapshots_min: usize,
+    pub snapshots_max: usize,
+    pub sign_kept_phases: usize,
+    pub first_phase_kept: bool,
+    pub spread_ratio_min: f64,
+    pub spread_ratio_max: f64,
+    pub queue_imbalance_min: f64,
+    pub queue_imbalance_max: f64,
+}
+
+/// One book, each spacing started `phases` ways evenly across the spacing. A
+/// spacing is `held` when every start keeps the queue side, `lost` when none
+/// does, `split` otherwise; the three counts partition the grid. A split spacing
+/// has no verdict of its own: which side it reports is where the grid began.
+/// `held` means no start tried lost it: doubling `phases` keeps every start, so
+/// it can only move a spacing out of `held` or `lost`, never into them.
+#[derive(Debug, Serialize)]
+pub struct GridPhase {
+    pub product: String,
+    pub phases: usize,
+    pub full: GridRow,
+    pub spacings: Vec<PhaseSpacing>,
+    pub held_spacings: usize,
+    pub lost_spacings: usize,
+    pub split_spacings: usize,
+}
+
+/// The grid at `phases` starts (two or more): start `k` is `k / phases` of a
+/// spacing after the first snapshot, and start 0 is the grid `book-grid` runs.
+/// Mirrors `book_grid_phase` in `python/xexeclab/engine.py`.
+pub fn book_grid_phase(
+    levels: &[BookLevel],
+    product: &str,
+    every_grid: &[f64],
+    phases: usize,
+) -> Result<GridPhase> {
+    check_every_grid(every_grid)?;
+    if phases < 2 {
+        return Err(anyhow!("--phases must be 2 or more, got {phases}"));
+    }
+    let full = full_row(levels, product)?;
+    let mut spacings = Vec::with_capacity(every_grid.len());
+    for &s in every_grid {
+        let every_ns = (s * 1e9).round() as i64;
+        let mut rows = Vec::with_capacity(phases);
+        for k in 0..phases {
+            let offset_ns = (i128::from(every_ns) * k as i128 / phases as i128) as i64;
+            let kept = thin(levels, every_ns, offset_ns);
+            if !kept.is_empty() {
+                rows.push(row(&kept, product, s, Some(&full))?);
+            }
+        }
+        let range = |f: fn(&GridRow) -> f64| {
+            rows.iter()
+                .map(f)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
+                    (lo.min(x), hi.max(x))
+                })
+        };
+        let (spread_ratio_min, spread_ratio_max) = range(|r| r.spread_ratio);
+        let (queue_imbalance_min, queue_imbalance_max) = range(|r| r.avg_queue_imbalance);
+        spacings.push(PhaseSpacing {
+            every_s: s,
+            phases_run: rows.len(),
+            snapshots_min: rows.iter().map(|r| r.snapshots).min().unwrap_or(0),
+            snapshots_max: rows.iter().map(|r| r.snapshots).max().unwrap_or(0),
+            sign_kept_phases: rows.iter().filter(|r| r.queue_sign_kept).count(),
+            first_phase_kept: rows[0].queue_sign_kept,
+            spread_ratio_min,
+            spread_ratio_max,
+            queue_imbalance_min,
+            queue_imbalance_max,
+        });
+    }
+    let held_spacings = spacings
+        .iter()
+        .filter(|s| s.sign_kept_phases == s.phases_run)
+        .count();
+    let lost_spacings = spacings.iter().filter(|s| s.sign_kept_phases == 0).count();
+    let split_spacings = spacings.len() - held_spacings - lost_spacings;
+    Ok(GridPhase {
+        product: product.to_string(),
+        phases,
+        full,
+        spacings,
+        held_spacings,
+        lost_spacings,
+        split_spacings,
     })
 }

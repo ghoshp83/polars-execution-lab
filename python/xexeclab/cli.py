@@ -10,6 +10,7 @@ from . import __version__
 from .engine import (
     bars,
     book_grid_across,
+    book_grid_phase,
     book_grid_sweep,
     calibrate_impact,
     calibrate_impact_robust,
@@ -159,6 +160,13 @@ def cmd_book_grid_across(a: argparse.Namespace) -> None:
     product = books[0]["product"][0] if books[0].height else a.product
     grid = [float(s) for s in a.every_grid.split(",")]
     print(json.dumps(book_grid_across(books, product, grid)))
+
+
+def cmd_book_grid_phase(a: argparse.Namespace) -> None:
+    df = read_book(a.input)
+    product = df["product"][0] if df.height else a.product
+    grid = [float(s) for s in a.every_grid.split(",")]
+    print(json.dumps(book_grid_phase(df, product, grid, a.phases)))
 
 
 def cmd_sweep(a: argparse.Namespace) -> None:
@@ -657,6 +665,20 @@ def main(argv: list[str] | None = None) -> None:
     )
     pba.add_argument("--product", default="BTC-USD")
     pba.set_defaults(fn=cmd_book_grid_across)
+
+    pbp = sub.add_parser(
+        "book-grid-phase",
+        help="each spacing started several ways: does the queue's side depend on the start",
+    )
+    pbp.add_argument(
+        "--input", required=True, help="full-rate book replay (.ndjson/.jsonl/.parquet)"
+    )
+    pbp.add_argument(
+        "--every-grid", default="1,2,5", help="comma-separated spacings in seconds, each > 0"
+    )
+    pbp.add_argument("--phases", type=int, default=4, help="starts per spacing, 2 or more")
+    pbp.add_argument("--product", default="BTC-USD")
+    pbp.set_defaults(fn=cmd_book_grid_phase)
 
     psw = sub.add_parser(
         "sweep",

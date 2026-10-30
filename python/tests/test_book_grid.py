@@ -1,7 +1,7 @@
 import polars as pl
 import pytest
 
-from xexeclab.engine import book_grid_across, book_grid_sweep
+from xexeclab.engine import book_grid_across, book_grid_phase, book_grid_sweep
 
 S = 1_000_000_000
 
@@ -105,3 +105,55 @@ def test_each_spacing_names_the_books_that_lose_their_queue_side():
 def test_a_grid_across_books_needs_two_of_them(books):
     with pytest.raises(ValueError):
         book_grid_across(books, "BTC-USD", [1.0])
+
+
+@pytest.mark.parametrize("grid", [[float("inf")], [float("nan")], [1.0, 2.0, 1.0]])
+def test_a_grid_spacing_must_be_finite_and_listed_once(grid):
+    # Infinity used to overflow here, while Rust saturated and answered.
+    with pytest.raises(ValueError):
+        book_grid_sweep(_book(), "BTC-USD", grid)
+
+
+def test_a_repeated_spacing_is_not_counted_twice_as_held():
+    with pytest.raises(ValueError):
+        book_grid_across([_book(), _steady_book()], "BTC-USD", [1.0, 1.0])
+
+
+def test_where_a_grid_starts_can_decide_which_side_the_queue_reports():
+    phase = book_grid_phase(_book(), "BTC-USD", [2.0], 2)
+    two = phase["spacings"][0]
+    # From 0 s it lands on 0, 2, 4 (-1/6); from 1 s on 1, 3 (+0.5). Same book.
+    assert two["phases_run"] == 2
+    assert (two["snapshots_min"], two["snapshots_max"]) == (2, 3)
+    assert two["sign_kept_phases"] == 1
+    assert two["first_phase_kept"] is False
+    assert two["queue_imbalance_min"] == pytest.approx(-1 / 6, abs=1e-8)
+    assert two["queue_imbalance_max"] == pytest.approx(0.5, abs=1e-8)
+    assert (phase["held_spacings"], phase["lost_spacings"], phase["split_spacings"]) == (0, 0, 1)
+
+
+def test_the_first_start_is_the_grid_book_grid_runs():
+    grid = [1.0, 2.0, 3.0]
+    phase = book_grid_phase(_book(), "BTC-USD", grid, 3)
+    sweep = book_grid_sweep(_book(), "BTC-USD", grid)
+    for p, r in zip(phase["spacings"], sweep["rows"], strict=True):
+        assert p["first_phase_kept"] == r["queue_sign_kept"]
+    assert phase["full"] == sweep["full"]
+
+
+def test_a_start_past_the_end_of_the_book_is_left_out_and_the_counts_partition():
+    # At 10 s and five starts, offsets 2 s and 4 s still land on a 4 s book; 6 s
+    # and 8 s fall past its end and keep nothing.
+    phase = book_grid_phase(_book(), "BTC-USD", [1.0, 10.0], 5)
+    assert phase["spacings"][1]["phases_run"] == 3
+    assert phase["spacings"][1]["snapshots_max"] == 1
+    assert phase["held_spacings"] + phase["lost_spacings"] + phase["split_spacings"] == 2
+    steady = book_grid_phase(_steady_book(), "BTC-USD", [1.0, 2.0], 4)
+    assert steady["held_spacings"] == 2
+    assert (steady["lost_spacings"], steady["split_spacings"]) == (0, 0)
+
+
+@pytest.mark.parametrize("grid,phases", [([1.0], 0), ([1.0], 1), ([], 2), ([float("inf")], 2)])
+def test_a_phase_sweep_needs_two_starts_and_a_clean_grid(grid, phases):
+    with pytest.raises(ValueError):
+        book_grid_phase(_book(), "BTC-USD", grid, phases)

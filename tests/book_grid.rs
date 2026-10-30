@@ -1,4 +1,4 @@
-use xexec::grid::{book_grid_across, book_grid_sweep};
+use xexec::grid::{book_grid_across, book_grid_phase, book_grid_sweep};
 use xexec::model::BookLevel;
 
 const S: i64 = 1_000_000_000;
@@ -116,4 +116,74 @@ fn each_spacing_names_the_books_that_lose_their_queue_side() {
 fn a_grid_across_books_needs_two_of_them() {
     assert!(book_grid_across(&[book()], "BTC-USD", &[1.0]).is_err());
     assert!(book_grid_across(&[], "BTC-USD", &[1.0]).is_err());
+}
+
+#[test]
+fn a_grid_spacing_must_be_finite_and_listed_once() {
+    // Infinity used to pass here and saturate, while Python overflowed on it.
+    for grid in [vec![f64::INFINITY], vec![f64::NAN], vec![1.0, 2.0, 1.0]] {
+        assert!(
+            book_grid_sweep(&book(), "BTC-USD", &grid).is_err(),
+            "{grid:?}"
+        );
+    }
+    // A repeat would be counted twice as held.
+    assert!(book_grid_across(&[book(), steady_book()], "BTC-USD", &[1.0, 1.0]).is_err());
+}
+
+#[test]
+fn where_a_grid_starts_can_decide_which_side_the_queue_reports() {
+    let phase = book_grid_phase(&book(), "BTC-USD", &[2.0], 2).unwrap();
+    let two = &phase.spacings[0];
+    // From 0 s it lands on 0, 2, 4 (-1/6); from 1 s on 1, 3 (+0.5). Same book.
+    assert_eq!(two.phases_run, 2);
+    assert_eq!((two.snapshots_min, two.snapshots_max), (2, 3));
+    assert_eq!(two.sign_kept_phases, 1);
+    assert!(!two.first_phase_kept);
+    assert!((two.queue_imbalance_min + 1.0 / 6.0).abs() < 1e-8);
+    assert!((two.queue_imbalance_max - 0.5).abs() < 1e-8);
+    assert_eq!(
+        (
+            phase.held_spacings,
+            phase.lost_spacings,
+            phase.split_spacings
+        ),
+        (0, 0, 1)
+    );
+}
+
+#[test]
+fn the_first_start_is_the_grid_book_grid_runs() {
+    let grid = [1.0, 2.0, 3.0];
+    let phase = book_grid_phase(&book(), "BTC-USD", &grid, 3).unwrap();
+    let sweep = book_grid_sweep(&book(), "BTC-USD", &grid).unwrap();
+    for (p, r) in phase.spacings.iter().zip(&sweep.rows) {
+        assert_eq!(p.first_phase_kept, r.queue_sign_kept);
+    }
+    assert_eq!(phase.full.avg_spread, sweep.full.avg_spread);
+}
+
+#[test]
+fn a_start_past_the_end_of_the_book_is_left_out_and_the_counts_partition() {
+    // At 10 s and five starts, offsets 2 s and 4 s still land on a 4 s book; 6 s
+    // and 8 s fall past its end and keep nothing.
+    let phase = book_grid_phase(&book(), "BTC-USD", &[1.0, 10.0], 5).unwrap();
+    assert_eq!(phase.spacings[1].phases_run, 3);
+    assert_eq!(phase.spacings[1].snapshots_max, 1);
+    assert_eq!(
+        phase.held_spacings + phase.lost_spacings + phase.split_spacings,
+        2
+    );
+    let steady = book_grid_phase(&steady_book(), "BTC-USD", &[1.0, 2.0], 4).unwrap();
+    assert_eq!(steady.held_spacings, 2);
+    assert_eq!((steady.lost_spacings, steady.split_spacings), (0, 0));
+}
+
+#[test]
+fn a_phase_sweep_needs_two_starts_and_a_clean_grid() {
+    for phases in [0, 1] {
+        assert!(book_grid_phase(&book(), "BTC-USD", &[1.0], phases).is_err());
+    }
+    assert!(book_grid_phase(&book(), "BTC-USD", &[], 2).is_err());
+    assert!(book_grid_phase(&book(), "BTC-USD", &[f64::INFINITY], 2).is_err());
 }

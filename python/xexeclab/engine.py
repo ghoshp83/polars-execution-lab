@@ -420,12 +420,15 @@ def queue_metrics(df: pl.DataFrame, product: str) -> dict:
     }
 
 
-def _thin_book(df: pl.DataFrame, every_ns: int) -> pl.DataFrame:
-    """The snapshots a grid of ``every_ns`` keeps: the first, then each one at
-    least ``every_ns`` after the last kept. Mirrors the Rust ``thin``."""
+def _thin_book(df: pl.DataFrame, every_ns: int, offset_ns: int = 0) -> pl.DataFrame:
+    """The snapshots a grid of ``every_ns`` keeps: the first at least
+    ``offset_ns`` into the book, then each one at least ``every_ns`` after the
+    last kept. Mirrors the Rust ``thin``."""
+    ts = df["ts_ns"].unique().sort().to_list()
+    start = ts[0] + offset_ns if ts else 0
     kept: list[int] = []
-    for t in df["ts_ns"].unique().sort().to_list():
-        if not kept or t - kept[-1] >= every_ns:
+    for t in ts:
+        if t >= start and (not kept or t - kept[-1] >= every_ns):
             kept.append(t)
     return df.filter(pl.col("ts_ns").is_in(kept))
 
@@ -453,20 +456,36 @@ def _grid_row(df: pl.DataFrame, product: str, every_s: float, full: dict | None)
     }
 
 
+def _check_every_grid(every_grid: list[float]) -> None:
+    """Positive, finite spacings, none twice: a spacing listed twice would count
+    twice in every held figure read over the grid. Mirrors the Rust
+    ``check_every_grid``."""
+    if not every_grid:
+        raise ValueError("empty --every-grid")
+    for s in every_grid:
+        if not math.isfinite(s) or s <= 0.0:
+            raise ValueError(f"--every-grid spacings must be finite and > 0, got {s}")
+    for i, s in enumerate(every_grid):
+        if s in every_grid[:i]:
+            raise ValueError(f"--every-grid repeats {s}")
+
+
+def _full_row(df: pl.DataFrame, product: str) -> dict:
+    """The book as recorded, the row every spacing is read against."""
+    full = _grid_row(df, product, 0.0, None)
+    if not full["avg_spread"] > 0.0:
+        raise ValueError(f"full-rate spread {full['avg_spread']} is not positive")
+    return full
+
+
 def book_grid_sweep(df: pl.DataFrame, product: str, every_grid: list[float]) -> dict:
     """A full-rate book thinned to each spacing on ``every_grid`` (seconds, each
     > 0), the way ``ingest-book --every`` thins its writes, and measured at
     each beside the book as recorded. No spacing is named best. Mirrors the
     Rust ``book_grid_sweep``; see its ``GridRow`` doc for the field meanings.
     """
-    if not every_grid:
-        raise ValueError("empty --every-grid")
-    for s in every_grid:
-        if not s > 0.0:
-            raise ValueError(f"--every-grid spacings must be > 0, got {s}")
-    full = _grid_row(df, product, 0.0, None)
-    if not full["avg_spread"] > 0.0:
-        raise ValueError(f"full-rate spread {full['avg_spread']} is not positive")
+    _check_every_grid(every_grid)
+    full = _full_row(df, product)
     rows = [
         _grid_row(_thin_book(df, int(math.floor(s * 1e9 + 0.5))), product, s, full)
         for s in every_grid
@@ -515,6 +534,52 @@ def book_grid_across(books: list[pl.DataFrame], product: str, every_grid: list[f
             )
             for out in range(len(sweeps))
         ],
+    }
+
+
+def book_grid_phase(df: pl.DataFrame, product: str, every_grid: list[float], phases: int) -> dict:
+    """The grid at ``phases`` starts (two or more): start ``k`` is ``k / phases``
+    of a spacing after the first snapshot, and start 0 is the grid ``book-grid``
+    runs. A spacing is held when every start keeps the queue side, lost when
+    none does, split otherwise. Mirrors the Rust ``book_grid_phase``; see its
+    ``PhaseSpacing`` doc for the field meanings.
+    """
+    _check_every_grid(every_grid)
+    if phases < 2:
+        raise ValueError(f"--phases must be 2 or more, got {phases}")
+    full = _full_row(df, product)
+    spacings = []
+    for s in every_grid:
+        every_ns = int(math.floor(s * 1e9 + 0.5))
+        rows = []
+        for k in range(phases):
+            kept = _thin_book(df, every_ns, every_ns * k // phases)
+            if kept.height:
+                rows.append(_grid_row(kept, product, s, full))
+        spacings.append(
+            {
+                "every_s": s,
+                "phases_run": len(rows),
+                "snapshots_min": min(r["snapshots"] for r in rows),
+                "snapshots_max": max(r["snapshots"] for r in rows),
+                "sign_kept_phases": sum(1 for r in rows if r["queue_sign_kept"]),
+                "first_phase_kept": rows[0]["queue_sign_kept"],
+                "spread_ratio_min": min(r["spread_ratio"] for r in rows),
+                "spread_ratio_max": max(r["spread_ratio"] for r in rows),
+                "queue_imbalance_min": min(r["avg_queue_imbalance"] for r in rows),
+                "queue_imbalance_max": max(r["avg_queue_imbalance"] for r in rows),
+            }
+        )
+    held = sum(1 for s in spacings if s["sign_kept_phases"] == s["phases_run"])
+    lost = sum(1 for s in spacings if s["sign_kept_phases"] == 0)
+    return {
+        "product": product,
+        "phases": phases,
+        "full": full,
+        "spacings": spacings,
+        "held_spacings": held,
+        "lost_spacings": lost,
+        "split_spacings": len(spacings) - held - lost,
     }
 
 
