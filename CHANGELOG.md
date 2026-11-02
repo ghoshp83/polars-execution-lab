@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.53.0] - 2026-11-02
+
+### Added
+- **`book-grid-phase-across`** (Rust and Python): `book-grid-phase` on two or more
+  full-rate books (comma-separated `--input`, `--every-grid`, `--phases`), read
+  per spacing over every book at every start. Per spacing it reports
+  `held_books`, `lost_by` and `split_by` (book indices, input order; the three
+  partition the books) and `first_phase_books`, the count `book-grid-across`
+  gives. Overall `held_spacings`, `held_without` and
+  `first_phase_held_spacings`, which is `book-grid-across`'s `held_spacings` on
+  the same books. No spacing is named best.
+- **An eleventh recorded day**, `data/real/btc_usd_d11_{1..6}`: the Monday after
+  day ten, 1,882 trades and 12.72 BTC, under half day ten's volume.
+- **A seventh full-rate book**, `data/real/btc_usd_d11_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 270 snapshots; 185 unchanged updates were not
+  written. Equivalence tests 42 to 46 now cover it too; 48 is new.
+
+### Notes
+- Seven books at ten starts: the half second still holds on every book at every
+  start, so `held_spacings` stays 1 and matches `first_phase_held_spacings`.
+- The per-book reading does not survive. `held_without` is `[2, 1, 4, 1, 1, 1, 1]`
+  at the first start and `[1, 1, 2, 1, 1, 1, 1]` at every start: day seven alone
+  takes one spacing away, not three, and leaving out day five frees nothing.
+  Books held per spacing fall from `[6, 7, 6, 6, 6, 5]` to `[6, 7, 5, 5, 4, 3]`.
+- Day eleven's queue rests on the ask (-0.699) and keeps its side at every
+  spacing and every start, the third book in a row to do so. From half a second
+  on, its grids see a spread 0.58 of the full-rate one.
+
 ## [0.52.0] - 2026-10-30
 
 ### Added
