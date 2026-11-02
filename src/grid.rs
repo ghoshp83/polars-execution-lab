@@ -352,3 +352,96 @@ pub fn book_grid_phase(
         split_spacings,
     })
 }
+
+/// One spacing of a [`GridPhaseAcross`], read over every book at every start.
+/// - `held_books` -- the books on which every start keeps the queue side.
+/// - `lost_by` / `split_by` -- the indices of the books on which no start, or
+///   only some starts, keep it, in input order. The three partition the books.
+/// - `first_phase_books` -- the books keeping the side at offset 0, the count
+///   `book-grid-across` reports as `sign_kept_books`.
+#[derive(Debug, Serialize)]
+pub struct PhaseAcrossSpacing {
+    pub every_s: f64,
+    pub held_books: usize,
+    pub lost_by: Vec<usize>,
+    pub split_by: Vec<usize>,
+    pub first_phase_books: usize,
+}
+
+/// [`book_grid_phase`] on each book (two or more), then read per spacing.
+/// `held_spacings` counts the spacings held on every book at every start, and
+/// `held_without[i]` the same with book `i` left out. `first_phase_held_spacings`
+/// is `book-grid-across`'s `held_spacings` on the same books: a spacing counted
+/// there and not in `held_spacings` was held only because of where the grid
+/// began. As with one book, more starts can only lower `held_spacings`.
+#[derive(Debug, Serialize)]
+pub struct GridPhaseAcross {
+    pub books: Vec<GridPhase>,
+    pub spacings: Vec<PhaseAcrossSpacing>,
+    pub held_spacings: usize,
+    pub first_phase_held_spacings: usize,
+    pub held_without: Vec<usize>,
+}
+
+/// Mirrors `book_grid_phase_across` in `python/xexeclab/engine.py`.
+pub fn book_grid_phase_across(
+    books: &[Vec<BookLevel>],
+    product: &str,
+    every_grid: &[f64],
+    phases: usize,
+) -> Result<GridPhaseAcross> {
+    if books.len() < 2 {
+        return Err(anyhow!(
+            "book-grid-phase-across needs two or more books, got {}",
+            books.len()
+        ));
+    }
+    let books = books
+        .iter()
+        .map(|levels| book_grid_phase(levels, product, every_grid, phases))
+        .collect::<Result<Vec<_>>>()?;
+    let held = |b: &GridPhase, i: usize| b.spacings[i].sign_kept_phases == b.spacings[i].phases_run;
+    let spacings: Vec<PhaseAcrossSpacing> = (0..every_grid.len())
+        .map(|i| PhaseAcrossSpacing {
+            every_s: every_grid[i],
+            held_books: books.iter().filter(|b| held(b, i)).count(),
+            lost_by: (0..books.len())
+                .filter(|&j| books[j].spacings[i].sign_kept_phases == 0)
+                .collect(),
+            split_by: (0..books.len())
+                .filter(|&j| !held(&books[j], i) && books[j].spacings[i].sign_kept_phases > 0)
+                .collect(),
+            first_phase_books: books
+                .iter()
+                .filter(|b| b.spacings[i].first_phase_kept)
+                .count(),
+        })
+        .collect();
+    let held_spacings = spacings
+        .iter()
+        .filter(|s| s.held_books == books.len())
+        .count();
+    let first_phase_held_spacings = spacings
+        .iter()
+        .filter(|s| s.first_phase_books == books.len())
+        .count();
+    let held_without = (0..books.len())
+        .map(|out| {
+            (0..every_grid.len())
+                .filter(|&i| {
+                    books
+                        .iter()
+                        .enumerate()
+                        .all(|(j, b)| j == out || held(b, i))
+                })
+                .count()
+        })
+        .collect();
+    Ok(GridPhaseAcross {
+        books,
+        spacings,
+        held_spacings,
+        first_phase_held_spacings,
+        held_without,
+    })
+}

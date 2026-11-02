@@ -11,6 +11,7 @@ from .engine import (
     bars,
     book_grid_across,
     book_grid_phase,
+    book_grid_phase_across,
     book_grid_sweep,
     calibrate_impact,
     calibrate_impact_robust,
@@ -167,6 +168,13 @@ def cmd_book_grid_phase(a: argparse.Namespace) -> None:
     product = df["product"][0] if df.height else a.product
     grid = [float(s) for s in a.every_grid.split(",")]
     print(json.dumps(book_grid_phase(df, product, grid, a.phases)))
+
+
+def cmd_book_grid_phase_across(a: argparse.Namespace) -> None:
+    books = [read_book(p.strip()) for p in a.input.split(",")]
+    product = books[0]["product"][0] if books[0].height else a.product
+    grid = [float(s) for s in a.every_grid.split(",")]
+    print(json.dumps(book_grid_phase_across(books, product, grid, a.phases)))
 
 
 def cmd_sweep(a: argparse.Namespace) -> None:
@@ -679,6 +687,20 @@ def main(argv: list[str] | None = None) -> None:
     pbp.add_argument("--phases", type=int, default=4, help="starts per spacing, 2 or more")
     pbp.add_argument("--product", default="BTC-USD")
     pbp.set_defaults(fn=cmd_book_grid_phase)
+
+    pbpa = sub.add_parser(
+        "book-grid-phase-across",
+        help="each spacing started several ways on several books, read over all of them",
+    )
+    pbpa.add_argument(
+        "--input", required=True, help="comma-separated full-rate book replays, two or more"
+    )
+    pbpa.add_argument(
+        "--every-grid", default="1,2,5", help="comma-separated spacings in seconds, each > 0"
+    )
+    pbpa.add_argument("--phases", type=int, default=4, help="starts per spacing, 2 or more")
+    pbpa.add_argument("--product", default="BTC-USD")
+    pbpa.set_defaults(fn=cmd_book_grid_phase_across)
 
     psw = sub.add_parser(
         "sweep",

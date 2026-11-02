@@ -583,6 +583,57 @@ def book_grid_phase(df: pl.DataFrame, product: str, every_grid: list[float], pha
     }
 
 
+def book_grid_phase_across(
+    books: list[pl.DataFrame], product: str, every_grid: list[float], phases: int
+) -> dict:
+    """``book_grid_phase`` on each book (two or more), then read per spacing:
+    the books held at every start, and those lost or split. A spacing counted in
+    ``first_phase_held_spacings`` and not in ``held_spacings`` was held only
+    because of where the grid began. Mirrors the Rust ``book_grid_phase_across``;
+    see its ``PhaseAcrossSpacing`` doc for the field meanings.
+    """
+    if len(books) < 2:
+        raise ValueError(f"book-grid-phase-across needs two or more books, got {len(books)}")
+    runs = [book_grid_phase(df, product, every_grid, phases) for df in books]
+
+    def held(b: dict, i: int) -> bool:
+        return b["spacings"][i]["sign_kept_phases"] == b["spacings"][i]["phases_run"]
+
+    spacings = []
+    for i, s in enumerate(every_grid):
+        spacings.append(
+            {
+                "every_s": s,
+                "held_books": sum(1 for b in runs if held(b, i)),
+                "lost_by": [
+                    j for j, b in enumerate(runs) if b["spacings"][i]["sign_kept_phases"] == 0
+                ],
+                "split_by": [
+                    j
+                    for j, b in enumerate(runs)
+                    if not held(b, i) and b["spacings"][i]["sign_kept_phases"] > 0
+                ],
+                "first_phase_books": sum(1 for b in runs if b["spacings"][i]["first_phase_kept"]),
+            }
+        )
+    return {
+        "books": runs,
+        "spacings": spacings,
+        "held_spacings": sum(1 for s in spacings if s["held_books"] == len(runs)),
+        "first_phase_held_spacings": sum(
+            1 for s in spacings if s["first_phase_books"] == len(runs)
+        ),
+        "held_without": [
+            sum(
+                1
+                for i in range(len(every_grid))
+                if all(held(b, i) for j, b in enumerate(runs) if j != out)
+            )
+            for out in range(len(runs))
+        ],
+    }
+
+
 def sweep_cost(df: pl.DataFrame, product: str, side: str, order_size: float) -> dict:
     """Session book-sweep cost for a marketable order, rounded to match Rust.
 

@@ -1,4 +1,4 @@
-use xexec::grid::{book_grid_across, book_grid_phase, book_grid_sweep};
+use xexec::grid::{book_grid_across, book_grid_phase, book_grid_phase_across, book_grid_sweep};
 use xexec::model::BookLevel;
 
 const S: i64 = 1_000_000_000;
@@ -186,4 +186,61 @@ fn a_phase_sweep_needs_two_starts_and_a_clean_grid() {
     }
     assert!(book_grid_phase(&book(), "BTC-USD", &[], 2).is_err());
     assert!(book_grid_phase(&book(), "BTC-USD", &[f64::INFINITY], 2).is_err());
+}
+
+/// Bid-heavy at 0 s, 3 s and 4 s, ask-heavy at 1 s and 2 s: +0.1 at full rate.
+/// A two-second grid from 0 s lands on 0, 2, 4 (+1/6) and keeps the bid; from
+/// 1 s it lands on 1, 3 (exactly 0) and keeps neither side.
+fn kept_at_start_book() -> Vec<BookLevel> {
+    let ask_heavy = |t| [bl(t, "bid", 100.9, 1.0), bl(t, "ask", 101.0, 3.0)];
+    let bid_heavy = |t| [bl(t, "bid", 100.0, 3.0), bl(t, "ask", 101.0, 1.0)];
+    [
+        bid_heavy(0),
+        ask_heavy(S),
+        ask_heavy(2 * S),
+        bid_heavy(3 * S),
+        bid_heavy(4 * S),
+    ]
+    .concat()
+}
+
+#[test]
+fn a_spacing_holds_across_books_only_when_every_start_on_every_book_keeps_it() {
+    let across =
+        book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0, 2.0], 2).unwrap();
+    assert_eq!(across.books.len(), 2);
+    let one = &across.spacings[0];
+    assert_eq!(one.held_books, 2);
+    assert!(one.lost_by.is_empty() && one.split_by.is_empty());
+    // At two seconds the first book splits: lost from 0 s, kept from 1 s.
+    let two = &across.spacings[1];
+    assert_eq!((two.held_books, two.first_phase_books), (1, 1));
+    assert_eq!(two.split_by, vec![0]);
+    assert!(two.lost_by.is_empty());
+    assert_eq!(across.held_spacings, 1);
+    assert_eq!(across.held_without, vec![2, 1]);
+    // Held, lost and split partition the books at every spacing.
+    for s in &across.spacings {
+        assert_eq!(s.held_books + s.lost_by.len() + s.split_by.len(), 2);
+    }
+}
+
+#[test]
+fn a_spacing_held_at_the_first_start_on_every_book_can_still_split() {
+    let books = [kept_at_start_book(), steady_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    // book-grid-across reads only the first start and calls the spacing held.
+    let first = book_grid_across(&books, "BTC-USD", &[2.0]).unwrap();
+    assert_eq!(first.held_spacings, 1);
+    assert_eq!(across.first_phase_held_spacings, first.held_spacings);
+    // Started from 1 s, the grid loses the first book's side.
+    assert_eq!(across.held_spacings, 0);
+    assert_eq!(across.spacings[0].split_by, vec![0]);
+}
+
+#[test]
+fn a_phase_sweep_across_books_needs_two_books_two_starts_and_a_clean_grid() {
+    assert!(book_grid_phase_across(&[book()], "BTC-USD", &[1.0], 2).is_err());
+    assert!(book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0], 1).is_err());
+    assert!(book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0, 1.0], 2).is_err());
 }

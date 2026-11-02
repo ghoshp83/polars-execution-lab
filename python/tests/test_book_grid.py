@@ -1,7 +1,12 @@
 import polars as pl
 import pytest
 
-from xexeclab.engine import book_grid_across, book_grid_phase, book_grid_sweep
+from xexeclab.engine import (
+    book_grid_across,
+    book_grid_phase,
+    book_grid_phase_across,
+    book_grid_sweep,
+)
 
 S = 1_000_000_000
 
@@ -157,3 +162,63 @@ def test_a_start_past_the_end_of_the_book_is_left_out_and_the_counts_partition()
 def test_a_phase_sweep_needs_two_starts_and_a_clean_grid(grid, phases):
     with pytest.raises(ValueError):
         book_grid_phase(_book(), "BTC-USD", grid, phases)
+
+
+def _kept_at_start_book() -> pl.DataFrame:
+    """Bid-heavy at 0, 3, 4 s and ask-heavy at 1, 2 s; see the Rust twin. A
+    two-second grid from 0 s keeps the bid (+1/6); from 1 s it reads exactly 0."""
+
+    def ask_heavy(t):
+        return [(t, "BTC-USD", "bid", 0, 100.9, 1.0), (t, "BTC-USD", "ask", 0, 101.0, 3.0)]
+
+    def bid_heavy(t):
+        return [(t, "BTC-USD", "bid", 0, 100.0, 3.0), (t, "BTC-USD", "ask", 0, 101.0, 1.0)]
+
+    rows = bid_heavy(0) + ask_heavy(S) + ask_heavy(2 * S) + bid_heavy(3 * S) + bid_heavy(4 * S)
+    return pl.DataFrame(rows, schema=_SCHEMA, orient="row")
+
+
+def test_a_spacing_holds_across_books_only_when_every_start_on_every_book_keeps_it():
+    across = book_grid_phase_across([_book(), _steady_book()], "BTC-USD", [1.0, 2.0], 2)
+    assert len(across["books"]) == 2
+    one = across["spacings"][0]
+    assert one["held_books"] == 2
+    assert one["lost_by"] == [] and one["split_by"] == []
+    # At two seconds the first book splits: lost from 0 s, kept from 1 s.
+    two = across["spacings"][1]
+    assert (two["held_books"], two["first_phase_books"]) == (1, 1)
+    assert two["split_by"] == [0]
+    assert two["lost_by"] == []
+    assert across["held_spacings"] == 1
+    assert across["held_without"] == [2, 1]
+    # Held, lost and split partition the books at every spacing.
+    for s in across["spacings"]:
+        assert s["held_books"] + len(s["lost_by"]) + len(s["split_by"]) == 2
+
+
+def test_a_spacing_held_at_the_first_start_on_every_book_can_still_split():
+    books = [_kept_at_start_book(), _steady_book()]
+    across = book_grid_phase_across(books, "BTC-USD", [2.0], 2)
+    # book-grid-across reads only the first start and calls the spacing held.
+    first = book_grid_across(books, "BTC-USD", [2.0])
+    assert first["held_spacings"] == 1
+    assert across["first_phase_held_spacings"] == first["held_spacings"]
+    # Started from 1 s, the grid loses the first book's side.
+    assert across["held_spacings"] == 0
+    assert across["spacings"][0]["split_by"] == [0]
+
+
+@pytest.mark.parametrize(
+    "books, grid, phases",
+    [
+        (1, [1.0], 2),
+        (2, [1.0], 1),
+        (2, [1.0, 1.0], 2),
+        (2, [float("inf")], 2),
+    ],
+)
+def test_a_phase_sweep_across_books_needs_two_books_two_starts_and_a_clean_grid(
+    books, grid, phases
+):
+    with pytest.raises(ValueError):
+        book_grid_phase_across([_book(), _steady_book()][:books], "BTC-USD", grid, phases)
