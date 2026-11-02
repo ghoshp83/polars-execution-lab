@@ -16,6 +16,7 @@ from xexeclab.cli import main
 from xexeclab.engine import (
     book_grid_across,
     book_grid_phase,
+    book_grid_phase_across,
     book_grid_sweep,
     calibrate_impact,
     calibrate_impact_robust,
@@ -104,6 +105,7 @@ FULL_RATE_BOOKS = (
     "data/real/btc_usd_d8_book_full.ndjson",
     "data/real/btc_usd_d9_book_full.ndjson",
     "data/real/btc_usd_d10_book_full.ndjson",
+    "data/real/btc_usd_d11_book_full.ndjson",
 )
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
@@ -2374,3 +2376,44 @@ def test_both_engines_refuse_the_same_grids():
     assert proc.returncode != 0
     with pytest.raises(ValueError):
         book_grid_phase(book, "BTC-USD", [1.0], 1)
+
+
+def test_rust_and_python_agree_on_every_start_across_every_book():
+    """The forty-eighth: every full-rate book at once, four and ten starts per
+    spacing, whole-report equality; then both refuse one book and one start."""
+    binary = _find_binary()
+    if not binary:
+        pytest.skip("xexec Rust binary not built; run `cargo build --release`")
+    grid = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0]
+    books = [read_book(p) for p in FULL_RATE_BOOKS]
+    for phases in (4, 10):
+        proc = subprocess.run(
+            [
+                binary,
+                "book-grid-phase-across",
+                "--input",
+                ",".join(FULL_RATE_BOOKS),
+                "--every-grid",
+                ",".join(str(s) for s in grid),
+                "--phases",
+                str(phases),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        rust = json.loads(proc.stdout)
+        assert rust == book_grid_phase_across(books, "BTC-USD", grid, phases)
+        for s in rust["spacings"]:
+            assert s["held_books"] + len(s["lost_by"]) + len(s["split_by"]) == len(books)
+    for inputs, phases in ((FULL_RATE_BOOKS[:1], "4"), (FULL_RATE_BOOKS[:2], "1")):
+        proc = subprocess.run(
+            [binary, "book-grid-phase-across", "--input", ",".join(inputs), "--phases", phases],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0
+        with pytest.raises(ValueError):
+            book_grid_phase_across(
+                [read_book(p) for p in inputs], "BTC-USD", [1.0, 2.0, 5.0], int(phases)
+            )
