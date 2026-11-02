@@ -5,7 +5,7 @@
 
 use xexec::curve::sweep_curve;
 use xexec::depth::{depth_metrics, queue_metrics};
-use xexec::grid::{book_grid_across, book_grid_phase, book_grid_sweep};
+use xexec::grid::{book_grid_across, book_grid_phase, book_grid_phase_across, book_grid_sweep};
 use xexec::model::{BookLevel, Tick};
 use xexec::replay::{read_book, read_ticks};
 use xexec::sweep::sweep_cost;
@@ -920,4 +920,93 @@ fn where_a_grid_starts_decides_eleven_of_thirty_six_verdicts() {
         .map(|i| GRID[i])
         .collect();
     assert_eq!(held_everywhere, [0.5]);
+}
+
+fn day_eleven() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d11_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// An eleventh unbroken run, the Monday after day ten's Friday: 1,882 trades and
+/// under half day ten's volume, with one session holding more than a third.
+#[test]
+fn day_eleven_is_its_own_unbroken_run_after_a_weekend() {
+    let day_ten = day_ten();
+    let day_eleven = day_eleven();
+    let ticks: Vec<&Tick> = day_eleven.iter().flatten().collect();
+    assert_eq!(ticks.len(), 1882);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_ten = day_ten.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_ten > 72 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 12.72 && volume < 12.73);
+    let fifth: f64 = day_eleven[4].iter().map(|t| t.size).sum();
+    assert!(fifth > volume / 3.0);
+}
+
+/// The Monday's queue rests on the ask (-0.699) and keeps its side at every
+/// spacing, the third book in a row to do so. Its grids see a tighter touch than
+/// the book had: from half a second on, the spread is 0.58 of the full-rate one.
+/// A seventh book takes nothing away.
+#[test]
+fn a_seventh_book_keeps_its_side_and_sees_a_tighter_touch() {
+    let book = read_book("data/real/btc_usd_d11_book_full.ndjson").unwrap();
+    let monday = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(monday.full.snapshots, 270);
+    assert!(monday.full.avg_queue_imbalance < -0.6);
+    assert_eq!(monday.sign_flips, 0);
+    for r in &monday.rows[1..] {
+        assert!((r.spread_ratio - 0.58064524).abs() < 1e-8);
+    }
+
+    let seven = book_grid_across(
+        &full_rate_books(&["d5", "d6", "d7", "d8", "d9", "d10", "d11"]),
+        "BTC-USD",
+        &GRID,
+    )
+    .unwrap();
+    assert_eq!(seven.held_spacings, 1);
+    assert_eq!(seven.held_without, [2, 1, 4, 1, 1, 1, 1]);
+}
+
+/// Seven books at ten starts. The half second still holds on all of them, so the
+/// count `book-grid-across` gives survives. What it says about each book does not:
+/// read at every start, day seven alone takes one spacing away, not three, and
+/// day five none. Six book-and-spacing verdicts held at start 0 split elsewhere.
+#[test]
+fn read_at_every_start_one_book_takes_one_spacing_away_not_three() {
+    let books = full_rate_books(&["d5", "d6", "d7", "d8", "d9", "d10", "d11"]);
+    let first = book_grid_across(&books, "BTC-USD", &GRID).unwrap();
+    let every = book_grid_phase_across(&books, "BTC-USD", &GRID, 10).unwrap();
+    assert_eq!(every.held_spacings, 1);
+    assert_eq!(every.first_phase_held_spacings, first.held_spacings);
+    assert_eq!(first.held_without, [2, 1, 4, 1, 1, 1, 1]);
+    assert_eq!(every.held_without, [1, 1, 2, 1, 1, 1, 1]);
+    let held: Vec<usize> = every.spacings.iter().map(|s| s.held_books).collect();
+    let at_start: Vec<usize> = every.spacings.iter().map(|s| s.first_phase_books).collect();
+    assert_eq!(held, [6, 7, 5, 5, 4, 3]);
+    assert_eq!(at_start, [6, 7, 6, 6, 6, 5]);
+    let lost: Vec<&Vec<usize>> = every.spacings.iter().map(|s| &s.lost_by).collect();
+    assert_eq!(
+        lost,
+        [&vec![2], &vec![], &vec![], &vec![], &vec![], &vec![]]
+    );
+    let split: Vec<&Vec<usize>> = every.spacings.iter().map(|s| &s.split_by).collect();
+    assert_eq!(
+        split,
+        [
+            &vec![],
+            &vec![],
+            &vec![2, 3],
+            &vec![2, 3],
+            &vec![0, 2, 3],
+            &vec![0, 1, 2, 3]
+        ]
+    );
 }

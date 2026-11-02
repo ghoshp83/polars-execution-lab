@@ -13,6 +13,7 @@ import pytest
 from xexeclab.engine import (
     book_grid_across,
     book_grid_phase,
+    book_grid_phase_across,
     book_grid_sweep,
     read_book,
     read_ticks,
@@ -730,3 +731,74 @@ def test_where_a_grid_starts_decides_eleven_of_thirty_six_verdicts():
         if all(p["spacings"][i]["sign_kept_phases"] == 10 for p in runs)
     ]
     assert held_everywhere == [0.5]
+
+
+@pytest.fixture(scope="module")
+def day_eleven():
+    return [read_ticks(REAL / f"btc_usd_d11_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_eleven_is_its_own_unbroken_run_after_a_weekend(day_ten, day_eleven):
+    # An eleventh unbroken run, the Monday after day ten's Friday: 1,882 trades
+    # and under half day ten's volume, with one session holding more than a third.
+    ids = [i for s in day_eleven for i in s["trade_id"].to_list()]
+    ts = [t for s in day_eleven for t in s["ts_ns"].to_list()]
+    assert len(ids) == 1882
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_ten = max(t for s in day_ten for t in s["ts_ns"].to_list())
+    assert ts[0] - last_day_ten > 72 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_eleven:
+        for size in s["size"].to_list():
+            volume += size
+    assert 12.72 < volume < 12.73
+    fifth = 0.0
+    for size in day_eleven[4]["size"].to_list():
+        fifth += size
+    assert fifth > volume / 3
+
+
+def test_a_seventh_book_keeps_its_side_and_sees_a_tighter_touch():
+    """The Monday's queue rests on the ask (-0.699) and keeps its side at every
+    spacing, the third book in a row to do so. Its grids see a tighter touch than
+    the book had: from half a second on, the spread is 0.58 of the full-rate one.
+    A seventh book takes nothing away."""
+    monday = book_grid_sweep(read_book(REAL / "btc_usd_d11_book_full.ndjson"), "BTC-USD", GRID)
+    assert monday["full"]["snapshots"] == 270
+    assert monday["full"]["avg_queue_imbalance"] < -0.6
+    assert monday["sign_flips"] == 0
+    for r in monday["rows"][1:]:
+        assert r["spread_ratio"] == pytest.approx(0.58064524, abs=1e-8)
+
+    seven = book_grid_across(
+        _full_rate_books(["d5", "d6", "d7", "d8", "d9", "d10", "d11"]), "BTC-USD", GRID
+    )
+    assert seven["held_spacings"] == 1
+    assert seven["held_without"] == [2, 1, 4, 1, 1, 1, 1]
+
+
+def test_read_at_every_start_one_book_takes_one_spacing_away_not_three():
+    """Seven books at ten starts. The half second still holds on all of them, so
+    the count ``book-grid-across`` gives survives. What it says about each book
+    does not: read at every start, day seven alone takes one spacing away, not
+    three, and day five none. Six book-and-spacing verdicts held at start 0
+    split elsewhere."""
+    books = _full_rate_books(["d5", "d6", "d7", "d8", "d9", "d10", "d11"])
+    first = book_grid_across(books, "BTC-USD", GRID)
+    every = book_grid_phase_across(books, "BTC-USD", GRID, 10)
+    assert every["held_spacings"] == 1
+    assert every["first_phase_held_spacings"] == first["held_spacings"]
+    assert first["held_without"] == [2, 1, 4, 1, 1, 1, 1]
+    assert every["held_without"] == [1, 1, 2, 1, 1, 1, 1]
+    assert [s["held_books"] for s in every["spacings"]] == [6, 7, 5, 5, 4, 3]
+    assert [s["first_phase_books"] for s in every["spacings"]] == [6, 7, 6, 6, 6, 5]
+    assert [s["lost_by"] for s in every["spacings"]] == [[2], [], [], [], [], []]
+    assert [s["split_by"] for s in every["spacings"]] == [
+        [],
+        [],
+        [2, 3],
+        [2, 3],
+        [0, 2, 3],
+        [0, 1, 2, 3],
+    ]
