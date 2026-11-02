@@ -151,10 +151,13 @@ uv run xexeclab queue   --input data/sample_book.ndjson
 uv run xexeclab book-grid --input data/real/btc_usd_d6_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10
 
 # one grid over several full-rate books: which spacings keep the queue's side on every one
-uv run xexeclab book-grid-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10
+uv run xexeclab book-grid-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10
 
 # each spacing started ten ways across itself: does the queue's side depend on where the grid began
 uv run xexeclab book-grid-phase --input data/real/btc_usd_d7_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
+
+# the same starts on every book at once: which spacings hold on all of them at every start
+uv run xexeclab book-grid-phase-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
 
 # cost of sweeping a marketable order through the L2 book (realised VWAP / slippage)
 uv run xexeclab sweep   --input data/sample_book.ndjson --side buy --size 2.0
@@ -455,10 +458,10 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
-  to make each command's point on a few rows. `data/real/` holds sixty
-  recorded sessions — ten ten-minute runs of consecutive BTC-USD trades on
-  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355 and 3,042 of them —
-  plus 100 seconds of recorded quotes and eight recorded books. They are real but are not a sample
+  to make each command's point on a few rows. `data/real/` holds sixty-six
+  recorded sessions — eleven ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355, 3,042 and 1,882 of them —
+  plus 100 seconds of recorded quotes and nine recorded books. They are real but are not a sample
   of a market: see `data/real/README.md`. The day-three book keeps ten levels
   a side, which averaged 0.66 BTC on the ask: a 2 BTC sweep runs off it in
   every snapshot, so its cost there is a floor. The day-four book keeps fifty,
@@ -519,7 +522,16 @@ This is a **market-data and execution-analytics** project, not a trading system.
   half second is still the one spacing held everywhere, on thirty seconds of
   each of six mornings. Ten starts is a sample as well: a spacing held here is
   one no start tried has lost, and day eight's one and two seconds pass all of
-  four starts and lose one of ten. No start and no spacing is named best.
+  four starts and lose one of ten. **Read at every start, one book takes one
+  spacing away, not three.** `book-grid-phase-across` runs those starts on
+  every book at once. A seventh book, day eleven's (queue -0.699 on the ask,
+  kept at every spacing and every start), still leaves the half second held,
+  and at every start too, so `held_spacings` and
+  `first_phase_held_spacings` are both 1. But `held_without`, read at the first
+  start, is `[2, 1, 4, 1, 1, 1, 1]`; at every start it is
+  `[1, 1, 2, 1, 1, 1, 1]`. Day seven alone takes one spacing away, not three,
+  and leaving out day five frees nothing: what each book was blamed for above
+  was partly where the grid began. No start and no spacing is named best.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
