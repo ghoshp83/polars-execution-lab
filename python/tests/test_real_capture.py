@@ -802,3 +802,62 @@ def test_read_at_every_start_one_book_takes_one_spacing_away_not_three():
         [0, 2, 3],
         [0, 1, 2, 3],
     ]
+
+
+@pytest.fixture(scope="module")
+def day_twelve():
+    return [read_ticks(REAL / f"btc_usd_d12_{i}.ndjson") for i in range(1, 7)]
+
+
+def test_day_twelve_is_its_own_unbroken_run_in_an_evening(day_eleven, day_twelve):
+    # A twelfth unbroken run and the first recorded in the evening, the day after
+    # day eleven's morning: 3,049 trades, three and a half times day eleven's
+    # volume, with the first session holding more than a third.
+    ids = [i for s in day_twelve for i in s["trade_id"].to_list()]
+    ts = [t for s in day_twelve for t in s["ts_ns"].to_list()]
+    assert len(ids) == 3049
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_eleven = max(t for s in day_eleven for t in s["ts_ns"].to_list())
+    assert ts[0] - last_day_eleven > 24 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_twelve:
+        for size in s["size"].to_list():
+            volume += size
+    assert 44.22 < volume < 44.23
+    first = 0.0
+    for size in day_twelve[0]["size"].to_list():
+        first += size
+    assert first > volume / 3
+
+
+def test_an_eighth_book_with_a_flat_queue_flips_once_and_takes_nothing_away():
+    """The evening queue is nearly flat (-0.039) and flips once, at 5 s. An
+    eighth book still leaves the half second held, and takes nothing away on
+    its own."""
+    evening = book_grid_sweep(read_book(REAL / "btc_usd_d12_book_full.ndjson"), "BTC-USD", GRID)
+    assert evening["full"]["snapshots"] == 445
+    assert abs(evening["full"]["avg_queue_imbalance"]) < 0.05
+    assert evening["sign_flips"] == 1
+
+    eight = book_grid_across(
+        _full_rate_books(["d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12"]), "BTC-USD", GRID
+    )
+    assert eight["held_spacings"] == 1
+    assert eight["held_without"] == [1, 1, 4, 1, 1, 1, 1, 1]
+
+
+def test_every_split_spacing_is_kept_by_most_book_and_start_pairs():
+    """Eight books at ten starts, counted in (book, start) pairs. Only the half
+    second keeps the side at all 80, but no split spacing is near lost: the
+    least kept, 10 s, still keeps it at 64. A split verdict here reads as mostly
+    held, not as a coin toss."""
+    books = _full_rate_books(["d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12"])
+    every = book_grid_phase_across(books, "BTC-USD", GRID, 10)
+    assert every["held_spacings"] == 1
+    assert every["held_without"] == [1, 1, 2, 1, 1, 1, 1, 1]
+    assert [s["kept_starts"] for s in every["spacings"]] == [70, 80, 68, 67, 65, 64]
+    for s in every["spacings"]:
+        assert s["starts_run"] == 80
+        assert s["kept_starts"] * 5 >= s["starts_run"] * 4
+    assert every["spacings"][5]["split_by"] == [0, 1, 2, 3, 7]

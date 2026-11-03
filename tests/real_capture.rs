@@ -1010,3 +1010,71 @@ fn read_at_every_start_one_book_takes_one_spacing_away_not_three() {
         ]
     );
 }
+
+fn day_twelve() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d12_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A twelfth unbroken run and the first recorded in the evening, the day after
+/// day eleven's morning: 3,049 trades, three and a half times day eleven's volume,
+/// with the first session holding more than a third.
+#[test]
+fn day_twelve_is_its_own_unbroken_run_in_an_evening() {
+    let day_eleven = day_eleven();
+    let day_twelve = day_twelve();
+    let ticks: Vec<&Tick> = day_twelve.iter().flatten().collect();
+    assert_eq!(ticks.len(), 3049);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_eleven = day_eleven.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_eleven > 24 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 44.22 && volume < 44.23);
+    let first: f64 = day_twelve[0].iter().map(|t| t.size).sum();
+    assert!(first > volume / 3.0);
+}
+
+/// The evening queue is nearly flat (-0.039) and flips once, at 5 s. An eighth
+/// book still leaves the half second held, and takes nothing away on its own.
+#[test]
+fn an_eighth_book_with_a_flat_queue_flips_once_and_takes_nothing_away() {
+    let book = read_book("data/real/btc_usd_d12_book_full.ndjson").unwrap();
+    let evening = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(evening.full.snapshots, 445);
+    assert!(evening.full.avg_queue_imbalance.abs() < 0.05);
+    assert_eq!(evening.sign_flips, 1);
+
+    let eight = book_grid_across(
+        &full_rate_books(&["d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12"]),
+        "BTC-USD",
+        &GRID,
+    )
+    .unwrap();
+    assert_eq!(eight.held_spacings, 1);
+    assert_eq!(eight.held_without, [1, 1, 4, 1, 1, 1, 1, 1]);
+}
+
+/// Eight books at ten starts, counted in (book, start) pairs. Only the half
+/// second keeps the side at all 80, but no split spacing is near lost: the
+/// least kept, 10 s, still keeps it at 64. A split verdict here reads as
+/// mostly held, not as a coin toss.
+#[test]
+fn every_split_spacing_is_kept_by_most_book_and_start_pairs() {
+    let books = full_rate_books(&["d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12"]);
+    let every = book_grid_phase_across(&books, "BTC-USD", &GRID, 10).unwrap();
+    assert_eq!(every.held_spacings, 1);
+    assert_eq!(every.held_without, [1, 1, 2, 1, 1, 1, 1, 1]);
+    let kept: Vec<usize> = every.spacings.iter().map(|s| s.kept_starts).collect();
+    assert_eq!(kept, [70, 80, 68, 67, 65, 64]);
+    for s in &every.spacings {
+        assert_eq!(s.starts_run, 80);
+        assert!(s.kept_starts * 5 >= s.starts_run * 4);
+    }
+    assert_eq!(every.spacings[5].split_by, vec![0, 1, 2, 3, 7]);
+}
