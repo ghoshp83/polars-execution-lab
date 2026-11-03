@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.54.0] - 2026-11-03
+
+### Added
+- **`kept_starts` and `starts_run`** on each `book-grid-phase-across` spacing (Rust
+  and Python): the (book, start) pairs keeping the queue side, out of those run.
+  A split spacing now reads as nearly held or nearly lost; the two are equal only
+  when every book holds, and `kept_starts` is zero only when every book loses.
+- **A twelfth recorded day**, `data/real/btc_usd_d12_{1..6}`: the first recorded
+  in the evening (19:11:50-19:21:50 UTC, a Tuesday), 3,049 trades and 44.23 BTC,
+  three and a half times day eleven's volume.
+- **An eighth full-rate book**, `data/real/btc_usd_d12_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 445 snapshots; 56 unchanged updates were not
+  written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- The evening queue is nearly flat (-0.039) and flips once, at 5 s. Eight books
+  still hold one spacing, the half second, at the first start and at every start.
+- Eight books at ten starts: `kept_starts` is `[70, 80, 68, 67, 65, 64]` of 80.
+  Every split spacing keeps the side at four fifths of its pairs or more, so a
+  split here is mostly held, not a coin toss. Day twelve is in four spacings'
+  `split_by` and takes none away on its own: `held_without` is
+  `[1, 1, 2, 1, 1, 1, 1, 1]`.
+
 ## [0.53.0] - 2026-11-02
 
 ### Added
