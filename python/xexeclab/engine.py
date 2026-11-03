@@ -614,6 +614,8 @@ def book_grid_phase_across(
                     if not held(b, i) and b["spacings"][i]["sign_kept_phases"] > 0
                 ],
                 "first_phase_books": sum(1 for b in runs if b["spacings"][i]["first_phase_kept"]),
+                "kept_starts": sum(b["spacings"][i]["sign_kept_phases"] for b in runs),
+                "starts_run": sum(b["spacings"][i]["phases_run"] for b in runs),
             }
         )
     return {

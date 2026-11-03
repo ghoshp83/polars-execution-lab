@@ -359,6 +359,9 @@ pub fn book_grid_phase(
 ///   only some starts, keep it, in input order. The three partition the books.
 /// - `first_phase_books` -- the books keeping the side at offset 0, the count
 ///   `book-grid-across` reports as `sign_kept_books`.
+/// - `kept_starts` of `starts_run` -- the (book, start) pairs keeping the side,
+///   so a split spacing reads as nearly held or nearly lost. Equal only when
+///   `held_books` is every book; zero only when `lost_by` is every book.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -366,6 +369,8 @@ pub struct PhaseAcrossSpacing {
     pub lost_by: Vec<usize>,
     pub split_by: Vec<usize>,
     pub first_phase_books: usize,
+    pub kept_starts: usize,
+    pub starts_run: usize,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -415,6 +420,8 @@ pub fn book_grid_phase_across(
                 .iter()
                 .filter(|b| b.spacings[i].first_phase_kept)
                 .count(),
+            kept_starts: books.iter().map(|b| b.spacings[i].sign_kept_phases).sum(),
+            starts_run: books.iter().map(|b| b.spacings[i].phases_run).sum(),
         })
         .collect();
     let held_spacings = spacings

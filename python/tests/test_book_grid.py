@@ -208,6 +208,25 @@ def test_a_spacing_held_at_the_first_start_on_every_book_can_still_split():
     assert across["spacings"][0]["split_by"] == [0]
 
 
+def test_a_split_spacing_counts_the_starts_that_keep_it_over_every_book():
+    books = [_kept_at_start_book(), _steady_book()]
+    across = book_grid_phase_across(books, "BTC-USD", [2.0], 2)
+    s = across["spacings"][0]
+    # Split, not lost: the first book keeps one start of two, the steady book both.
+    assert s["held_books"] == 1
+    assert (s["kept_starts"], s["starts_run"]) == (3, 4)
+    assert s["kept_starts"] == sum(b["spacings"][0]["sign_kept_phases"] for b in across["books"])
+
+
+def test_every_start_kept_means_every_book_held_and_none_kept_means_every_book_lost():
+    books = [_book(), _steady_book(), _kept_at_start_book()]
+    across = book_grid_phase_across(books, "BTC-USD", [0.5, 1.0, 2.0], 2)
+    for i, s in enumerate(across["spacings"]):
+        assert s["starts_run"] == sum(b["spacings"][i]["phases_run"] for b in across["books"])
+        assert (s["kept_starts"] == s["starts_run"]) == (s["held_books"] == len(books))
+        assert (s["kept_starts"] == 0) == (len(s["lost_by"]) == len(books))
+
+
 @pytest.mark.parametrize(
     "books, grid, phases",
     [
