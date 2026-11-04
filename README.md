@@ -157,7 +157,7 @@ uv run xexeclab book-grid-across --input data/real/btc_usd_d5_book_full.ndjson,d
 uv run xexeclab book-grid-phase --input data/real/btc_usd_d7_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
 
 # the same starts on every book at once: which spacings hold on all of them at every start
-uv run xexeclab book-grid-phase-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson,data/real/btc_usd_d12_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
+uv run xexeclab book-grid-phase-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson,data/real/btc_usd_d12_book_full.ndjson,data/real/btc_usd_d13_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
 
 # cost of sweeping a marketable order through the L2 book (realised VWAP / slippage)
 uv run xexeclab sweep   --input data/sample_book.ndjson --side buy --size 2.0
@@ -458,10 +458,10 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
-  to make each command's point on a few rows. `data/real/` holds seventy-two
-  recorded sessions — twelve ten-minute runs of consecutive BTC-USD trades on
-  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355, 3,042, 1,882 and 3,049 of them —
-  plus 100 seconds of recorded quotes and ten recorded books. They are real but are not a sample
+  to make each command's point on a few rows. `data/real/` holds seventy-eight
+  recorded sessions — thirteen ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355, 3,042, 1,882, 3,049 and 5,228 of them —
+  plus 100 seconds of recorded quotes and eleven recorded books. They are real but are not a sample
   of a market: see `data/real/README.md`. The day-three book keeps ten levels
   a side, which averaged 0.66 BTC on the ask: a 2 BTC sweep runs off it in
   every snapshot, so its cost there is a floor. The day-four book keeps fifty,
@@ -539,7 +539,14 @@ This is a **market-data and execution-analytics** project, not a trading system.
   held, and `held_without` is `[1, 1, 2, 1, 1, 1, 1, 1]`. Of 80 pairs per
   spacing, the half second keeps all 80 and the least kept, ten seconds, still
   keeps 64 (`[70, 80, 68, 67, 65, 64]`). Every split here is four fifths held or
-  more. No start and no spacing is named best.
+  more. **But a mostly kept total can hide one book that mostly loses.**
+  `most_missed` reports, per spacing, the most starts any one book loses the
+  side at, and `most_missed_book` the first book losing that many. A ninth
+  book (day thirteen, queue -0.425 on the ask, never flipped) keeps its side
+  at every spacing and start, so the pairs read `[80, 90, 78, 77, 75, 74]` of
+  90. `most_missed` is `[10, 0, 6, 7, 4, 4]`, though, and day seven is the
+  weakest book at four of the five split spacings: at two seconds it keeps
+  only 3 of its 10 starts. No start and no spacing is named best.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
