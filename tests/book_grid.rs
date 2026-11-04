@@ -255,6 +255,22 @@ fn a_split_spacing_counts_the_starts_that_keep_it_over_every_book() {
 }
 
 #[test]
+fn the_weakest_book_is_named_and_a_tie_names_the_first() {
+    // The steady book misses nothing, so the miss belongs to the second book.
+    let books = [steady_book(), kept_at_start_book()];
+    let s = &book_grid_phase_across(&books, "BTC-USD", &[2.0], 2)
+        .unwrap()
+        .spacings[0];
+    assert_eq!((s.most_missed, s.most_missed_book), (1, 1));
+    // Two equally weak books: input order decides, not the last one seen.
+    let books = [kept_at_start_book(), kept_at_start_book()];
+    let s = &book_grid_phase_across(&books, "BTC-USD", &[2.0], 2)
+        .unwrap()
+        .spacings[0];
+    assert_eq!((s.most_missed, s.most_missed_book), (1, 0));
+}
+
+#[test]
 fn a_phase_sweep_across_books_needs_two_books_two_starts_and_a_clean_grid() {
     assert!(book_grid_phase_across(&[book()], "BTC-USD", &[1.0], 2).is_err());
     assert!(book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0], 1).is_err());

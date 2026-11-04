@@ -362,6 +362,10 @@ pub fn book_grid_phase(
 /// - `kept_starts` of `starts_run` -- the (book, start) pairs keeping the side,
 ///   so a split spacing reads as nearly held or nearly lost. Equal only when
 ///   `held_books` is every book; zero only when `lost_by` is every book.
+/// - `most_missed` / `most_missed_book` -- the most starts any one book loses
+///   the side at, and the first book (input order) losing that many, so the
+///   misses `kept_starts` totals read as one weak book or many. Zero, with book
+///   0, only when `held_books` is every book.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -371,6 +375,8 @@ pub struct PhaseAcrossSpacing {
     pub first_phase_books: usize,
     pub kept_starts: usize,
     pub starts_run: usize,
+    pub most_missed: usize,
+    pub most_missed_book: usize,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -406,22 +412,36 @@ pub fn book_grid_phase_across(
         .map(|levels| book_grid_phase(levels, product, every_grid, phases))
         .collect::<Result<Vec<_>>>()?;
     let held = |b: &GridPhase, i: usize| b.spacings[i].sign_kept_phases == b.spacings[i].phases_run;
+    let missed =
+        |b: &GridPhase, i: usize| b.spacings[i].phases_run - b.spacings[i].sign_kept_phases;
     let spacings: Vec<PhaseAcrossSpacing> = (0..every_grid.len())
-        .map(|i| PhaseAcrossSpacing {
-            every_s: every_grid[i],
-            held_books: books.iter().filter(|b| held(b, i)).count(),
-            lost_by: (0..books.len())
-                .filter(|&j| books[j].spacings[i].sign_kept_phases == 0)
-                .collect(),
-            split_by: (0..books.len())
-                .filter(|&j| !held(&books[j], i) && books[j].spacings[i].sign_kept_phases > 0)
-                .collect(),
-            first_phase_books: books
-                .iter()
-                .filter(|b| b.spacings[i].first_phase_kept)
-                .count(),
-            kept_starts: books.iter().map(|b| b.spacings[i].sign_kept_phases).sum(),
-            starts_run: books.iter().map(|b| b.spacings[i].phases_run).sum(),
+        .map(|i| {
+            // First book with the most misses: strictly greater only, since
+            // `max_by_key` would keep the last of a tie.
+            let mut most_missed_book = 0;
+            for j in 1..books.len() {
+                if missed(&books[j], i) > missed(&books[most_missed_book], i) {
+                    most_missed_book = j;
+                }
+            }
+            PhaseAcrossSpacing {
+                most_missed: missed(&books[most_missed_book], i),
+                most_missed_book,
+                every_s: every_grid[i],
+                held_books: books.iter().filter(|b| held(b, i)).count(),
+                lost_by: (0..books.len())
+                    .filter(|&j| books[j].spacings[i].sign_kept_phases == 0)
+                    .collect(),
+                split_by: (0..books.len())
+                    .filter(|&j| !held(&books[j], i) && books[j].spacings[i].sign_kept_phases > 0)
+                    .collect(),
+                first_phase_books: books
+                    .iter()
+                    .filter(|b| b.spacings[i].first_phase_kept)
+                    .count(),
+                kept_starts: books.iter().map(|b| b.spacings[i].sign_kept_phases).sum(),
+                starts_run: books.iter().map(|b| b.spacings[i].phases_run).sum(),
+            }
         })
         .collect();
     let held_spacings = spacings

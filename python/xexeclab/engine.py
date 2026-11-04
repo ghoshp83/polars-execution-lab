@@ -599,8 +599,13 @@ def book_grid_phase_across(
     def held(b: dict, i: int) -> bool:
         return b["spacings"][i]["sign_kept_phases"] == b["spacings"][i]["phases_run"]
 
+    def missed(b: dict, i: int) -> int:
+        return b["spacings"][i]["phases_run"] - b["spacings"][i]["sign_kept_phases"]
+
     spacings = []
     for i, s in enumerate(every_grid):
+        # max() keeps the first of a tie, as the Rust strict-greater loop does.
+        most_missed_book = max(range(len(runs)), key=lambda j: missed(runs[j], i))
         spacings.append(
             {
                 "every_s": s,
@@ -616,6 +621,8 @@ def book_grid_phase_across(
                 "first_phase_books": sum(1 for b in runs if b["spacings"][i]["first_phase_kept"]),
                 "kept_starts": sum(b["spacings"][i]["sign_kept_phases"] for b in runs),
                 "starts_run": sum(b["spacings"][i]["phases_run"] for b in runs),
+                "most_missed": missed(runs[most_missed_book], i),
+                "most_missed_book": most_missed_book,
             }
         )
     return {
