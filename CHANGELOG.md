@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.55.0] - 2026-11-04
+
+### Added
+- **`most_missed` and `most_missed_book`** on each `book-grid-phase-across`
+  spacing (Rust and Python): the most starts any one book loses the queue side
+  at, and the first book, in input order, losing that many. `kept_starts` totals
+  the misses; these say whether they are one weak book's or spread thin. Zero,
+  with book 0, only when every book holds.
+- **A thirteenth recorded day**, `data/real/btc_usd_d13_{1..6}`: a Wednesday late
+  afternoon (16:58:00-17:08:00 UTC), 5,228 trades and 89.85 BTC, more than double
+  day twelve's volume and the most recorded so far, just above day two's 89.40.
+- **A ninth full-rate book**, `data/real/btc_usd_d13_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 475 snapshots; 17 unchanged updates were not
+  written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- The ninth book leans to the ask side (queue imbalance -0.43) and never flips:
+  it keeps its side at every spacing and every start, and takes nothing away.
+  Nine books still hold one spacing, the half second.
+- Nine books at ten starts: `kept_starts` is `[80, 90, 78, 77, 75, 74]` of 90, so
+  every split still reads as mostly kept. But `most_missed` is
+  `[10, 0, 6, 7, 4, 4]`, and day seven (book 2) is the weakest book at four of
+  the five split spacings: at 2 s it keeps only 3 of its 10 starts. A mostly
+  kept total can hide one book that mostly loses.
+
 ## [0.54.0] - 2026-11-03
 
 ### Added
