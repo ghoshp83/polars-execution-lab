@@ -861,3 +861,65 @@ def test_every_split_spacing_is_kept_by_most_book_and_start_pairs():
         assert s["starts_run"] == 80
         assert s["kept_starts"] * 5 >= s["starts_run"] * 4
     assert every["spacings"][5]["split_by"] == [0, 1, 2, 3, 7]
+
+
+@pytest.fixture(scope="module")
+def day_thirteen():
+    return [read_ticks(REAL / f"btc_usd_d13_{i}.ndjson") for i in range(1, 7)]
+
+
+NINE = ["d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13"]
+
+
+def test_day_thirteen_is_its_own_unbroken_run_with_the_most_volume_yet(day_twelve, day_thirteen):
+    # A thirteenth unbroken run, the next late afternoon: 5,228 trades, more than
+    # double day twelve's volume and just above day two's, the most so far.
+    ids = [i for s in day_thirteen for i in s["trade_id"].to_list()]
+    ts = [t for s in day_thirteen for t in s["ts_ns"].to_list()]
+    assert len(ids) == 5228
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_twelve = max(t for s in day_twelve for t in s["ts_ns"].to_list())
+    assert ts[0] - last_day_twelve > 20 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_thirteen:
+        for size in s["size"].to_list():
+            volume += size
+    assert 89.84 < volume < 89.85
+    twelve = 0.0
+    for s in day_twelve:
+        for size in s["size"].to_list():
+            twelve += size
+    assert volume > 2 * twelve
+
+
+def test_a_ninth_book_keeps_its_side_at_every_spacing_and_every_start():
+    """The ninth book leans firmly to the ask side (-0.43) and never flips: every
+    spacing at every start keeps its side, so it takes nothing away."""
+    book = read_book(REAL / "btc_usd_d13_book_full.ndjson")
+    sweep = book_grid_sweep(book, "BTC-USD", GRID)
+    assert sweep["full"]["snapshots"] == 475
+    assert sweep["full"]["avg_queue_imbalance"] < -0.4
+    assert sweep["sign_flips"] == 0
+    phase = book_grid_phase(book, "BTC-USD", GRID, 10)
+    assert all(s["sign_kept_phases"] == s["phases_run"] == 10 for s in phase["spacings"])
+
+    nine = book_grid_across(_full_rate_books(NINE), "BTC-USD", GRID)
+    assert nine["held_spacings"] == 1
+    assert nine["held_without"] == [1, 1, 4, 1, 1, 1, 1, 1, 1]
+
+
+def test_the_misses_behind_a_mostly_kept_spacing_are_mostly_one_book():
+    """Nine books at ten starts. The totals read every split as mostly kept, but
+    the misses are mostly one book's: day seven (book 2) misses the most starts
+    at four of the five split spacings, and at 2 s keeps only 3 of its 10."""
+    every = book_grid_phase_across(_full_rate_books(NINE), "BTC-USD", GRID, 10)
+    assert every["held_spacings"] == 1
+    assert every["held_without"] == [1, 1, 2, 1, 1, 1, 1, 1, 1]
+    assert [s["kept_starts"] for s in every["spacings"]] == [80, 90, 78, 77, 75, 74]
+    most = [(s["most_missed"], s["most_missed_book"]) for s in every["spacings"]]
+    assert most == [(10, 2), (0, 0), (6, 2), (7, 2), (4, 2), (4, 0)]
+    # Mostly kept in total, yet one book loses the side at most of its starts.
+    two = every["spacings"][3]
+    assert two["kept_starts"] * 5 >= two["starts_run"] * 4
+    assert two["most_missed"] * 2 > every["books"][2]["spacings"][3]["phases_run"]

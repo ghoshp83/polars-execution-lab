@@ -1078,3 +1078,75 @@ fn every_split_spacing_is_kept_by_most_book_and_start_pairs() {
     }
     assert_eq!(every.spacings[5].split_by, vec![0, 1, 2, 3, 7]);
 }
+
+fn day_thirteen() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d13_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A thirteenth unbroken run, the next late afternoon: 5,228 trades, more than
+/// double day twelve's volume and just above day two's, the most so far.
+#[test]
+fn day_thirteen_is_its_own_unbroken_run_with_the_most_volume_yet() {
+    let day_twelve = day_twelve();
+    let day_thirteen = day_thirteen();
+    let ticks: Vec<&Tick> = day_thirteen.iter().flatten().collect();
+    assert_eq!(ticks.len(), 5228);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_twelve = day_twelve.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    assert!(ticks[0].ts_ns - last_day_twelve > 20 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 89.84 && volume < 89.85);
+    let twelve: f64 = day_twelve.iter().flatten().map(|t| t.size).sum();
+    assert!(volume > 2.0 * twelve);
+}
+
+/// The ninth book leans firmly to the ask side (-0.43) and never flips: every
+/// spacing at every start keeps its side, so it takes nothing away.
+#[test]
+fn a_ninth_book_keeps_its_side_at_every_spacing_and_every_start() {
+    let book = read_book("data/real/btc_usd_d13_book_full.ndjson").unwrap();
+    let sweep = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(sweep.full.snapshots, 475);
+    assert!(sweep.full.avg_queue_imbalance < -0.4);
+    assert_eq!(sweep.sign_flips, 0);
+    let phase = book_grid_phase(&book, "BTC-USD", &GRID, 10).unwrap();
+    assert!(phase
+        .spacings
+        .iter()
+        .all(|s| s.sign_kept_phases == 10 && s.phases_run == 10));
+
+    let nine = book_grid_across(&full_rate_books(&NINE), "BTC-USD", &GRID).unwrap();
+    assert_eq!(nine.held_spacings, 1);
+    assert_eq!(nine.held_without, [1, 1, 4, 1, 1, 1, 1, 1, 1]);
+}
+
+const NINE: [&str; 9] = ["d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13"];
+
+/// Nine books at ten starts. The totals read every split as mostly kept, but
+/// the misses are mostly one book's: day seven (book 2) misses the most starts
+/// at four of the five split spacings, and at 2 s keeps only 3 of its 10.
+#[test]
+fn the_misses_behind_a_mostly_kept_spacing_are_mostly_one_book() {
+    let every = book_grid_phase_across(&full_rate_books(&NINE), "BTC-USD", &GRID, 10).unwrap();
+    assert_eq!(every.held_spacings, 1);
+    assert_eq!(every.held_without, [1, 1, 2, 1, 1, 1, 1, 1, 1]);
+    let kept: Vec<usize> = every.spacings.iter().map(|s| s.kept_starts).collect();
+    assert_eq!(kept, [80, 90, 78, 77, 75, 74]);
+    let most: Vec<(usize, usize)> = every
+        .spacings
+        .iter()
+        .map(|s| (s.most_missed, s.most_missed_book))
+        .collect();
+    assert_eq!(most, [(10, 2), (0, 0), (6, 2), (7, 2), (4, 2), (4, 0)]);
+    // Mostly kept in total, yet one book loses the side at most of its starts.
+    let two = &every.spacings[3];
+    assert!(two.kept_starts * 5 >= two.starts_run * 4);
+    assert!(two.most_missed * 2 > every.books[2].spacings[3].phases_run);
+}
