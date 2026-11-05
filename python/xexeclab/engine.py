@@ -623,6 +623,9 @@ def book_grid_phase_across(
                 "starts_run": sum(b["spacings"][i]["phases_run"] for b in runs),
                 "most_missed": missed(runs[most_missed_book], i),
                 "most_missed_book": most_missed_book,
+                "next_most_missed": max(
+                    missed(runs[j], i) for j in range(len(runs)) if j != most_missed_book
+                ),
             }
         )
     return {
