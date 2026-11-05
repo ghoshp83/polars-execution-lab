@@ -4,6 +4,37 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.56.0] - 2026-11-05
+
+### Added
+- **`next_most_missed`** on each `book-grid-phase-across` spacing (Rust and
+  Python): the most starts any book other than `most_missed_book` loses the
+  queue side at. A gap to `most_missed` means one weak book; a tie means
+  several. Zero when no other book misses a start.
+- **A fourteenth recorded day**, `data/real/btc_usd_d14_{1..6}`: a Thursday late
+  morning (11:37:10-11:47:10 UTC), 3,288 trades and 26.95 BTC, under a third of
+  day thirteen's volume.
+- **A tenth full-rate book**, `data/real/btc_usd_d14_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 362 snapshots; 104 unchanged updates were
+  not written. Equivalence tests 42 to 48 now cover it too.
+
+### Changed
+- The 0.55.0 real-capture test `the_misses_behind_a_mostly_kept_spacing_are_mostly_one_book`
+  is renamed `the_weakest_book_behind_a_mostly_kept_spacing_is_day_seven`, in
+  both languages. Its assertions are unchanged; its name and doc said more than
+  they checked (see Notes).
+
+### Notes
+- 0.55.0 read `most_missed` as "the misses are mostly one book's". That holds
+  only at a quarter second. `next_most_missed` on the same nine books at ten
+  starts is `[0, 0, 5, 5, 4, 4]` against `most_missed` `[10, 0, 6, 7, 4, 4]`:
+  at 1 s day seven has 6 of 12 misses and a runner-up has 5, and at 5 s and
+  10 s another book ties it. Ten books give the same figures.
+- The tenth book leans to the bid (+0.07) and its first-start grid never flips,
+  but at ten starts it keeps its side at `[10, 10, 10, 9, 9, 6]`. Ten books
+  still hold one spacing, the half second; `kept_starts` is
+  `[90, 100, 88, 86, 84, 80]` of 100.
+
 ## [0.55.0] - 2026-11-04
 
 ### Added
