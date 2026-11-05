@@ -909,10 +909,11 @@ def test_a_ninth_book_keeps_its_side_at_every_spacing_and_every_start():
     assert nine["held_without"] == [1, 1, 4, 1, 1, 1, 1, 1, 1]
 
 
-def test_the_misses_behind_a_mostly_kept_spacing_are_mostly_one_book():
+def test_the_weakest_book_behind_a_mostly_kept_spacing_is_day_seven():
     """Nine books at ten starts. The totals read every split as mostly kept, but
-    the misses are mostly one book's: day seven (book 2) misses the most starts
-    at four of the five split spacings, and at 2 s keeps only 3 of its 10."""
+    day seven (book 2) misses the most starts at four of the five split
+    spacings, and at 2 s keeps only 3 of its 10. Whether it misses alone is
+    `next_most_missed`'s to say (below): mostly it does not."""
     every = book_grid_phase_across(_full_rate_books(NINE), "BTC-USD", GRID, 10)
     assert every["held_spacings"] == 1
     assert every["held_without"] == [1, 1, 2, 1, 1, 1, 1, 1, 1]
@@ -923,3 +924,76 @@ def test_the_misses_behind_a_mostly_kept_spacing_are_mostly_one_book():
     two = every["spacings"][3]
     assert two["kept_starts"] * 5 >= two["starts_run"] * 4
     assert two["most_missed"] * 2 > every["books"][2]["spacings"][3]["phases_run"]
+
+
+@pytest.fixture(scope="module")
+def day_fourteen():
+    return [read_ticks(REAL / f"btc_usd_d14_{i}.ndjson") for i in range(1, 7)]
+
+
+TEN = [*NINE, "d14"]
+
+
+def test_day_fourteen_is_its_own_unbroken_run_in_a_late_morning(day_thirteen, day_fourteen):
+    # A fourteenth unbroken run, the first late morning: 3,288 trades, the next
+    # day, at under a third of day thirteen's volume.
+    ids = [i for s in day_fourteen for i in s["trade_id"].to_list()]
+    ts = [t for s in day_fourteen for t in s["ts_ns"].to_list()]
+    assert len(ids) == 3288
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_thirteen = max(t for s in day_thirteen for t in s["ts_ns"].to_list())
+    assert ts[0] - last_day_thirteen > 18 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_fourteen:
+        for size in s["size"].to_list():
+            volume += size
+    assert 26.95 < volume < 26.96
+    thirteen = 0.0
+    for s in day_thirteen:
+        for size in s["size"].to_list():
+            thirteen += size
+    assert volume * 3 < thirteen
+
+
+def test_a_tenth_book_leans_to_the_bid_and_splits_only_from_two_seconds():
+    """The tenth book leans to the bid (+0.07), where the ninth leaned to the ask,
+    and its first-start grid never flips. Started ten ways it still loses the
+    side at some starts from 2 s, yet takes no spacing away from the rest."""
+    book = read_book(REAL / "btc_usd_d14_book_full.ndjson")
+    sweep = book_grid_sweep(book, "BTC-USD", GRID)
+    assert sweep["full"]["snapshots"] == 362
+    assert sweep["full"]["avg_queue_imbalance"] > 0.05
+    assert sweep["sign_flips"] == 0
+    phase = book_grid_phase(book, "BTC-USD", GRID, 10)
+    assert [s["sign_kept_phases"] for s in phase["spacings"]] == [10, 10, 10, 9, 9, 6]
+
+    ten = book_grid_across(_full_rate_books(TEN), "BTC-USD", GRID)
+    assert ten["held_spacings"] == 1
+    assert ten["held_without"] == [1, 1, 4, 1, 1, 1, 1, 1, 1, 1]
+
+
+def test_the_weakest_book_stands_alone_only_where_it_loses_every_start():
+    """The weakest book stands alone only where it loses every start. On nine
+    books day seven misses all ten at 0.25 s and no other book misses one, but
+    at 1 s and 2 s a runner-up misses five, and at 5 s and 10 s it ties. A
+    tenth book changes none of that."""
+
+    def read(days):
+        every = book_grid_phase_across(_full_rate_books(days), "BTC-USD", GRID, 10)
+        return every, [
+            (s["most_missed"], s["most_missed_book"], s["next_most_missed"])
+            for s in every["spacings"]
+        ]
+
+    expected = [(10, 2, 0), (0, 0, 0), (6, 2, 5), (7, 2, 5), (4, 2, 4), (4, 0, 4)]
+    assert read(NINE)[1] == expected
+    every, most = read(TEN)
+    assert most == expected
+    assert every["held_spacings"] == 1
+    assert every["held_without"] == [1, 1, 2, 1, 1, 1, 1, 1, 1, 1]
+    assert [s["kept_starts"] for s in every["spacings"]] == [90, 100, 88, 86, 84, 80]
+    # Alone at 0.25 s: every miss there is the weakest book's.
+    quarter = every["spacings"][0]
+    assert quarter["starts_run"] - quarter["kept_starts"] == quarter["most_missed"]
+    assert quarter["lost_by"] == [2]

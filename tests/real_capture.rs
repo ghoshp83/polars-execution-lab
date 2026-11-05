@@ -1130,10 +1130,11 @@ fn a_ninth_book_keeps_its_side_at_every_spacing_and_every_start() {
 const NINE: [&str; 9] = ["d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13"];
 
 /// Nine books at ten starts. The totals read every split as mostly kept, but
-/// the misses are mostly one book's: day seven (book 2) misses the most starts
-/// at four of the five split spacings, and at 2 s keeps only 3 of its 10.
+/// day seven (book 2) misses the most starts at four of the five split
+/// spacings, and at 2 s keeps only 3 of its 10. Whether it misses alone is
+/// `next_most_missed`'s to say (below): mostly it does not.
 #[test]
-fn the_misses_behind_a_mostly_kept_spacing_are_mostly_one_book() {
+fn the_weakest_book_behind_a_mostly_kept_spacing_is_day_seven() {
     let every = book_grid_phase_across(&full_rate_books(&NINE), "BTC-USD", &GRID, 10).unwrap();
     assert_eq!(every.held_spacings, 1);
     assert_eq!(every.held_without, [1, 1, 2, 1, 1, 1, 1, 1, 1]);
@@ -1149,4 +1150,110 @@ fn the_misses_behind_a_mostly_kept_spacing_are_mostly_one_book() {
     let two = &every.spacings[3];
     assert!(two.kept_starts * 5 >= two.starts_run * 4);
     assert!(two.most_missed * 2 > every.books[2].spacings[3].phases_run);
+}
+
+fn day_fourteen() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d14_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A fourteenth unbroken run, the first late morning: 3,288 trades, the next
+/// day, at under a third of day thirteen's volume.
+#[test]
+fn day_fourteen_is_its_own_unbroken_run_in_a_late_morning() {
+    let day_thirteen = day_thirteen();
+    let day_fourteen = day_fourteen();
+    let ticks: Vec<&Tick> = day_fourteen.iter().flatten().collect();
+    assert_eq!(ticks.len(), 3288);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_thirteen = day_thirteen
+        .iter()
+        .flatten()
+        .map(|t| t.ts_ns)
+        .max()
+        .unwrap();
+    assert!(ticks[0].ts_ns - last_day_thirteen > 18 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 26.95 && volume < 26.96);
+    let thirteen: f64 = day_thirteen.iter().flatten().map(|t| t.size).sum();
+    assert!(volume * 3.0 < thirteen);
+}
+
+const TEN: [&str; 10] = [
+    "d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13", "d14",
+];
+
+/// The tenth book leans to the bid (+0.07), where the ninth leaned to the ask,
+/// and its first-start grid never flips. Started ten ways it still loses the
+/// side at some starts from 2 s, yet takes no spacing away from the rest.
+#[test]
+fn a_tenth_book_leans_to_the_bid_and_splits_only_from_two_seconds() {
+    let book = read_book("data/real/btc_usd_d14_book_full.ndjson").unwrap();
+    let sweep = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(sweep.full.snapshots, 362);
+    assert!(sweep.full.avg_queue_imbalance > 0.05);
+    assert_eq!(sweep.sign_flips, 0);
+    let phase = book_grid_phase(&book, "BTC-USD", &GRID, 10).unwrap();
+    let kept: Vec<usize> = phase.spacings.iter().map(|s| s.sign_kept_phases).collect();
+    assert_eq!(kept, [10, 10, 10, 9, 9, 6]);
+
+    let ten = book_grid_across(&full_rate_books(&TEN), "BTC-USD", &GRID).unwrap();
+    assert_eq!(ten.held_spacings, 1);
+    assert_eq!(ten.held_without, [1, 1, 4, 1, 1, 1, 1, 1, 1, 1]);
+}
+
+/// The weakest book stands alone only where it loses every start. On nine
+/// books day seven misses all ten at 0.25 s and no other book misses one, but
+/// at 1 s and 2 s a runner-up misses five, and at 5 s and 10 s it ties. A
+/// tenth book changes none of that.
+#[test]
+fn the_weakest_book_stands_alone_only_where_it_loses_every_start() {
+    let read = |days: &[&str]| -> Vec<(usize, usize, usize)> {
+        book_grid_phase_across(&full_rate_books(days), "BTC-USD", &GRID, 10)
+            .unwrap()
+            .spacings
+            .iter()
+            .map(|s| (s.most_missed, s.most_missed_book, s.next_most_missed))
+            .collect()
+    };
+    assert_eq!(
+        read(&NINE),
+        [
+            (10, 2, 0),
+            (0, 0, 0),
+            (6, 2, 5),
+            (7, 2, 5),
+            (4, 2, 4),
+            (4, 0, 4)
+        ]
+    );
+    assert_eq!(
+        read(&TEN),
+        [
+            (10, 2, 0),
+            (0, 0, 0),
+            (6, 2, 5),
+            (7, 2, 5),
+            (4, 2, 4),
+            (4, 0, 4)
+        ]
+    );
+    let every = book_grid_phase_across(&full_rate_books(&TEN), "BTC-USD", &GRID, 10).unwrap();
+    assert_eq!(every.held_spacings, 1);
+    assert_eq!(every.held_without, [1, 1, 2, 1, 1, 1, 1, 1, 1, 1]);
+    let kept: Vec<usize> = every.spacings.iter().map(|s| s.kept_starts).collect();
+    assert_eq!(kept, [90, 100, 88, 86, 84, 80]);
+    // Alone at 0.25 s: every miss there is the weakest book's.
+    let quarter = &every.spacings[0];
+    assert_eq!(
+        quarter.starts_run - quarter.kept_starts,
+        quarter.most_missed
+    );
+    assert_eq!(quarter.lost_by, vec![2]);
 }
