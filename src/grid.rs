@@ -369,6 +369,9 @@ pub fn book_grid_phase(
 /// - `next_most_missed` -- the most starts any other book loses the side at, so
 ///   one weak book reads as a gap to the rest and several as a tie. Zero when
 ///   no other book misses a start; equal to `most_missed` on a tie.
+/// - `kept_without_weakest` of `run_without_weakest` -- `kept_starts` of
+///   `starts_run` with `most_missed_book` set aside, so the misses left over read
+///   as the rest of the books' own. Equal only when no other book misses a start.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -381,6 +384,8 @@ pub struct PhaseAcrossSpacing {
     pub most_missed: usize,
     pub most_missed_book: usize,
     pub next_most_missed: usize,
+    pub kept_without_weakest: usize,
+    pub run_without_weakest: usize,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -450,6 +455,14 @@ pub fn book_grid_phase_across(
                     .count(),
                 kept_starts: books.iter().map(|b| b.spacings[i].sign_kept_phases).sum(),
                 starts_run: books.iter().map(|b| b.spacings[i].phases_run).sum(),
+                kept_without_weakest: (0..books.len())
+                    .filter(|&j| j != most_missed_book)
+                    .map(|j| books[j].spacings[i].sign_kept_phases)
+                    .sum(),
+                run_without_weakest: (0..books.len())
+                    .filter(|&j| j != most_missed_book)
+                    .map(|j| books[j].spacings[i].phases_run)
+                    .sum(),
             }
         })
         .collect();

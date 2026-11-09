@@ -287,6 +287,27 @@ fn a_lone_weak_book_leaves_a_gap_and_two_weak_books_tie() {
 }
 
 #[test]
+fn setting_the_weakest_book_aside_takes_only_its_own_misses() {
+    // A lone weak book: the rest keep every start they run.
+    let books = [steady_book(), kept_at_start_book()];
+    let s = &book_grid_phase_across(&books, "BTC-USD", &[2.0], 2)
+        .unwrap()
+        .spacings[0];
+    assert_eq!((s.kept_without_weakest, s.run_without_weakest), (2, 2));
+    assert_eq!(s.starts_run - s.run_without_weakest, 2);
+    // A tie: the first book is set aside, the second's miss stays behind.
+    let books = [kept_at_start_book(), kept_at_start_book()];
+    let s = &book_grid_phase_across(&books, "BTC-USD", &[2.0], 2)
+        .unwrap()
+        .spacings[0];
+    assert_eq!((s.kept_without_weakest, s.run_without_weakest), (1, 2));
+    assert_eq!(
+        s.run_without_weakest - s.kept_without_weakest,
+        s.next_most_missed
+    );
+}
+
+#[test]
 fn a_phase_sweep_across_books_needs_two_books_two_starts_and_a_clean_grid() {
     assert!(book_grid_phase_across(&[book()], "BTC-USD", &[1.0], 2).is_err());
     assert!(book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0], 1).is_err());

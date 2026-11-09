@@ -269,6 +269,28 @@ def test_the_runner_up_is_the_second_largest_miss_count():
         assert s["next_most_missed"] == misses[-2] <= s["most_missed"]
 
 
+def test_setting_the_weakest_book_aside_takes_only_its_own_misses():
+    # A lone weak book: the rest keep every start they run.
+    s = book_grid_phase_across([_steady_book(), _kept_at_start_book()], "BTC-USD", [2.0], 2)
+    s = s["spacings"][0]
+    assert (s["kept_without_weakest"], s["run_without_weakest"]) == (2, 2)
+    # A tie: the first book is set aside, the second's miss stays behind.
+    s = book_grid_phase_across([_kept_at_start_book(), _kept_at_start_book()], "BTC-USD", [2.0], 2)
+    s = s["spacings"][0]
+    assert (s["kept_without_weakest"], s["run_without_weakest"]) == (1, 2)
+
+
+def test_the_weakest_book_set_aside_accounts_for_exactly_its_misses():
+    books = [_book(), _steady_book(), _kept_at_start_book()]
+    across = book_grid_phase_across(books, "BTC-USD", [0.5, 1.0, 2.0], 2)
+    for s in across["spacings"]:
+        missed_total = s["starts_run"] - s["kept_starts"]
+        missed_rest = s["run_without_weakest"] - s["kept_without_weakest"]
+        assert missed_total - missed_rest == s["most_missed"]
+        assert s["next_most_missed"] <= missed_rest
+        assert (missed_rest == 0) == (s["next_most_missed"] == 0)
+
+
 @pytest.mark.parametrize(
     "books, grid, phases",
     [
