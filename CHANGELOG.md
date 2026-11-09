@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.57.0] - 2026-11-09
+
+### Added
+- **`kept_without_weakest` and `run_without_weakest`** on each
+  `book-grid-phase-across` spacing (Rust and Python): `kept_starts` and
+  `starts_run` with `most_missed_book` set aside. The misses left over belong to
+  the other books. The two are equal only when no other book misses a start.
+- **A fifteenth recorded day**, `data/real/btc_usd_d15_{1..6}`: a Monday late
+  morning (10:36:00-10:46:00 UTC), 2,794 trades and 27.29 BTC, about day
+  fourteen's volume.
+- **An eleventh full-rate book**, `data/real/btc_usd_d15_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 463 snapshots; 31 unchanged updates were not
+  written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- Setting the weakest book aside does not make a wide grid safe. On ten books
+  at ten starts the others keep `[90, 90, 84, 83, 78, 74]` of 90. On eleven
+  books the misses total `[10, 0, 12, 16, 19, 24]`, and the weakest book's share
+  is `[10, 0, 6, 7, 4, 4]`. That is all of them at 0.25 s, half at 1 s, and a
+  sixth at 10 s.
+- The eleventh book leans to the bid (+0.14). Its first-start grid never flips,
+  but at ten starts it keeps its side at `[10, 10, 10, 8, 7, 6]`. Eleven books
+  still hold one spacing, the half second.
+
 ## [0.56.0] - 2026-11-05
 
 ### Added
