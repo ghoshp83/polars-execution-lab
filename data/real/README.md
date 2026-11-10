@@ -1,13 +1,13 @@
 # Recorded sessions
 
-Fifteen runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
+Sixteen runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
 into six consecutive 100-second sessions, taken with `xexeclab ingest`: a
 weekday morning, a weekday afternoon thirty-one hours later, a Saturday
 morning, the Sunday morning after it, the Monday, Tuesday, Wednesday and
 Thursday mornings after that, the Thursday morning a week later, the
 Friday morning after it, the Monday morning after that, the Tuesday
-evening after it, the Wednesday late afternoon after that, the Thursday late morning after that, and the Monday late morning after
-that.
+evening after it, the Wednesday late afternoon after that, the Thursday late morning after that, the Monday late morning after
+that, and the Tuesday morning after it.
 
 **Day one** — 2026-10-13, 08:16:50 to 08:26:50 UTC:
 
@@ -230,6 +230,20 @@ Trade ids 1117501107 to 1117503900: 2,794 trades, 27.29 BTC, about day
 fourteen's volume, front-loaded where day fourteen built: the first three
 sessions hold 17.73 of it.
 
+**Day sixteen** — 2026-11-10 (a Tuesday, morning), 10:30:20 to 10:40:20 UTC:
+
+| File | Trades | Volume (BTC) |
+|---|---|---|
+| `btc_usd_d16_1.ndjson` | 467 | 2.158978 |
+| `btc_usd_d16_2.ndjson` | 593 | 4.773669 |
+| `btc_usd_d16_3.ndjson` | 529 | 3.744776 |
+| `btc_usd_d16_4.ndjson` | 449 | 1.657249 |
+| `btc_usd_d16_5.ndjson` | 453 | 1.477885 |
+| `btc_usd_d16_6.ndjson` | 472 | 2.302771 |
+
+Trade ids 1118075133 to 1118078095: 2,963 trades, 16.12 BTC, under three
+fifths of day fifteen's volume on more trades.
+
 **Quotes** — `btc_usd_d2_1_quotes.ndjson` is the top of the book from
 Coinbase's `ticker` channel, taken by `xexeclab ingest-quotes` alongside the
 day-two trades and cut to the first day-two session: 776 quotes. The ticker
@@ -378,6 +392,14 @@ the rest still miss: `kept_without_weakest` is `[100, 100, 94, 91, 85, 80]` of
 100, and of all the misses, `[10, 0, 12, 16, 19, 24]`, the weakest book has
 every one at a quarter second, half at one second, and a sixth at ten.
 
+`btc_usd_d16_book_full.ndjson` is the same thirty seconds at the start of the
+day-sixteen capture: 466 snapshots, 46,600 rows, 33 unchanged updates not
+written. Its queue leans to the bid (+0.144), and the first-start grid never
+flips it, but started ten ways it keeps its side at `[10, 10, 10, 9, 7, 6]`.
+Twelve books still hold the half second alone. The misses spread as the grid
+widens: of `[10, 0, 12, 17, 22, 28]`, half belong to one book at a quarter
+second and at one second, and to four (`half_missed_by`) at ten.
+
 Each session file is 100 seconds, cut on a 10-second boundary, so every session
 has the same ten 10-second buckets. Within each run the trade ids are
 contiguous: nothing dropped, reordered or edited. The partial buckets at either
@@ -401,16 +423,16 @@ Two things were done to the day-one capture, and one to each of the others:
 ## What these are, and are not
 
 They are real trades, which the hand-written `data/sample_*.ndjson` captures are
-not. They are also a hundred and fifty minutes of one product: ten weekday mornings, two
+not. They are also a hundred and sixty minutes of one product: eleven weekday mornings, two
 weekday afternoons, a weekday evening, a Saturday morning and a Sunday morning. A "session" here is
 a 100-second slice, not a trading day, and the six in each run are neighbours
-in time, so they are far from independent. Fifteen days is enough to show that a
+in time, so they are far from independent. Sixteen days is enough to show that a
 result on one does not have to hold on another. It is not enough to say which
-one is typical, and the fifteen traded volumes run thirty times apart. The ten-level book is one 100-second
+one is typical, and the sixteen traded volumes run thirty times apart. The ten-level book is one 100-second
 stretch, so it says how shallow the touch was that morning, not how deep the
 market is. The deep book is fifty levels sampled every five seconds over ten
 minutes of a Sunday: deep enough that the sizes here fill, too sparse to see
 what happens between two snapshots. The full-rate book shows what happens
-between them, but only for thirty seconds on each of eleven days. Use them to see how the
+between them, but only for thirty seconds on each of twelve days. Use them to see how the
 commands behave on real prices and sizes; do not read a result on them as a
 property of the strategy.
