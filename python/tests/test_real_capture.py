@@ -1071,3 +1071,71 @@ def test_the_weakest_book_takes_a_shrinking_share_of_the_misses():
     # Alone at 0.25 s; a sixth of the misses at 10 s.
     assert missed[0] == every["spacings"][0]["most_missed"]
     assert every["spacings"][5]["most_missed"] * 6 == missed[5]
+
+
+@pytest.fixture(scope="module")
+def day_sixteen():
+    return [read_ticks(REAL / f"btc_usd_d16_{i}.ndjson") for i in range(1, 7)]
+
+
+TWELVE = [*ELEVEN, "d16"]
+
+
+def test_day_sixteen_is_its_own_unbroken_run_the_next_morning(day_fifteen, day_sixteen):
+    # A sixteenth unbroken run, the next morning: 2,963 trades, under a day after
+    # day fifteen, at under three fifths of its volume.
+    ids = [i for s in day_sixteen for i in s["trade_id"].to_list()]
+    ts = [t for s in day_sixteen for t in s["ts_ns"].to_list()]
+    assert len(ids) == 2963
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_fifteen = max(t for s in day_fifteen for t in s["ts_ns"].to_list())
+    assert 23 * 3600 * 1_000_000_000 < ts[0] - last_day_fifteen < 24 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_sixteen:
+        for size in s["size"].to_list():
+            volume += size
+    assert 16.11 < volume < 16.12
+    fifteen = 0.0
+    for s in day_fifteen:
+        for size in s["size"].to_list():
+            fifteen += size
+    assert volume < 0.6 * fifteen
+
+
+def test_a_twelfth_book_leans_to_the_bid_and_takes_nothing_away():
+    """The twelfth book leans to the bid (+0.14), as the two before it did, and
+    its first-start grid never flips. Started ten ways it loses the side at some
+    starts from 2 s, and the half second still holds on every book."""
+    book = read_book(REAL / "btc_usd_d16_book_full.ndjson")
+    sweep = book_grid_sweep(book, "BTC-USD", GRID)
+    assert sweep["full"]["snapshots"] == 466
+    assert sweep["full"]["avg_queue_imbalance"] > 0.1
+    assert sweep["sign_flips"] == 0
+    phase = book_grid_phase(book, "BTC-USD", GRID, 10)
+    assert [s["sign_kept_phases"] for s in phase["spacings"]] == [10, 10, 10, 9, 7, 6]
+
+    twelve = book_grid_across(_full_rate_books(TWELVE), "BTC-USD", GRID)
+    assert twelve["held_spacings"] == 1
+    assert twelve["held_without"] == [1, 1, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+
+def test_half_the_wide_grid_misses_take_several_books():
+    """Half the misses come from one book at 0.25 s and 1 s, and from four of
+    twelve at 10 s: a wide grid loses the side on many books a little, not on
+    one book a lot."""
+
+    def half(days):
+        every = book_grid_phase_across(_full_rate_books(days), "BTC-USD", GRID, 10)
+        return every, [s["half_missed_by"] for s in every["spacings"]]
+
+    assert half(ELEVEN)[1] == [1, 0, 1, 2, 3, 3]
+    every, by = half(TWELVE)
+    assert by == [1, 0, 1, 2, 3, 4]
+    assert every["held_spacings"] == 1
+    assert every["held_without"] == [1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    missed = [s["starts_run"] - s["kept_starts"] for s in every["spacings"]]
+    assert missed == [10, 0, 12, 17, 22, 28]
+    assert [s["most_missed"] for s in every["spacings"]] == [10, 0, 6, 7, 4, 4]
+    # At 10 s even three books at the most anyone misses fall short of half.
+    assert 2 * 3 * every["spacings"][5]["most_missed"] < missed[5]
