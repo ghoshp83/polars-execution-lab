@@ -157,7 +157,7 @@ uv run xexeclab book-grid-across --input data/real/btc_usd_d5_book_full.ndjson,d
 uv run xexeclab book-grid-phase --input data/real/btc_usd_d7_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
 
 # the same starts on every book at once: which spacings hold on all of them at every start
-uv run xexeclab book-grid-phase-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson,data/real/btc_usd_d12_book_full.ndjson,data/real/btc_usd_d13_book_full.ndjson,data/real/btc_usd_d14_book_full.ndjson,data/real/btc_usd_d15_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
+uv run xexeclab book-grid-phase-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson,data/real/btc_usd_d12_book_full.ndjson,data/real/btc_usd_d13_book_full.ndjson,data/real/btc_usd_d14_book_full.ndjson,data/real/btc_usd_d15_book_full.ndjson,data/real/btc_usd_d16_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
 
 # cost of sweeping a marketable order through the L2 book (realised VWAP / slippage)
 uv run xexeclab sweep   --input data/sample_book.ndjson --side buy --size 2.0
@@ -458,10 +458,10 @@ This is a **market-data and execution-analytics** project, not a trading system.
   the exchange's. The checked-in `data/sample_ticks.ndjson`,
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
-  to make each command's point on a few rows. `data/real/` holds ninety
-  recorded sessions — fifteen ten-minute runs of consecutive BTC-USD trades on
-  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355, 3,042, 1,882, 3,049, 5,228, 3,288 and 2,794 of them —
-  plus 100 seconds of recorded quotes and thirteen recorded books. They are real but are not a sample
+  to make each command's point on a few rows. `data/real/` holds ninety-six
+  recorded sessions — sixteen ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355, 3,042, 1,882, 3,049, 5,228, 3,288, 2,794 and 2,963 of them —
+  plus 100 seconds of recorded quotes and fourteen recorded books. They are real but are not a sample
   of a market: see `data/real/README.md`. The day-three book keeps ten levels
   a side, which averaged 0.66 BTC on the ask: a 2 BTC sweep runs off it in
   every snapshot, so its cost there is a floor. The day-four book keeps fifty,
@@ -559,7 +559,14 @@ This is a **market-data and execution-analytics** project, not a trading system.
   queue +0.143 on the bid, kept at every first start, split from two seconds)
   brings the misses to `[10, 0, 12, 16, 19, 24]`, and the weakest book's share
   falls as the spacing widens: all of them at a quarter second, half at one
-  second, a sixth at ten. No start and no spacing is named best.
+  second, a sixth at ten. **A wide grid loses the side on many books a little,
+  not on one book a lot.** `half_missed_by` is the fewest books whose misses
+  make up at least half of the total, taking the books with the most first. A
+  twelfth book (day sixteen, the next morning, queue +0.144 on the bid, kept at
+  every first start, split from two seconds) brings the misses to
+  `[10, 0, 12, 17, 22, 28]` and `half_missed_by` to `[1, 0, 1, 2, 3, 4]`: one
+  book holds half the misses at a quarter second and at one second, four do at
+  ten. No start and no spacing is named best.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
