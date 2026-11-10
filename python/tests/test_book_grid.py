@@ -291,6 +291,35 @@ def test_the_weakest_book_set_aside_accounts_for_exactly_its_misses():
         assert (missed_rest == 0) == (s["next_most_missed"] == 0)
 
 
+def test_half_the_misses_take_one_weak_book_or_several_even_ones():
+    def half(books):
+        return book_grid_phase_across(books, "BTC-USD", [2.0], 2)["spacings"][0]["half_missed_by"]
+
+    # Nothing missed: no book is needed to account for it.
+    assert half([_steady_book(), _steady_book()]) == 0
+    # One weak book carries every miss.
+    assert half([_steady_book(), _kept_at_start_book()]) == 1
+    # Three books missing one start each: one is a third, two are past half.
+    assert half([_kept_at_start_book()] * 3) == 2
+
+
+def test_half_missed_by_is_the_fewest_books_reaching_half():
+    books = [_book(), _steady_book(), _kept_at_start_book(), _kept_at_start_book()]
+    across = book_grid_phase_across(books, "BTC-USD", [0.5, 1.0, 2.0], 2)
+    for i, s in enumerate(across["spacings"]):
+        misses = sorted(
+            (
+                b["spacings"][i]["phases_run"] - b["spacings"][i]["sign_kept_phases"]
+                for b in across["books"]
+            ),
+            reverse=True,
+        )
+        total, k = sum(misses), s["half_missed_by"]
+        assert 2 * sum(misses[:k]) >= total
+        assert k == 0 or 2 * sum(misses[: k - 1]) < total
+        assert (k == 1) == (total > 0 and 2 * s["most_missed"] >= total)
+
+
 @pytest.mark.parametrize(
     "books, grid, phases",
     [

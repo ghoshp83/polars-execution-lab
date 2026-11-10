@@ -583,6 +583,18 @@ def book_grid_phase(df: pl.DataFrame, product: str, every_grid: list[float], pha
     }
 
 
+def _half_missed_by(misses: list[int]) -> int:
+    """The fewest of ``misses`` (largest first) totalling at least half their
+    sum; 0 when the sum is 0. Mirrors the Rust ``half_missed_by``."""
+    total = sum(misses)
+    taken = 0
+    for k, m in enumerate(sorted(misses, reverse=True)):
+        if 2 * taken >= total:
+            return k
+        taken += m
+    return len(misses)
+
+
 def book_grid_phase_across(
     books: list[pl.DataFrame], product: str, every_grid: list[float], phases: int
 ) -> dict:
@@ -636,6 +648,7 @@ def book_grid_phase_across(
                     for j, b in enumerate(runs)
                     if j != most_missed_book
                 ),
+                "half_missed_by": _half_missed_by([missed(b, i) for b in runs]),
             }
         )
     return {

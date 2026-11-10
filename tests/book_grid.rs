@@ -308,6 +308,27 @@ fn setting_the_weakest_book_aside_takes_only_its_own_misses() {
 }
 
 #[test]
+fn half_the_misses_take_one_weak_book_or_several_even_ones() {
+    let half = |books: &[Vec<xexec::model::BookLevel>]| {
+        book_grid_phase_across(books, "BTC-USD", &[2.0], 2)
+            .unwrap()
+            .spacings[0]
+            .half_missed_by
+    };
+    // Nothing missed: no book is needed to account for it.
+    assert_eq!(half(&[steady_book(), steady_book()]), 0);
+    // One weak book carries every miss.
+    assert_eq!(half(&[steady_book(), kept_at_start_book()]), 1);
+    // Three books missing one start each: one is a third, two are past half.
+    let even = [
+        kept_at_start_book(),
+        kept_at_start_book(),
+        kept_at_start_book(),
+    ];
+    assert_eq!(half(&even), 2);
+}
+
+#[test]
 fn a_phase_sweep_across_books_needs_two_books_two_starts_and_a_clean_grid() {
     assert!(book_grid_phase_across(&[book()], "BTC-USD", &[1.0], 2).is_err());
     assert!(book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0], 1).is_err());

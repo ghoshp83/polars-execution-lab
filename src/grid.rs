@@ -372,6 +372,10 @@ pub fn book_grid_phase(
 /// - `kept_without_weakest` of `run_without_weakest` -- `kept_starts` of
 ///   `starts_run` with `most_missed_book` set aside, so the misses left over read
 ///   as the rest of the books' own. Equal only when no other book misses a start.
+/// - `half_missed_by` -- the fewest books whose misses make up at least half of
+///   `starts_run - kept_starts`, so misses spread over many books read as a
+///   count. 1 when `most_missed` alone is half or more; 0 only when no book
+///   misses a start.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -386,6 +390,7 @@ pub struct PhaseAcrossSpacing {
     pub next_most_missed: usize,
     pub kept_without_weakest: usize,
     pub run_without_weakest: usize,
+    pub half_missed_by: usize,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -401,6 +406,21 @@ pub struct GridPhaseAcross {
     pub held_spacings: usize,
     pub first_phase_held_spacings: usize,
     pub held_without: Vec<usize>,
+}
+
+/// The fewest of `misses` (largest first) totalling at least half their sum;
+/// 0 when the sum is 0.
+fn half_missed_by(mut misses: Vec<usize>) -> usize {
+    let total: usize = misses.iter().sum();
+    misses.sort_unstable_by(|a, b| b.cmp(a));
+    let mut taken = 0;
+    for (k, m) in misses.iter().enumerate() {
+        if 2 * taken >= total {
+            return k;
+        }
+        taken += m;
+    }
+    misses.len()
 }
 
 /// Mirrors `book_grid_phase_across` in `python/xexeclab/engine.py`.
@@ -463,6 +483,7 @@ pub fn book_grid_phase_across(
                     .filter(|&j| j != most_missed_book)
                     .map(|j| books[j].spacings[i].phases_run)
                     .sum(),
+                half_missed_by: half_missed_by(books.iter().map(|b| missed(b, i)).collect()),
             }
         })
         .collect();
