@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.58.0] - 2026-11-10
+
+### Added
+- **`half_missed_by`** on each `book-grid-phase-across` spacing (Rust and
+  Python): the fewest books whose misses make up at least half of
+  `starts_run - kept_starts`, taking the books with the most misses first. It is
+  1 when the weakest book alone has half or more, and 0 only when nothing is
+  missed.
+- **A sixteenth recorded day**, `data/real/btc_usd_d16_{1..6}`: the next morning,
+  a Tuesday (10:30:20-10:40:20 UTC), with 2,963 trades and 16.12 BTC, under
+  three fifths of day fifteen's volume.
+- **A twelfth full-rate book**, `data/real/btc_usd_d16_book_full.ndjson`: fifty
+  levels a side for thirty seconds, 466 snapshots; 33 unchanged updates were not
+  written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- Wide grids lose the side on many books a little, not on one book a lot. On
+  twelve books at ten starts the misses total `[10, 0, 12, 17, 22, 28]` and
+  `half_missed_by` reads `[1, 0, 1, 2, 3, 4]`. At 10 s it takes four books to
+  account for half the misses, and even three books at the most any single book
+  misses (4) fall short of half.
+- The twelfth book leans to the bid (+0.14). Its first-start grid never flips,
+  but at ten starts it keeps its side at `[10, 10, 10, 9, 7, 6]`. Twelve books
+  still hold one spacing, the half second.
+
 ## [0.57.0] - 2026-11-09
 
 ### Added
