@@ -1448,3 +1448,91 @@ fn half_the_wide_grid_misses_take_several_books() {
     // At 10 s even three books at the most anyone misses fall short of half.
     assert!(2 * 3 * every.spacings[5].most_missed < missed[5]);
 }
+
+fn day_seventeen() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d17_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A seventeenth unbroken run, earlier the next morning: 3,092 trades, under a
+/// day after day sixteen, at nearly twice its volume.
+#[test]
+fn day_seventeen_is_its_own_unbroken_run_the_next_morning() {
+    let day_sixteen = day_sixteen();
+    let day_seventeen = day_seventeen();
+    let ticks: Vec<&Tick> = day_seventeen.iter().flatten().collect();
+    assert_eq!(ticks.len(), 3092);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_sixteen = day_sixteen.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    let gap = ticks[0].ts_ns - last_day_sixteen;
+    assert!(gap > 22 * 3600 * 1_000_000_000 && gap < 23 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 31.32 && volume < 31.33);
+    let sixteen: f64 = day_sixteen.iter().flatten().map(|t| t.size).sum();
+    assert!(volume > 1.9 * sixteen);
+}
+
+const THIRTEEN: [&str; 13] = [
+    "d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15", "d16", "d17",
+];
+
+/// The thirteenth book leans hard to the bid (+0.64) and keeps that side at
+/// every spacing from every start: it adds books and starts, not misses.
+#[test]
+fn a_thirteenth_book_leans_hard_to_the_bid_and_misses_nothing() {
+    let book = read_book("data/real/btc_usd_d17_book_full.ndjson").unwrap();
+    let sweep = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(sweep.full.snapshots, 345);
+    assert!(sweep.full.avg_queue_imbalance > 0.6);
+    assert_eq!(sweep.sign_flips, 0);
+    let phase = book_grid_phase(&book, "BTC-USD", &GRID, 10).unwrap();
+    assert!(phase.spacings.iter().all(|s| s.sign_kept_phases == 10));
+
+    let thirteen = book_grid_across(&full_rate_books(&THIRTEEN), "BTC-USD", &GRID).unwrap();
+    assert_eq!(thirteen.held_spacings, 1);
+    assert_eq!(
+        thirteen.held_without,
+        [1, 1, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    );
+}
+
+/// The clearest full-rate side any book loses at some start grows with the
+/// spacing, to 0.30 at 10 s; the five books whose side is clearer than that
+/// (0.43 and up) keep it at every spacing from every start.
+#[test]
+fn a_wide_grid_loses_only_the_fainter_sides() {
+    let every = book_grid_phase_across(&full_rate_books(&THIRTEEN), "BTC-USD", &GRID, 10).unwrap();
+    let strongest: Vec<f64> = every
+        .spacings
+        .iter()
+        .map(|s| s.strongest_side_missed)
+        .collect();
+    assert_eq!(
+        strongest,
+        [0.01660519, 0.0, 0.11377945, 0.14396846, 0.17003025, 0.29748286]
+    );
+    assert!(strongest[1..].windows(2).all(|w| w[0] <= w[1]));
+    let missed: Vec<usize> = every
+        .spacings
+        .iter()
+        .map(|s| s.starts_run - s.kept_starts)
+        .collect();
+    assert_eq!(missed, [10, 0, 12, 17, 22, 28]);
+    let clear: Vec<usize> = (0..THIRTEEN.len())
+        .filter(|&j| every.books[j].full.avg_queue_imbalance.abs() > strongest[5])
+        .collect();
+    assert_eq!(clear, [4, 5, 6, 8, 12]);
+    for &j in &clear {
+        assert!(every.books[j].full.avg_queue_imbalance.abs() > 0.42);
+        assert!(every.books[j]
+            .spacings
+            .iter()
+            .all(|s| s.sign_kept_phases == s.phases_run));
+    }
+}
