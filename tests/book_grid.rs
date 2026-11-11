@@ -329,6 +329,21 @@ fn half_the_misses_take_one_weak_book_or_several_even_ones() {
 }
 
 #[test]
+fn the_strongest_side_missed_is_the_clearest_full_rate_side_a_grid_loses() {
+    // Nothing missed: no side was lost, however clear.
+    let books = [steady_book(), steady_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    assert_eq!(across.spacings[0].strongest_side_missed, 0.0);
+    // Only the second book misses, so only its full-rate side counts, not the
+    // steady book's, however clear that one is.
+    let books = [steady_book(), kept_at_start_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    let lost = across.books[1].full.avg_queue_imbalance.abs();
+    assert!(lost > 0.0);
+    assert_eq!(across.spacings[0].strongest_side_missed, lost);
+}
+
+#[test]
 fn a_phase_sweep_across_books_needs_two_books_two_starts_and_a_clean_grid() {
     assert!(book_grid_phase_across(&[book()], "BTC-USD", &[1.0], 2).is_err());
     assert!(book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0], 1).is_err());

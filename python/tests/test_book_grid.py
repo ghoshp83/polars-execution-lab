@@ -320,6 +320,29 @@ def test_half_missed_by_is_the_fewest_books_reaching_half():
         assert (k == 1) == (total > 0 and 2 * s["most_missed"] >= total)
 
 
+def test_the_strongest_side_missed_is_the_clearest_full_rate_side_a_grid_loses():
+    # Nothing missed: no side was lost, however clear.
+    across = book_grid_phase_across([_steady_book(), _steady_book()], "BTC-USD", [2.0], 2)
+    assert across["spacings"][0]["strongest_side_missed"] == 0.0
+    # Only the second book misses, so only its full-rate side counts, not the
+    # steady book's, however clear that one is.
+    across = book_grid_phase_across([_steady_book(), _kept_at_start_book()], "BTC-USD", [2.0], 2)
+    lost = abs(across["books"][1]["full"]["avg_queue_imbalance"])
+    assert lost > 0
+    assert across["spacings"][0]["strongest_side_missed"] == lost
+
+
+def test_a_book_with_a_clearer_side_than_the_strongest_missed_holds():
+    books = [_book(), _steady_book(), _kept_at_start_book(), _kept_at_start_book()]
+    across = book_grid_phase_across(books, "BTC-USD", [0.5, 1.0, 2.0], 2)
+    for i, s in enumerate(across["spacings"]):
+        for b in across["books"]:
+            side = abs(b["full"]["avg_queue_imbalance"])
+            missed = b["spacings"][i]["phases_run"] - b["spacings"][i]["sign_kept_phases"]
+            assert missed == 0 or side <= s["strongest_side_missed"]
+        assert (s["strongest_side_missed"] == 0) == (s["held_books"] == len(books))
+
+
 @pytest.mark.parametrize(
     "books, grid, phases",
     [

@@ -649,6 +649,10 @@ def book_grid_phase_across(
                     if j != most_missed_book
                 ),
                 "half_missed_by": _half_missed_by([missed(b, i) for b in runs]),
+                "strongest_side_missed": max(
+                    (abs(b["full"]["avg_queue_imbalance"]) for b in runs if missed(b, i) > 0),
+                    default=0.0,
+                ),
             }
         )
     return {
