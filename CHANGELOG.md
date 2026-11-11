@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.59.0] - 2026-11-11
+
+### Added
+- **`strongest_side_missed`** on each `book-grid-phase-across` spacing (Rust
+  and Python): the largest full-rate `|avg_queue_imbalance|` of any book that
+  loses its queue side at one start or more. It is 0.0 only when no book misses
+  a start.
+- **A seventeenth recorded day**, `data/real/btc_usd_d17_{1..6}`: the next
+  morning, a Wednesday (09:07:30-09:17:30 UTC), with 3,092 trades and 31.33 BTC,
+  nearly twice day sixteen's volume.
+- **A thirteenth full-rate book**, `data/real/btc_usd_d17_book_full.ndjson`:
+  fifty levels a side for thirty seconds, 345 snapshots; 117 unchanged updates
+  were not written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- A wide grid loses only the fainter sides. On thirteen books at ten starts
+  `strongest_side_missed` reads `[0.017, 0, 0.114, 0.144, 0.170, 0.297]`, rising
+  with the spacing. The five books whose full-rate side is clearer than 0.297
+  (0.425 and up) keep it at every spacing from every start. That threshold is
+  measured on thirteen books, not proven.
+- The thirteenth book leans hard to the bid (+0.637) and keeps its side at every
+  spacing from every start, so the misses stay `[10, 0, 12, 17, 22, 28]`.
+  Thirteen books still hold one spacing, the half second.
+
 ## [0.58.0] - 2026-11-10
 
 ### Added
