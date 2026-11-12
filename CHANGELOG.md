@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.60.0] - 2026-11-12
+
+### Added
+- **`faintest_side_held`** on each `book-grid-phase-across` spacing (Rust and
+  Python): the smallest full-rate `|avg_queue_imbalance|` of any book that keeps
+  its queue side at every start. It is 0.0 when no book does. Above
+  `strongest_side_missed`, side strength alone separates the books kept from
+  those missed at that spacing.
+- **An eighteenth recorded day**, `data/real/btc_usd_d18_{1..6}`: the next
+  morning, a Thursday (08:46:50-08:56:50 UTC), with 3,003 trades and 12.81 BTC,
+  about two fifths of day seventeen's volume.
+- **A fourteenth full-rate book**, `data/real/btc_usd_d18_book_full.ndjson`:
+  fifty levels a side for thirty seconds, 307 snapshots; 153 unchanged updates
+  were not written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- Side strength nearly separates the books a grid keeps from those it loses.
+  On fourteen books at ten starts `faintest_side_held` reads
+  `[0.039, 0.017, 0.072, 0.170, 0.297, 0.425]` against `strongest_side_missed`
+  `[0.017, 0, 0.114, 0.144, 0.170, 0.297]`. It is clearer at every spacing but
+  one second, where day fourteen (0.072) keeps its side and day eight (0.114)
+  does not. At four starts the two overlap at one, two and five seconds. This
+  is measured on fourteen books, not proven.
+- The fourteenth book leans to the bid (+0.536) and keeps its side at every
+  spacing from every start, so the misses stay `[10, 0, 12, 17, 22, 28]`.
+  Fourteen books still hold one spacing, the half second.
+
 ## [0.59.0] - 2026-11-11
 
 ### Added
