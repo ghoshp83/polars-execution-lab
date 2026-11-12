@@ -1536,3 +1536,107 @@ fn a_wide_grid_loses_only_the_fainter_sides() {
             .all(|s| s.sign_kept_phases == s.phases_run));
     }
 }
+
+fn day_eighteen() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d18_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// An eighteenth unbroken run, a little earlier the next morning: 3,003 trades,
+/// under a day after day seventeen, at well under half its volume.
+#[test]
+fn day_eighteen_is_its_own_unbroken_run_the_next_morning() {
+    let day_seventeen = day_seventeen();
+    let day_eighteen = day_eighteen();
+    let ticks: Vec<&Tick> = day_eighteen.iter().flatten().collect();
+    assert_eq!(ticks.len(), 3003);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_seventeen = day_seventeen
+        .iter()
+        .flatten()
+        .map(|t| t.ts_ns)
+        .max()
+        .unwrap();
+    let gap = ticks[0].ts_ns - last_day_seventeen;
+    assert!(gap > 23 * 3600 * 1_000_000_000 && gap < 24 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 12.80 && volume < 12.81);
+    let seventeen: f64 = day_seventeen.iter().flatten().map(|t| t.size).sum();
+    assert!(volume < 0.5 * seventeen);
+}
+
+const FOURTEEN: [&str; 14] = [
+    "d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15", "d16", "d17", "d18",
+];
+
+/// The fourteenth book leans to the bid too (+0.54) and, like the thirteenth,
+/// keeps that side at every spacing from every start.
+#[test]
+fn a_fourteenth_book_leans_to_the_bid_and_misses_nothing() {
+    let book = read_book("data/real/btc_usd_d18_book_full.ndjson").unwrap();
+    let sweep = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(sweep.full.snapshots, 307);
+    assert!(sweep.full.avg_queue_imbalance > 0.5);
+    assert_eq!(sweep.sign_flips, 0);
+    let phase = book_grid_phase(&book, "BTC-USD", &GRID, 10).unwrap();
+    assert!(phase.spacings.iter().all(|s| s.sign_kept_phases == 10));
+
+    let fourteen = book_grid_across(&full_rate_books(&FOURTEEN), "BTC-USD", &GRID).unwrap();
+    assert_eq!(fourteen.held_spacings, 1);
+    assert_eq!(
+        fourteen.held_without,
+        [1, 1, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    );
+}
+
+/// At ten starts the faintest side any book keeps is clearer than the
+/// strongest any book loses at every spacing but 1 s, where day fourteen
+/// (0.07) holds and day eight (0.11) does not. From 2 s each spacing's
+/// faintest kept side is the next one's strongest lost. Four starts blur it.
+#[test]
+fn side_strength_separates_held_from_missed_at_all_but_one_spacing() {
+    let books = full_rate_books(&FOURTEEN);
+    let every = book_grid_phase_across(&books, "BTC-USD", &GRID, 10).unwrap();
+    let faintest: Vec<f64> = every
+        .spacings
+        .iter()
+        .map(|s| s.faintest_side_held)
+        .collect();
+    assert_eq!(
+        faintest,
+        [0.03946719, 0.01660519, 0.07168341, 0.17003025, 0.29748286, 0.42541018]
+    );
+    let strongest: Vec<f64> = every
+        .spacings
+        .iter()
+        .map(|s| s.strongest_side_missed)
+        .collect();
+    assert_eq!(
+        strongest,
+        [0.01660519, 0.0, 0.11377945, 0.14396846, 0.17003025, 0.29748286]
+    );
+    let blurred: Vec<f64> = (0..GRID.len())
+        .filter(|&i| faintest[i] <= strongest[i])
+        .map(|i| GRID[i])
+        .collect();
+    assert_eq!(blurred, [1.0]);
+    assert!(every.spacings[2].split_by.contains(&3));
+    assert!(!every.spacings[2].split_by.contains(&9));
+    assert_eq!(faintest[3], strongest[4]);
+    assert_eq!(faintest[4], strongest[5]);
+
+    let four = book_grid_phase_across(&books, "BTC-USD", &GRID, 4).unwrap();
+    let blurred_at_four: Vec<f64> = four
+        .spacings
+        .iter()
+        .filter(|s| s.faintest_side_held <= s.strongest_side_missed)
+        .map(|s| s.every_s)
+        .collect();
+    assert_eq!(blurred_at_four, [1.0, 2.0, 5.0]);
+}
