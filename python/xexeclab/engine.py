@@ -653,6 +653,10 @@ def book_grid_phase_across(
                     (abs(b["full"]["avg_queue_imbalance"]) for b in runs if missed(b, i) > 0),
                     default=0.0,
                 ),
+                "faintest_side_held": min(
+                    (abs(b["full"]["avg_queue_imbalance"]) for b in runs if held(b, i)),
+                    default=0.0,
+                ),
             }
         )
     return {

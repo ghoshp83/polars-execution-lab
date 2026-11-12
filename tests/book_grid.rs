@@ -344,6 +344,23 @@ fn the_strongest_side_missed_is_the_clearest_full_rate_side_a_grid_loses() {
 }
 
 #[test]
+fn the_faintest_side_held_is_the_weakest_full_rate_side_a_grid_keeps() {
+    // Only the steady book keeps every start, so only its side counts, not the
+    // missing book's, however faint that one is.
+    let books = [steady_book(), kept_at_start_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    let kept = across.books[0].full.avg_queue_imbalance.abs();
+    assert!(kept > 0.0);
+    assert_eq!(across.spacings[0].held_books, 1);
+    assert_eq!(across.spacings[0].faintest_side_held, kept);
+    // No book held: there is no side kept to report.
+    let books = [kept_at_start_book(), kept_at_start_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    assert_eq!(across.spacings[0].held_books, 0);
+    assert_eq!(across.spacings[0].faintest_side_held, 0.0);
+}
+
+#[test]
 fn a_phase_sweep_across_books_needs_two_books_two_starts_and_a_clean_grid() {
     assert!(book_grid_phase_across(&[book()], "BTC-USD", &[1.0], 2).is_err());
     assert!(book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0], 1).is_err());

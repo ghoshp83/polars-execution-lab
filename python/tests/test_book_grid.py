@@ -343,6 +343,35 @@ def test_a_book_with_a_clearer_side_than_the_strongest_missed_holds():
         assert (s["strongest_side_missed"] == 0) == (s["held_books"] == len(books))
 
 
+def test_the_faintest_side_held_is_the_weakest_full_rate_side_a_grid_keeps():
+    # Only the steady book keeps every start, so only its side counts, not the
+    # missing book's, however faint that one is.
+    across = book_grid_phase_across([_steady_book(), _kept_at_start_book()], "BTC-USD", [2.0], 2)
+    kept = abs(across["books"][0]["full"]["avg_queue_imbalance"])
+    assert kept > 0
+    assert across["spacings"][0]["held_books"] == 1
+    assert across["spacings"][0]["faintest_side_held"] == kept
+    # No book held: there is no side kept to report.
+    across = book_grid_phase_across(
+        [_kept_at_start_book(), _kept_at_start_book()], "BTC-USD", [2.0], 2
+    )
+    assert across["spacings"][0]["held_books"] == 0
+    assert across["spacings"][0]["faintest_side_held"] == 0.0
+
+
+def test_every_book_held_is_at_least_as_clear_as_the_faintest_side_held():
+    books = [_book(), _steady_book(), _kept_at_start_book(), _kept_at_start_book()]
+    across = book_grid_phase_across(books, "BTC-USD", [0.5, 1.0, 2.0], 2)
+    for i, s in enumerate(across["spacings"]):
+        held = [
+            abs(b["full"]["avg_queue_imbalance"])
+            for b in across["books"]
+            if b["spacings"][i]["phases_run"] == b["spacings"][i]["sign_kept_phases"]
+        ]
+        assert all(side >= s["faintest_side_held"] for side in held)
+        assert (s["faintest_side_held"] in held) == (s["held_books"] > 0)
+
+
 @pytest.mark.parametrize(
     "books, grid, phases",
     [

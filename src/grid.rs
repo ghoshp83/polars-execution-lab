@@ -379,6 +379,10 @@ pub fn book_grid_phase(
 /// - `strongest_side_missed` -- the largest full-rate `|avg_queue_imbalance|`
 ///   of any book missing the side at one start or more, so a miss reads as a
 ///   faint side lost or a clear one. 0.0 only when no book misses a start.
+/// - `faintest_side_held` -- the smallest full-rate `|avg_queue_imbalance|` of
+///   any book keeping the side at every start, so the two read together: above
+///   `strongest_side_missed`, side strength alone separates the books held from
+///   those missed; at or below it, it does not. 0.0 when `held_books` is 0.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -395,6 +399,7 @@ pub struct PhaseAcrossSpacing {
     pub run_without_weakest: usize,
     pub half_missed_by: usize,
     pub strongest_side_missed: f64,
+    pub faintest_side_held: f64,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -493,6 +498,12 @@ pub fn book_grid_phase_across(
                     .filter(|b| missed(b, i) > 0)
                     .map(|b| b.full.avg_queue_imbalance.abs())
                     .fold(0.0, f64::max),
+                faintest_side_held: books
+                    .iter()
+                    .filter(|b| held(b, i))
+                    .map(|b| b.full.avg_queue_imbalance.abs())
+                    .reduce(f64::min)
+                    .unwrap_or(0.0),
             }
         })
         .collect();
