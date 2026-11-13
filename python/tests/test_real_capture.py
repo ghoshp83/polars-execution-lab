@@ -1280,3 +1280,69 @@ def test_side_strength_separates_held_from_missed_at_all_but_one_spacing():
         if s["faintest_side_held"] <= s["strongest_side_missed"]
     ]
     assert blurred_at_four == [1.0, 2.0, 5.0]
+
+
+@pytest.fixture(scope="module")
+def day_nineteen():
+    return [read_ticks(REAL / f"btc_usd_d19_{i}.ndjson") for i in range(1, 7)]
+
+
+FIFTEEN = [*FOURTEEN, "d19"]
+
+
+def test_day_nineteen_is_its_own_unbroken_run_the_next_morning(day_eighteen, day_nineteen):
+    """A nineteenth unbroken run, a little earlier again the next morning (a
+    Friday): 6,548 trades, under a day after day eighteen, at over six times its
+    volume -- 87.40 BTC, second only to day thirteen's 89.85."""
+    ids = [i for s in day_nineteen for i in s["trade_id"].to_list()]
+    ts = [t for s in day_nineteen for t in s["ts_ns"].to_list()]
+    assert len(ids) == 6548
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_eighteen = max(t for s in day_eighteen for t in s["ts_ns"].to_list())
+    assert 23 * 3600 * 1_000_000_000 < ts[0] - last_day_eighteen < 24 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_nineteen:
+        for size in s["size"].to_list():
+            volume += size
+    assert 87.39 < volume < 87.40
+    eighteen = 0.0
+    for s in day_eighteen:
+        for size in s["size"].to_list():
+            eighteen += size
+    assert volume > 6 * eighteen
+
+
+def test_a_fifteenth_book_leans_to_the_ask_and_misses_only_at_ten_seconds():
+    """The fifteenth book leans to the ask (-0.33), keeps that side at every
+    spacing from every start but 10 s, where two of ten starts lose it."""
+    book = read_book(REAL / "btc_usd_d19_book_full.ndjson")
+    sweep = book_grid_sweep(book, "BTC-USD", GRID)
+    assert sweep["full"]["snapshots"] == 406
+    assert -0.33 < sweep["full"]["avg_queue_imbalance"] < -0.32
+    assert sweep["sign_flips"] == 0
+    phase = book_grid_phase(book, "BTC-USD", GRID, 10)
+    assert [s["sign_kept_phases"] for s in phase["spacings"]] == [10, 10, 10, 10, 10, 8]
+
+    fifteen = book_grid_across(_full_rate_books(FIFTEEN), "BTC-USD", GRID)
+    assert fifteen["held_spacings"] == 1
+    assert fifteen["held_without"] == [1, 1, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+
+def test_held_no_clearer_puts_one_book_in_the_one_second_overlap():
+    """At ten starts the 1 s overlap is one book, day fourteen; the fifteenth
+    book's 10 s miss raises the strongest side lost there to 0.33, still under
+    the faintest kept (0.43). Four starts blur three spacings by 3, 2 and 1 books."""
+    books = _full_rate_books(FIFTEEN)
+    every = book_grid_phase_across(books, "BTC-USD", GRID, 10)
+    assert [s["held_no_clearer"] for s in every["spacings"]] == [0, 0, 1, 0, 0, 0]
+    one_s = every["spacings"][2]
+    d14 = every["books"][9]
+    assert d14["spacings"][2]["sign_kept_phases"] == d14["spacings"][2]["phases_run"]
+    assert abs(d14["full"]["avg_queue_imbalance"]) <= one_s["strongest_side_missed"]
+    assert 14 in every["spacings"][5]["split_by"]
+    assert every["spacings"][5]["strongest_side_missed"] == 0.3276542
+    assert every["spacings"][5]["faintest_side_held"] == 0.42541018
+
+    four = book_grid_phase_across(books, "BTC-USD", GRID, 4)
+    assert [s["held_no_clearer"] for s in four["spacings"]] == [0, 0, 3, 2, 1, 0]

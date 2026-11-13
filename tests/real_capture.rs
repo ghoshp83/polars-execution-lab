@@ -1640,3 +1640,86 @@ fn side_strength_separates_held_from_missed_at_all_but_one_spacing() {
         .collect();
     assert_eq!(blurred_at_four, [1.0, 2.0, 5.0]);
 }
+
+fn day_nineteen() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d19_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A nineteenth unbroken run, a little earlier again the next morning (a
+/// Friday): 6,548 trades, under a day after day eighteen, at over six times its
+/// volume -- 87.40 BTC, second only to day thirteen's 89.85.
+#[test]
+fn day_nineteen_is_its_own_unbroken_run_the_next_morning() {
+    let day_eighteen = day_eighteen();
+    let day_nineteen = day_nineteen();
+    let ticks: Vec<&Tick> = day_nineteen.iter().flatten().collect();
+    assert_eq!(ticks.len(), 6548);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_eighteen = day_eighteen
+        .iter()
+        .flatten()
+        .map(|t| t.ts_ns)
+        .max()
+        .unwrap();
+    let gap = ticks[0].ts_ns - last_day_eighteen;
+    assert!(gap > 23 * 3600 * 1_000_000_000 && gap < 24 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 87.39 && volume < 87.40);
+    let eighteen: f64 = day_eighteen.iter().flatten().map(|t| t.size).sum();
+    assert!(volume > 6.0 * eighteen);
+}
+
+const FIFTEEN: [&str; 15] = [
+    "d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15", "d16", "d17", "d18",
+    "d19",
+];
+
+/// The fifteenth book leans to the ask (-0.33), keeps that side at every
+/// spacing from every start but 10 s, where two of ten starts lose it.
+#[test]
+fn a_fifteenth_book_leans_to_the_ask_and_misses_only_at_ten_seconds() {
+    let book = read_book("data/real/btc_usd_d19_book_full.ndjson").unwrap();
+    let sweep = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(sweep.full.snapshots, 406);
+    assert!(sweep.full.avg_queue_imbalance < -0.32 && sweep.full.avg_queue_imbalance > -0.33);
+    assert_eq!(sweep.sign_flips, 0);
+    let phase = book_grid_phase(&book, "BTC-USD", &GRID, 10).unwrap();
+    let kept: Vec<usize> = phase.spacings.iter().map(|s| s.sign_kept_phases).collect();
+    assert_eq!(kept, [10, 10, 10, 10, 10, 8]);
+
+    let fifteen = book_grid_across(&full_rate_books(&FIFTEEN), "BTC-USD", &GRID).unwrap();
+    assert_eq!(fifteen.held_spacings, 1);
+    assert_eq!(
+        fifteen.held_without,
+        [1, 1, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    );
+}
+
+/// At ten starts the 1 s overlap is one book, day fourteen; the fifteenth
+/// book's 10 s miss raises the strongest side lost there to 0.33, still under
+/// the faintest kept (0.43). Four starts blur three spacings by 3, 2 and 1 books.
+#[test]
+fn held_no_clearer_puts_one_book_in_the_one_second_overlap() {
+    let books = full_rate_books(&FIFTEEN);
+    let every = book_grid_phase_across(&books, "BTC-USD", &GRID, 10).unwrap();
+    let no_clearer: Vec<usize> = every.spacings.iter().map(|s| s.held_no_clearer).collect();
+    assert_eq!(no_clearer, [0, 0, 1, 0, 0, 0]);
+    let one_s = &every.spacings[2];
+    let d14 = &every.books[9];
+    assert_eq!(d14.spacings[2].sign_kept_phases, d14.spacings[2].phases_run);
+    assert!(d14.full.avg_queue_imbalance.abs() <= one_s.strongest_side_missed);
+    assert!(every.spacings[5].split_by.contains(&14));
+    assert_eq!(every.spacings[5].strongest_side_missed, 0.3276542);
+    assert_eq!(every.spacings[5].faintest_side_held, 0.42541018);
+
+    let four = book_grid_phase_across(&books, "BTC-USD", &GRID, 4).unwrap();
+    let no_clearer_at_four: Vec<usize> = four.spacings.iter().map(|s| s.held_no_clearer).collect();
+    assert_eq!(no_clearer_at_four, [0, 0, 3, 2, 1, 0]);
+}
