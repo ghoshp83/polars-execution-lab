@@ -361,6 +361,32 @@ fn the_faintest_side_held_is_the_weakest_full_rate_side_a_grid_keeps() {
 }
 
 #[test]
+fn held_no_clearer_counts_the_kept_books_a_lost_side_outshines() {
+    // Nothing missed: no lost side to outshine a kept one.
+    let books = [steady_book(), steady_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    assert_eq!(across.spacings[0].held_books, 2);
+    assert_eq!(across.spacings[0].strongest_side_missed, 0.0);
+    assert_eq!(across.spacings[0].held_no_clearer, 0);
+    // One kept, one missed: the kept book counts only if its side is no clearer
+    // than the missed one's, and then side strength does not separate them.
+    let books = [steady_book(), kept_at_start_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    let s = &across.spacings[0];
+    let kept = across.books[0].full.avg_queue_imbalance.abs();
+    let lost = across.books[1].full.avg_queue_imbalance.abs();
+    assert_eq!(s.held_no_clearer, usize::from(kept <= lost));
+    assert_eq!(
+        s.held_no_clearer == 0,
+        s.faintest_side_held > s.strongest_side_missed
+    );
+    // No book held: nothing to count.
+    let books = [kept_at_start_book(), kept_at_start_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    assert_eq!(across.spacings[0].held_no_clearer, 0);
+}
+
+#[test]
 fn a_phase_sweep_across_books_needs_two_books_two_starts_and_a_clean_grid() {
     assert!(book_grid_phase_across(&[book()], "BTC-USD", &[1.0], 2).is_err());
     assert!(book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0], 1).is_err());

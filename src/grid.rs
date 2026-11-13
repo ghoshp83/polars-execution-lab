@@ -383,6 +383,10 @@ pub fn book_grid_phase(
 ///   any book keeping the side at every start, so the two read together: above
 ///   `strongest_side_missed`, side strength alone separates the books held from
 ///   those missed; at or below it, it does not. 0.0 when `held_books` is 0.
+/// - `held_no_clearer` -- how many of the `held_books` have a full-rate
+///   `|avg_queue_imbalance|` at or below `strongest_side_missed`, so an overlap
+///   reads as a count of books rather than a pair of extremes. 0 exactly when
+///   side strength alone separates the books held from those missed.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -400,6 +404,7 @@ pub struct PhaseAcrossSpacing {
     pub half_missed_by: usize,
     pub strongest_side_missed: f64,
     pub faintest_side_held: f64,
+    pub held_no_clearer: usize,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -462,7 +467,19 @@ pub fn book_grid_phase_across(
                     most_missed_book = j;
                 }
             }
+            let strongest_side_missed = books
+                .iter()
+                .filter(|b| missed(b, i) > 0)
+                .map(|b| b.full.avg_queue_imbalance.abs())
+                .fold(0.0, f64::max);
             PhaseAcrossSpacing {
+                held_no_clearer: books
+                    .iter()
+                    .filter(|b| {
+                        held(b, i) && b.full.avg_queue_imbalance.abs() <= strongest_side_missed
+                    })
+                    .count(),
+                strongest_side_missed,
                 most_missed: missed(&books[most_missed_book], i),
                 most_missed_book,
                 next_most_missed: (0..books.len())
@@ -493,11 +510,6 @@ pub fn book_grid_phase_across(
                     .map(|j| books[j].spacings[i].phases_run)
                     .sum(),
                 half_missed_by: half_missed_by(books.iter().map(|b| missed(b, i)).collect()),
-                strongest_side_missed: books
-                    .iter()
-                    .filter(|b| missed(b, i) > 0)
-                    .map(|b| b.full.avg_queue_imbalance.abs())
-                    .fold(0.0, f64::max),
                 faintest_side_held: books
                     .iter()
                     .filter(|b| held(b, i))

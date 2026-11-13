@@ -618,6 +618,10 @@ def book_grid_phase_across(
     for i, s in enumerate(every_grid):
         # max() keeps the first of a tie, as the Rust strict-greater loop does.
         most_missed_book = max(range(len(runs)), key=lambda j: missed(runs[j], i))
+        strongest_side_missed = max(
+            (abs(b["full"]["avg_queue_imbalance"]) for b in runs if missed(b, i) > 0),
+            default=0.0,
+        )
         spacings.append(
             {
                 "every_s": s,
@@ -649,13 +653,15 @@ def book_grid_phase_across(
                     if j != most_missed_book
                 ),
                 "half_missed_by": _half_missed_by([missed(b, i) for b in runs]),
-                "strongest_side_missed": max(
-                    (abs(b["full"]["avg_queue_imbalance"]) for b in runs if missed(b, i) > 0),
-                    default=0.0,
-                ),
+                "strongest_side_missed": strongest_side_missed,
                 "faintest_side_held": min(
                     (abs(b["full"]["avg_queue_imbalance"]) for b in runs if held(b, i)),
                     default=0.0,
+                ),
+                "held_no_clearer": sum(
+                    1
+                    for b in runs
+                    if held(b, i) and abs(b["full"]["avg_queue_imbalance"]) <= strongest_side_missed
                 ),
             }
         )
