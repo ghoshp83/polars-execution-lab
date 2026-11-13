@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.61.0] - 2026-11-13
+
+### Added
+- **`held_no_clearer`** on each `book-grid-phase-across` spacing (Rust and
+  Python): how many of the books kept at every start have a full-rate
+  `|avg_queue_imbalance|` at or below `strongest_side_missed`. It is 0 exactly
+  when side strength alone separates the books kept from those missed, so an
+  overlap reads as a count of books instead of a pair of extremes.
+- **A nineteenth recorded day**, `data/real/btc_usd_d19_{1..6}`: the next
+  morning, a Friday (08:29:50-08:39:50 UTC), with 6,548 trades, the most of any
+  day, and 87.40 BTC, second only to day thirteen.
+- **A fifteenth full-rate book**, `data/real/btc_usd_d19_book_full.ndjson`:
+  fifty levels a side for thirty seconds, 406 snapshots; 83 unchanged updates
+  were not written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- The one-second overlap v0.60.0 found is a single book. On fifteen books at
+  ten starts `held_no_clearer` reads `[0, 0, 1, 0, 0, 0]`, and that one book is
+  day fourteen. At four starts it reads `[0, 0, 3, 2, 1, 0]`. This is measured
+  on fifteen books, not proven.
+- The fifteenth book leans to the ask (-0.328) and loses its side at two of ten
+  starts at ten seconds only. That lifts `strongest_side_missed` there from
+  0.297 to 0.328, still under the faintest kept side (0.425). Fifteen books
+  still hold one spacing, the half second.
+
 ## [0.60.0] - 2026-11-12
 
 ### Added
