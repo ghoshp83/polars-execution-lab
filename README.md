@@ -157,7 +157,7 @@ uv run xexeclab book-grid-across --input data/real/btc_usd_d5_book_full.ndjson,d
 uv run xexeclab book-grid-phase --input data/real/btc_usd_d7_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
 
 # the same starts on every book at once: which spacings hold on all of them at every start
-uv run xexeclab book-grid-phase-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson,data/real/btc_usd_d12_book_full.ndjson,data/real/btc_usd_d13_book_full.ndjson,data/real/btc_usd_d14_book_full.ndjson,data/real/btc_usd_d15_book_full.ndjson,data/real/btc_usd_d16_book_full.ndjson,data/real/btc_usd_d17_book_full.ndjson,data/real/btc_usd_d18_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
+uv run xexeclab book-grid-phase-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson,data/real/btc_usd_d12_book_full.ndjson,data/real/btc_usd_d13_book_full.ndjson,data/real/btc_usd_d14_book_full.ndjson,data/real/btc_usd_d15_book_full.ndjson,data/real/btc_usd_d16_book_full.ndjson,data/real/btc_usd_d17_book_full.ndjson,data/real/btc_usd_d18_book_full.ndjson,data/real/btc_usd_d19_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
 
 # cost of sweeping a marketable order through the L2 book (realised VWAP / slippage)
 uv run xexeclab sweep   --input data/sample_book.ndjson --side buy --size 2.0
@@ -459,9 +459,9 @@ This is a **market-data and execution-analytics** project, not a trading system.
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
   to make each command's point on a few rows. `data/real/` holds a hundred and
-  eight recorded sessions — eighteen ten-minute runs of consecutive BTC-USD trades on
-  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355, 3,042, 1,882, 3,049, 5,228, 3,288, 2,794, 2,963, 3,092 and 3,003 of them —
-  plus 100 seconds of recorded quotes and sixteen recorded books. They are real but are not a sample
+  fourteen recorded sessions — nineteen ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355, 3,042, 1,882, 3,049, 5,228, 3,288, 2,794, 2,963, 3,092, 3,003 and 6,548 of them —
+  plus 100 seconds of recorded quotes and seventeen recorded books. They are real but are not a sample
   of a market: see `data/real/README.md`. The day-three book keeps ten levels
   a side, which averaged 0.66 BTC on the ask: a 2 BTC sweep runs off it in
   every snapshot, so its cost there is a floor. The day-four book keeps fifty,
@@ -585,8 +585,16 @@ This is a **market-data and execution-analytics** project, not a trading system.
   (0.072) keeps its side and day eight (0.114) loses it at some start. From two
   seconds up, each spacing's faintest kept side is the next one's strongest
   lost. At four starts the two overlap at one, two and five seconds, so fewer
-  starts blur the line. It is measured on fourteen books, not proven. No start
-  and no spacing is named best.
+  starts blur the line. It is measured on fourteen books, not proven.
+  `held_no_clearer` counts the books in that overlap: the books kept at every
+  start whose side is no clearer than `strongest_side_missed`, 0 exactly when
+  side strength separates. A fifteenth book (day nineteen, a Friday morning,
+  queue -0.328 on the ask) keeps its side everywhere but ten seconds, where two
+  of ten starts lose it. That lifts the strongest side lost there to 0.328,
+  still under the faintest kept (0.425). On fifteen books at ten starts
+  `held_no_clearer` reads `[0, 0, 1, 0, 0, 0]`, so the one-second overlap is a
+  single book, day fourteen. At four starts it reads `[0, 0, 3, 2, 1, 0]`. It is
+  measured on fifteen books, not proven. No start and no spacing is named best.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
