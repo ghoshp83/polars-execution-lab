@@ -1,6 +1,6 @@
 # Recorded sessions
 
-Nineteen runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
+Twenty runs of BTC-USD trades from Coinbase's public `matches` feed, each cut
 into six consecutive 100-second sessions, taken with `xexeclab ingest`: a
 weekday morning, a weekday afternoon thirty-one hours later, a Saturday
 morning, the Sunday morning after it, the Monday, Tuesday, Wednesday and
@@ -8,7 +8,7 @@ Thursday mornings after that, the Thursday morning a week later, the
 Friday morning after it, the Monday morning after that, the Tuesday
 evening after it, the Wednesday late afternoon after that, the Thursday late morning after that, the Monday late morning after
 that, the Tuesday morning after it, the Wednesday morning after that, the
-Thursday morning after that, and the Friday morning after that.
+Thursday morning after that, the Friday morning after that, and the Monday morning after that.
 
 **Day one** — 2026-10-13, 08:16:50 to 08:26:50 UTC:
 
@@ -288,6 +288,20 @@ Trade ids 1121199434 to 1121205981: 6,548 trades, 87.40 BTC, the most trades of
 any day and over six times day eighteen's volume, second only to day thirteen's
 89.85; it is spread over all six sessions rather than one burst.
 
+**Day twenty** — 2026-11-16 (a Monday, morning), 08:00:10 to 08:10:10 UTC:
+
+| File | Trades | Volume (BTC) |
+|---|---|---|
+| `btc_usd_d20_1.ndjson` | 1865 | 11.240967 |
+| `btc_usd_d20_2.ndjson` | 1619 | 8.070651 |
+| `btc_usd_d20_3.ndjson` | 1034 | 3.237797 |
+| `btc_usd_d20_4.ndjson` | 1093 | 4.23939 |
+| `btc_usd_d20_5.ndjson` | 2152 | 50.281498 |
+| `btc_usd_d20_6.ndjson` | 1365 | 20.391165 |
+
+Trade ids 1131353433 to 1131362560: 9,128 trades, 97.46 BTC, the most trades
+and the most volume of any day; over half of it falls in session five.
+
 **Quotes** — `btc_usd_d2_1_quotes.ndjson` is the top of the book from
 Coinbase's `ticker` channel, taken by `xexeclab ingest-quotes` alongside the
 day-two trades and cut to the first day-two session: 776 quotes. The ticker
@@ -472,6 +486,19 @@ the strongest lost (`held_no_clearer`) gives `[0, 0, 1, 0, 0, 0]` on fifteen
 books at ten starts: the one-second overlap is day fourteen alone. At four
 starts it is `[0, 0, 3, 2, 1, 0]`.
 
+`btc_usd_d20_book_full.ndjson` is the same thirty seconds at the start of the
+day-twenty capture: 429 snapshots, 42,900 rows, 70 unchanged updates not
+written. It leans hard to the ask (-0.630, the third-clearest side of any
+book) and keeps that side at every spacing from every one of ten starts but
+ten seconds, where one start loses it. So the five books "clearer than 0.297"
+that day seventeen's paragraph says never lose their side are now six books,
+and one of them has: the strongest side lost at ten seconds rises to 0.630,
+above the faintest kept (0.425). On sixteen books at ten starts
+`held_no_clearer` is `[0, 0, 1, 0, 0, 4]` and the books lost at some start
+whose side is at least as clear as the faintest kept (`missed_no_fainter`)
+`[0, 0, 1, 0, 0, 1]`: day twenty alone on the lost side at ten seconds. At four
+starts they are `[0, 0, 3, 2, 1, 0]` and `[0, 0, 1, 2, 4, 0]`.
+
 Each session file is 100 seconds, cut on a 10-second boundary, so every session
 has the same ten 10-second buckets. Within each run the trade ids are
 contiguous: nothing dropped, reordered or edited. The partial buckets at either
@@ -495,16 +522,16 @@ Two things were done to the day-one capture, and one to each of the others:
 ## What these are, and are not
 
 They are real trades, which the hand-written `data/sample_*.ndjson` captures are
-not. They are also a hundred and ninety minutes of one product: fourteen weekday mornings, two
+not. They are also two hundred minutes of one product: fifteen weekday mornings, two
 weekday afternoons, a weekday evening, a Saturday morning and a Sunday morning. A "session" here is
 a 100-second slice, not a trading day, and the six in each run are neighbours
-in time, so they are far from independent. Nineteen days is enough to show that a
+in time, so they are far from independent. Twenty days is enough to show that a
 result on one does not have to hold on another. It is not enough to say which
-one is typical, and the nineteen traded volumes run thirty times apart. The ten-level book is one 100-second
+one is typical, and the twenty traded volumes run thirty-five times apart. The ten-level book is one 100-second
 stretch, so it says how shallow the touch was that morning, not how deep the
 market is. The deep book is fifty levels sampled every five seconds over ten
 minutes of a Sunday: deep enough that the sizes here fill, too sparse to see
 what happens between two snapshots. The full-rate book shows what happens
-between them, but only for thirty seconds on each of fifteen days. Use them to see how the
+between them, but only for thirty seconds on each of sixteen days. Use them to see how the
 commands behave on real prices and sizes; do not read a result on them as a
 property of the strategy.
