@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.62.0] - 2026-11-16
+
+### Added
+- **`missed_no_fainter`** on each `book-grid-phase-across` spacing (Rust and
+  Python): how many of the books lost at some start have a full-rate
+  `|avg_queue_imbalance|` at or above `faintest_side_held`. It is the other
+  side of the overlap `held_no_clearer` counts: 0 when no book holds, and with
+  books on both sides 0 exactly when `held_no_clearer` is.
+- **A twentieth recorded day**, `data/real/btc_usd_d20_{1..6}`: the Monday
+  morning after day nineteen (08:00:10-08:10:10 UTC), with 9,128 trades and
+  97.46 BTC, the most of either on any day.
+- **A sixteenth full-rate book**, `data/real/btc_usd_d20_book_full.ndjson`:
+  fifty levels a side for thirty seconds, 429 snapshots; 70 unchanged updates
+  were not written. Equivalence tests 42 to 48 now cover it too.
+
+### Changed
+- **Side strength no longer separates kept from lost at ten seconds.** The
+  sixteenth book leans hard to the ask (-0.630, the third-clearest side of any
+  book) and loses it at one of ten starts at ten seconds. That lifts
+  `strongest_side_missed` there from 0.328 to 0.630, above the faintest kept
+  side (0.425). The READMEs said since v0.59.0 that books clearer than that
+  never lost their side; they now say this held for fifteen books and fails on
+  the sixteenth.
+
+### Notes
+- On sixteen books at ten starts `held_no_clearer` reads `[0, 0, 1, 0, 0, 4]`
+  and `missed_no_fainter` `[0, 0, 1, 0, 0, 1]`: at ten seconds one clear book
+  lost once outshines four kept at every start, and at one second there is one
+  book on each side (day fourteen kept, day eight lost). At four starts they
+  read `[0, 0, 3, 2, 1, 0]` and `[0, 0, 1, 2, 4, 0]`. Sixteen books still hold
+  one spacing, the half second.
+
 ## [0.61.0] - 2026-11-13
 
 ### Added
