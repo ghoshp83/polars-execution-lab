@@ -387,6 +387,10 @@ pub fn book_grid_phase(
 ///   `|avg_queue_imbalance|` at or below `strongest_side_missed`, so an overlap
 ///   reads as a count of books rather than a pair of extremes. 0 exactly when
 ///   side strength alone separates the books held from those missed.
+/// - `missed_no_fainter` -- the other side of the same overlap: how many books
+///   missing one start or more have a full-rate `|avg_queue_imbalance|` at or
+///   above `faintest_side_held`. 0 when `held_books` is 0, so with books on both
+///   sides it is 0 exactly when `held_no_clearer` is.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -405,6 +409,7 @@ pub struct PhaseAcrossSpacing {
     pub strongest_side_missed: f64,
     pub faintest_side_held: f64,
     pub held_no_clearer: usize,
+    pub missed_no_fainter: usize,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -472,7 +477,20 @@ pub fn book_grid_phase_across(
                 .filter(|b| missed(b, i) > 0)
                 .map(|b| b.full.avg_queue_imbalance.abs())
                 .fold(0.0, f64::max);
+            let faintest_side_held = books
+                .iter()
+                .filter(|b| held(b, i))
+                .map(|b| b.full.avg_queue_imbalance.abs())
+                .reduce(f64::min);
             PhaseAcrossSpacing {
+                missed_no_fainter: faintest_side_held.map_or(0, |faintest| {
+                    books
+                        .iter()
+                        .filter(|b| {
+                            missed(b, i) > 0 && b.full.avg_queue_imbalance.abs() >= faintest
+                        })
+                        .count()
+                }),
                 held_no_clearer: books
                     .iter()
                     .filter(|b| {
@@ -510,12 +528,7 @@ pub fn book_grid_phase_across(
                     .map(|j| books[j].spacings[i].phases_run)
                     .sum(),
                 half_missed_by: half_missed_by(books.iter().map(|b| missed(b, i)).collect()),
-                faintest_side_held: books
-                    .iter()
-                    .filter(|b| held(b, i))
-                    .map(|b| b.full.avg_queue_imbalance.abs())
-                    .reduce(f64::min)
-                    .unwrap_or(0.0),
+                faintest_side_held: faintest_side_held.unwrap_or(0.0),
             }
         })
         .collect();

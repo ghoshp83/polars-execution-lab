@@ -398,6 +398,38 @@ def test_held_no_clearer_is_zero_exactly_when_side_strength_separates():
         assert (s["held_no_clearer"] == 0) == separates
 
 
+def test_missed_no_fainter_counts_the_lost_books_a_kept_side_does_not_outshine():
+    # Nothing missed: no lost book to count.
+    across = book_grid_phase_across([_steady_book(), _steady_book()], "BTC-USD", [2.0], 2)
+    assert across["spacings"][0]["missed_no_fainter"] == 0
+    # One kept, one missed: the missed book counts only if its side is as clear.
+    across = book_grid_phase_across([_steady_book(), _kept_at_start_book()], "BTC-USD", [2.0], 2)
+    kept, lost = (abs(b["full"]["avg_queue_imbalance"]) for b in across["books"])
+    assert across["spacings"][0]["missed_no_fainter"] == int(lost >= kept)
+    # No book held: no kept side to compare with, so 0 rather than every book.
+    across = book_grid_phase_across(
+        [_kept_at_start_book(), _kept_at_start_book()], "BTC-USD", [2.0], 2
+    )
+    assert across["spacings"][0]["held_books"] == 0
+    assert across["spacings"][0]["missed_no_fainter"] == 0
+
+
+def test_missed_no_fainter_and_held_no_clearer_see_the_same_overlap():
+    books = [_book(), _steady_book(), _kept_at_start_book(), _kept_at_start_book()]
+    across = book_grid_phase_across(books, "BTC-USD", [0.5, 1.0, 2.0], 2)
+    for s in across["spacings"]:
+        missing = len(books) - s["held_books"]
+        assert 0 <= s["missed_no_fainter"] <= missing
+        both_sides = s["held_books"] > 0 and s["kept_starts"] < s["starts_run"]
+        if both_sides:
+            assert (s["missed_no_fainter"] == 0) == (s["held_no_clearer"] == 0)
+            assert (s["missed_no_fainter"] == 0) == (
+                s["faintest_side_held"] > s["strongest_side_missed"]
+            )
+        else:
+            assert s["missed_no_fainter"] == 0
+
+
 @pytest.mark.parametrize(
     "books, grid, phases",
     [

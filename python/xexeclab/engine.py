@@ -622,6 +622,10 @@ def book_grid_phase_across(
             (abs(b["full"]["avg_queue_imbalance"]) for b in runs if missed(b, i) > 0),
             default=0.0,
         )
+        faintest_side_held = min(
+            (abs(b["full"]["avg_queue_imbalance"]) for b in runs if held(b, i)),
+            default=None,
+        )
         spacings.append(
             {
                 "every_s": s,
@@ -654,14 +658,19 @@ def book_grid_phase_across(
                 ),
                 "half_missed_by": _half_missed_by([missed(b, i) for b in runs]),
                 "strongest_side_missed": strongest_side_missed,
-                "faintest_side_held": min(
-                    (abs(b["full"]["avg_queue_imbalance"]) for b in runs if held(b, i)),
-                    default=0.0,
-                ),
+                "faintest_side_held": 0.0 if faintest_side_held is None else faintest_side_held,
                 "held_no_clearer": sum(
                     1
                     for b in runs
                     if held(b, i) and abs(b["full"]["avg_queue_imbalance"]) <= strongest_side_missed
+                ),
+                "missed_no_fainter": 0
+                if faintest_side_held is None
+                else sum(
+                    1
+                    for b in runs
+                    if missed(b, i) > 0
+                    and abs(b["full"]["avg_queue_imbalance"]) >= faintest_side_held
                 ),
             }
         )
