@@ -1723,3 +1723,89 @@ fn held_no_clearer_puts_one_book_in_the_one_second_overlap() {
     let no_clearer_at_four: Vec<usize> = four.spacings.iter().map(|s| s.held_no_clearer).collect();
     assert_eq!(no_clearer_at_four, [0, 0, 3, 2, 1, 0]);
 }
+
+fn day_twenty() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d20_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A twentieth unbroken run, the Monday morning after day nineteen, across the
+/// weekend: 9,128 trades and 97.46 BTC, the most of either on any day so far.
+#[test]
+fn day_twenty_is_its_own_unbroken_run_after_the_weekend() {
+    let day_nineteen = day_nineteen();
+    let day_twenty = day_twenty();
+    let ticks: Vec<&Tick> = day_twenty.iter().flatten().collect();
+    assert_eq!(ticks.len(), 9128);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_nineteen = day_nineteen
+        .iter()
+        .flatten()
+        .map(|t| t.ts_ns)
+        .max()
+        .unwrap();
+    let gap = ticks[0].ts_ns - last_day_nineteen;
+    assert!(gap > 71 * 3600 * 1_000_000_000 && gap < 72 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 97.46 && volume < 97.47);
+    let nineteen: f64 = day_nineteen.iter().flatten().map(|t| t.size).sum();
+    assert!(volume > nineteen);
+}
+
+const SIXTEEN: [&str; 16] = [
+    "d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15", "d16", "d17", "d18",
+    "d19", "d20",
+];
+
+/// The sixteenth book leans hard to the ask (-0.63, the third-clearest side of
+/// any book, after days eleven and seventeen) and still loses that side at one
+/// of ten 10 s starts.
+#[test]
+fn a_sixteenth_book_leans_hard_to_the_ask_and_still_misses_at_ten_seconds() {
+    let book = read_book("data/real/btc_usd_d20_book_full.ndjson").unwrap();
+    let sweep = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(sweep.full.snapshots, 429);
+    assert!(sweep.full.avg_queue_imbalance < -0.62 && sweep.full.avg_queue_imbalance > -0.63);
+    assert_eq!(sweep.sign_flips, 0);
+    let phase = book_grid_phase(&book, "BTC-USD", &GRID, 10).unwrap();
+    let kept: Vec<usize> = phase.spacings.iter().map(|s| s.sign_kept_phases).collect();
+    assert_eq!(kept, [10, 10, 10, 10, 10, 9]);
+
+    let sixteen = book_grid_across(&full_rate_books(&SIXTEEN), "BTC-USD", &GRID).unwrap();
+    assert_eq!(sixteen.held_spacings, 1);
+    assert_eq!(
+        sixteen.held_without,
+        [1, 1, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    );
+}
+
+/// Side strength no longer separates at 10 s: day twenty, lost at one start,
+/// is clearer (0.63) than four books kept at every start. missed_no_fainter
+/// names that side of the overlap: one lost book there, one at 1 s (day eight
+/// against day fourteen). At four starts it is 4 lost books at 5 s against 1 kept.
+#[test]
+fn a_clear_side_lost_at_ten_seconds_outshines_four_kept_books() {
+    let books = full_rate_books(&SIXTEEN);
+    let every = book_grid_phase_across(&books, "BTC-USD", &GRID, 10).unwrap();
+    let no_clearer: Vec<usize> = every.spacings.iter().map(|s| s.held_no_clearer).collect();
+    let no_fainter: Vec<usize> = every.spacings.iter().map(|s| s.missed_no_fainter).collect();
+    assert_eq!(no_clearer, [0, 0, 1, 0, 0, 4]);
+    assert_eq!(no_fainter, [0, 0, 1, 0, 0, 1]);
+    let ten_s = &every.spacings[5];
+    assert!(ten_s.split_by.contains(&15));
+    assert_eq!(ten_s.strongest_side_missed, 0.62972122);
+    assert_eq!(ten_s.faintest_side_held, 0.42541018);
+
+    let four = book_grid_phase_across(&books, "BTC-USD", &GRID, 4).unwrap();
+    let no_clearer_at_four: Vec<usize> = four.spacings.iter().map(|s| s.held_no_clearer).collect();
+    let no_fainter_at_four: Vec<usize> =
+        four.spacings.iter().map(|s| s.missed_no_fainter).collect();
+    assert_eq!(no_clearer_at_four, [0, 0, 3, 2, 1, 0]);
+    assert_eq!(no_fainter_at_four, [0, 0, 1, 2, 4, 0]);
+}
