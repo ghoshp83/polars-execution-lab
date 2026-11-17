@@ -1809,3 +1809,95 @@ fn a_clear_side_lost_at_ten_seconds_outshines_four_kept_books() {
     assert_eq!(no_clearer_at_four, [0, 0, 3, 2, 1, 0]);
     assert_eq!(no_fainter_at_four, [0, 0, 1, 2, 4, 0]);
 }
+
+fn day_twenty_one() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d21_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A twenty-first unbroken run, the Tuesday evening after day twenty: 45,718
+/// trades and 315.53 BTC, about five times day twenty's trades and three times
+/// its volume, the most of either on any day so far by far.
+#[test]
+fn day_twenty_one_is_an_evening_run_far_busier_than_any_before_it() {
+    let day_twenty = day_twenty();
+    let day_twenty_one = day_twenty_one();
+    let ticks: Vec<&Tick> = day_twenty_one.iter().flatten().collect();
+    assert_eq!(ticks.len(), 45718);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_twenty = day_twenty.iter().flatten().map(|t| t.ts_ns).max().unwrap();
+    let gap = ticks[0].ts_ns - last_day_twenty;
+    assert!(gap > 32 * 3600 * 1_000_000_000 && gap < 33 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 315.52 && volume < 315.53);
+    let twenty: f64 = day_twenty.iter().flatten().map(|t| t.size).sum();
+    assert!(volume > 3.0 * twenty);
+}
+
+const SEVENTEEN: [&str; 17] = [
+    "d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15", "d16", "d17", "d18",
+    "d19", "d20", "d21",
+];
+
+/// The seventeenth book leans to the ask (-0.387), never flips on its first
+/// start, and loses its side at one of ten 10 s starts, as day twenty does.
+#[test]
+fn a_seventeenth_book_leans_to_the_ask_and_misses_once_at_ten_seconds() {
+    let book = read_book("data/real/btc_usd_d21_book_full.ndjson").unwrap();
+    let sweep = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(sweep.full.snapshots, 478);
+    assert!(sweep.full.avg_queue_imbalance < -0.38 && sweep.full.avg_queue_imbalance > -0.39);
+    assert_eq!(sweep.sign_flips, 0);
+    let phase = book_grid_phase(&book, "BTC-USD", &GRID, 10).unwrap();
+    let kept: Vec<usize> = phase.spacings.iter().map(|s| s.sign_kept_phases).collect();
+    assert_eq!(kept, [10, 10, 10, 10, 10, 9]);
+
+    let seventeen = book_grid_across(&full_rate_books(&SEVENTEEN), "BTC-USD", &GRID).unwrap();
+    assert_eq!(seventeen.held_spacings, 1);
+    assert_eq!(
+        seventeen.held_without,
+        [1, 1, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    );
+}
+
+/// At ten starts the clearest side lost is a different book at every spacing
+/// that loses one: day seven at 0.25 s, eight at 1 s, sixteen at 2 s, five at 5 s, twenty at
+/// 10 s. Day twenty-one's 10 s miss (0.387) is fainter than every kept side, so
+/// the 10 s overlap is still day twenty alone.
+#[test]
+fn the_clearest_side_lost_is_a_different_book_at_every_spacing() {
+    let books = full_rate_books(&SEVENTEEN);
+    let every = book_grid_phase_across(&books, "BTC-USD", &GRID, 10).unwrap();
+    let strongest: Vec<Option<usize>> = every
+        .spacings
+        .iter()
+        .map(|s| s.strongest_missed_book)
+        .collect();
+    assert_eq!(
+        strongest,
+        [Some(2), None, Some(3), Some(11), Some(0), Some(15)]
+    );
+    let ten_s = &every.spacings[5];
+    assert!(ten_s.split_by.contains(&16));
+    assert_eq!(ten_s.held_no_clearer, 4);
+    assert_eq!(ten_s.missed_no_fainter, 1);
+
+    let four = book_grid_phase_across(&books, "BTC-USD", &GRID, 4).unwrap();
+    let strongest_at_four: Vec<Option<usize>> = four
+        .spacings
+        .iter()
+        .map(|s| s.strongest_missed_book)
+        .collect();
+    assert_eq!(
+        strongest_at_four,
+        [Some(2), None, Some(11), Some(11), Some(0), Some(14)]
+    );
+    // Held at all four 10 s starts, day twenty-one is now the faintest side kept.
+    assert_eq!(four.spacings[5].faintest_side_held, 0.38676146);
+}
