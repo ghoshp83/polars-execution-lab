@@ -626,6 +626,15 @@ def book_grid_phase_across(
             (abs(b["full"]["avg_queue_imbalance"]) for b in runs if held(b, i)),
             default=None,
         )
+        # First missing book with the clearest side, as the Rust strict-greater loop.
+        strongest_missed_book = None
+        for j, b in enumerate(runs):
+            if missed(b, i) > 0 and (
+                strongest_missed_book is None
+                or abs(b["full"]["avg_queue_imbalance"])
+                > abs(runs[strongest_missed_book]["full"]["avg_queue_imbalance"])
+            ):
+                strongest_missed_book = j
         spacings.append(
             {
                 "every_s": s,
@@ -672,6 +681,7 @@ def book_grid_phase_across(
                     if missed(b, i) > 0
                     and abs(b["full"]["avg_queue_imbalance"]) >= faintest_side_held
                 ),
+                "strongest_missed_book": strongest_missed_book,
             }
         )
     return {

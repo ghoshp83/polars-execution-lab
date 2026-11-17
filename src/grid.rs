@@ -391,6 +391,9 @@ pub fn book_grid_phase(
 ///   missing one start or more have a full-rate `|avg_queue_imbalance|` at or
 ///   above `faintest_side_held`. 0 when `held_books` is 0, so with books on both
 ///   sides it is 0 exactly when `held_no_clearer` is.
+/// - `strongest_missed_book` -- which book `strongest_side_missed` comes from
+///   (the first of a tie), so a clear side lost reads as a named book rather
+///   than a number. `None` (null) only when no book misses a start.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -410,6 +413,7 @@ pub struct PhaseAcrossSpacing {
     pub faintest_side_held: f64,
     pub held_no_clearer: usize,
     pub missed_no_fainter: usize,
+    pub strongest_missed_book: Option<usize>,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -482,7 +486,16 @@ pub fn book_grid_phase_across(
                 .filter(|b| held(b, i))
                 .map(|b| b.full.avg_queue_imbalance.abs())
                 .reduce(f64::min);
+            // First missing book with the clearest side, strictly greater only.
+            let side = |j: usize| books[j].full.avg_queue_imbalance.abs();
+            let mut strongest_missed_book: Option<usize> = None;
+            for (j, b) in books.iter().enumerate() {
+                if missed(b, i) > 0 && strongest_missed_book.is_none_or(|k| side(j) > side(k)) {
+                    strongest_missed_book = Some(j);
+                }
+            }
             PhaseAcrossSpacing {
+                strongest_missed_book,
                 missed_no_fainter: faintest_side_held.map_or(0, |faintest| {
                     books
                         .iter()

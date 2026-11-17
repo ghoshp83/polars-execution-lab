@@ -430,6 +430,33 @@ def test_missed_no_fainter_and_held_no_clearer_see_the_same_overlap():
             assert s["missed_no_fainter"] == 0
 
 
+def test_strongest_missed_book_names_the_book_whose_lost_side_is_clearest():
+    # Nothing missed: no book to name, rather than book 0.
+    across = book_grid_phase_across([_steady_book(), _steady_book()], "BTC-USD", [2.0], 2)
+    assert across["spacings"][0]["strongest_missed_book"] is None
+    # One kept, one missed: the missed book is named even though it is second.
+    across = book_grid_phase_across([_steady_book(), _kept_at_start_book()], "BTC-USD", [2.0], 2)
+    assert across["spacings"][0]["strongest_missed_book"] == 1
+    # Two identical missed books: the first of the tie.
+    across = book_grid_phase_across(
+        [_kept_at_start_book(), _kept_at_start_book()], "BTC-USD", [2.0], 2
+    )
+    assert across["spacings"][0]["strongest_missed_book"] == 0
+
+
+def test_strongest_missed_book_carries_the_strongest_side_missed():
+    books = [_book(), _steady_book(), _kept_at_start_book(), _kept_at_start_book()]
+    across = book_grid_phase_across(books, "BTC-USD", [0.5, 1.0, 2.0], 2)
+    for i, s in enumerate(across["spacings"]):
+        j = s["strongest_missed_book"]
+        if s["kept_starts"] == s["starts_run"]:
+            assert j is None
+        else:
+            b = across["books"][j]
+            assert b["spacings"][i]["sign_kept_phases"] < b["spacings"][i]["phases_run"]
+            assert abs(b["full"]["avg_queue_imbalance"]) == s["strongest_side_missed"]
+
+
 @pytest.mark.parametrize(
     "books, grid, phases",
     [
