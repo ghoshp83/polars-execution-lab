@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.64.0] - 2026-11-18
+
+### Added
+- **`faintest_held_book`** on each `book-grid-phase-across` spacing (Rust and
+  Python): which book `faintest_side_held` comes from, the first of a tie; null
+  when no book keeps every start. With `strongest_missed_book`, both edges of
+  the side-strength comparison are named books.
+- **A twenty-second recorded day**, `data/real/btc_usd_d22_{1..6}`: the
+  Wednesday early afternoon after day twenty-one (13:29:30-13:39:30 UTC), with
+  9,193 trades and 71.73 BTC.
+- **An eighteenth full-rate book**, `data/real/btc_usd_d22_book_full.ndjson`:
+  fifty levels a side for thirty seconds, 244 snapshots; 183 unchanged updates
+  were not written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- On eighteen books at ten starts the faintest side kept is a different book
+  at every spacing (days twelve, seven, fourteen, five, six and thirteen), and
+  days seven and five each sit on both edges at neighbouring spacings. Day
+  twenty-two keeps its side everywhere, on a side fainter than the clearest one
+  lost at ten seconds, so `held_no_clearer` there goes from 4 to 5.
+
 ## [0.63.0] - 2026-11-17
 
 ### Added
