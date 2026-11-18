@@ -1901,3 +1901,101 @@ fn the_clearest_side_lost_is_a_different_book_at_every_spacing() {
     // Held at all four 10 s starts, day twenty-one is now the faintest side kept.
     assert_eq!(four.spacings[5].faintest_side_held, 0.38676146);
 }
+
+fn day_twenty_two() -> Vec<Vec<Tick>> {
+    (1..=6)
+        .map(|i| {
+            read_ticks(format!("data/real/btc_usd_d22_{i}.ndjson")).expect("real session must load")
+        })
+        .collect()
+}
+
+/// A twenty-second unbroken run, the Wednesday early afternoon after day
+/// twenty-one: 9,193 trades and 71.73 BTC, more trades than day twenty, the
+/// busiest before twenty-one, on under a quarter of twenty-one's volume.
+#[test]
+fn day_twenty_two_is_an_afternoon_run_back_near_the_usual_volume() {
+    let day_twenty = day_twenty();
+    let day_twenty_one = day_twenty_one();
+    let day_twenty_two = day_twenty_two();
+    let ticks: Vec<&Tick> = day_twenty_two.iter().flatten().collect();
+    assert_eq!(ticks.len(), 9193);
+    for pair in ticks.windows(2) {
+        assert_eq!(pair[1].trade_id, pair[0].trade_id + 1);
+        assert!(pair[1].ts_ns >= pair[0].ts_ns);
+    }
+    let last_day_twenty_one = day_twenty_one
+        .iter()
+        .flatten()
+        .map(|t| t.ts_ns)
+        .max()
+        .unwrap();
+    let gap = ticks[0].ts_ns - last_day_twenty_one;
+    assert!(gap > 20 * 3600 * 1_000_000_000 && gap < 21 * 3600 * 1_000_000_000);
+    let volume: f64 = ticks.iter().map(|t| t.size).sum();
+    assert!(volume > 71.72 && volume < 71.73);
+    assert!(ticks.len() > day_twenty.iter().map(Vec::len).sum::<usize>());
+    let twenty_one: f64 = day_twenty_one.iter().flatten().map(|t| t.size).sum();
+    assert!(volume < 0.25 * twenty_one);
+}
+
+const EIGHTEEN: [&str; 18] = [
+    "d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15", "d16", "d17", "d18",
+    "d19", "d20", "d21", "d22",
+];
+
+/// The eighteenth book leans to the ask (-0.575), never flips at the first
+/// start, and keeps its side at all ten starts of every spacing.
+#[test]
+fn an_eighteenth_book_leans_to_the_ask_and_keeps_every_start() {
+    let book = read_book("data/real/btc_usd_d22_book_full.ndjson").unwrap();
+    let sweep = book_grid_sweep(&book, "BTC-USD", &GRID).unwrap();
+    assert_eq!(sweep.full.snapshots, 244);
+    assert!(sweep.full.avg_queue_imbalance < -0.57 && sweep.full.avg_queue_imbalance > -0.58);
+    assert_eq!(sweep.sign_flips, 0);
+    let phase = book_grid_phase(&book, "BTC-USD", &GRID, 10).unwrap();
+    let kept: Vec<usize> = phase.spacings.iter().map(|s| s.sign_kept_phases).collect();
+    assert_eq!(kept, [10; 6]);
+
+    let eighteen = book_grid_across(&full_rate_books(&EIGHTEEN), "BTC-USD", &GRID).unwrap();
+    assert_eq!(eighteen.held_spacings, 1);
+    let mut without = vec![1; 18];
+    without[2] = 4;
+    assert_eq!(eighteen.held_without, without);
+}
+
+/// The faintest side kept is a different book at every spacing too: at ten
+/// starts day twelve at 0.25 s, seven at 0.5 s, fourteen at 1 s, five at 2 s,
+/// six at 5 s, thirteen at 10 s. Days seven and five sit on both edges at
+/// neighbouring spacings, and day twenty-two, kept at 10 s on a side fainter
+/// than the clearest lost, makes the 10 s overlap five held books, not four.
+#[test]
+fn the_faintest_side_kept_is_a_different_book_at_every_spacing() {
+    let books = full_rate_books(&EIGHTEEN);
+    let every = book_grid_phase_across(&books, "BTC-USD", &GRID, 10).unwrap();
+    let faintest: Vec<Option<usize>> = every
+        .spacings
+        .iter()
+        .map(|s| s.faintest_held_book)
+        .collect();
+    assert_eq!(
+        faintest,
+        [Some(7), Some(2), Some(9), Some(0), Some(1), Some(8)]
+    );
+    // Day seven: clearest lost at 0.25 s, faintest kept at 0.5 s.
+    assert_eq!(every.spacings[0].strongest_missed_book, Some(2));
+    // Day five: faintest kept at 2 s, clearest lost at 5 s.
+    assert_eq!(every.spacings[4].strongest_missed_book, Some(0));
+    let ten_s = &every.spacings[5];
+    assert_eq!(ten_s.held_books, 7);
+    assert_eq!(ten_s.held_no_clearer, 5);
+    assert_eq!(ten_s.missed_no_fainter, 1);
+
+    let four = book_grid_phase_across(&books, "BTC-USD", &GRID, 4).unwrap();
+    let faintest_at_four: Vec<Option<usize>> =
+        four.spacings.iter().map(|s| s.faintest_held_book).collect();
+    assert_eq!(
+        faintest_at_four,
+        [Some(7), Some(2), Some(9), Some(9), Some(9), Some(16)]
+    );
+}
