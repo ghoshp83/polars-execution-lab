@@ -394,6 +394,9 @@ pub fn book_grid_phase(
 /// - `strongest_missed_book` -- which book `strongest_side_missed` comes from
 ///   (the first of a tie), so a clear side lost reads as a named book rather
 ///   than a number. `None` (null) only when no book misses a start.
+/// - `faintest_held_book` -- which book `faintest_side_held` comes from (the
+///   first of a tie), the held end of the same comparison, so both edges of an
+///   overlap are named books. `None` (null) only when `held_books` is 0.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -414,6 +417,7 @@ pub struct PhaseAcrossSpacing {
     pub held_no_clearer: usize,
     pub missed_no_fainter: usize,
     pub strongest_missed_book: Option<usize>,
+    pub faintest_held_book: Option<usize>,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -494,8 +498,16 @@ pub fn book_grid_phase_across(
                     strongest_missed_book = Some(j);
                 }
             }
+            // First held book with the faintest side, strictly smaller only.
+            let mut faintest_held_book: Option<usize> = None;
+            for (j, b) in books.iter().enumerate() {
+                if held(b, i) && faintest_held_book.is_none_or(|k| side(j) < side(k)) {
+                    faintest_held_book = Some(j);
+                }
+            }
             PhaseAcrossSpacing {
                 strongest_missed_book,
+                faintest_held_book,
                 missed_no_fainter: faintest_side_held.map_or(0, |faintest| {
                     books
                         .iter()

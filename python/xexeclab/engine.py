@@ -635,6 +635,15 @@ def book_grid_phase_across(
                 > abs(runs[strongest_missed_book]["full"]["avg_queue_imbalance"])
             ):
                 strongest_missed_book = j
+        # First held book with the faintest side, as the Rust strict-smaller loop.
+        faintest_held_book = None
+        for j, b in enumerate(runs):
+            if held(b, i) and (
+                faintest_held_book is None
+                or abs(b["full"]["avg_queue_imbalance"])
+                < abs(runs[faintest_held_book]["full"]["avg_queue_imbalance"])
+            ):
+                faintest_held_book = j
         spacings.append(
             {
                 "every_s": s,
@@ -682,6 +691,7 @@ def book_grid_phase_across(
                     and abs(b["full"]["avg_queue_imbalance"]) >= faintest_side_held
                 ),
                 "strongest_missed_book": strongest_missed_book,
+                "faintest_held_book": faintest_held_book,
             }
         )
     return {
