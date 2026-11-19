@@ -692,6 +692,9 @@ def book_grid_phase_across(
                 ),
                 "strongest_missed_book": strongest_missed_book,
                 "faintest_held_book": faintest_held_book,
+                "most_missed_side": abs(runs[most_missed_book]["full"]["avg_queue_imbalance"])
+                if missed(runs[most_missed_book], i) > 0
+                else None,
             }
         )
     return {

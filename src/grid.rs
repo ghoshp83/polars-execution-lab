@@ -397,6 +397,10 @@ pub fn book_grid_phase(
 /// - `faintest_held_book` -- which book `faintest_side_held` comes from (the
 ///   first of a tie), the held end of the same comparison, so both edges of an
 ///   overlap are named books. `None` (null) only when `held_books` is 0.
+/// - `most_missed_side` -- the full-rate `|avg_queue_imbalance|` of
+///   `most_missed_book`, so the book losing the most starts reads as a faint
+///   side or a clear one. At most `strongest_side_missed`. `None` (null) only
+///   when no book misses a start.
 #[derive(Debug, Serialize)]
 pub struct PhaseAcrossSpacing {
     pub every_s: f64,
@@ -418,6 +422,7 @@ pub struct PhaseAcrossSpacing {
     pub missed_no_fainter: usize,
     pub strongest_missed_book: Option<usize>,
     pub faintest_held_book: Option<usize>,
+    pub most_missed_side: Option<f64>,
 }
 
 /// [`book_grid_phase`] on each book (two or more), then read per spacing.
@@ -506,6 +511,8 @@ pub fn book_grid_phase_across(
                 }
             }
             PhaseAcrossSpacing {
+                most_missed_side: (missed(&books[most_missed_book], i) > 0)
+                    .then(|| side(most_missed_book)),
                 strongest_missed_book,
                 faintest_held_book,
                 missed_no_fainter: faintest_side_held.map_or(0, |faintest| {
