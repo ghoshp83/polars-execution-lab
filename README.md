@@ -157,7 +157,7 @@ uv run xexeclab book-grid-across --input data/real/btc_usd_d5_book_full.ndjson,d
 uv run xexeclab book-grid-phase --input data/real/btc_usd_d7_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
 
 # the same starts on every book at once: which spacings hold on all of them at every start
-uv run xexeclab book-grid-phase-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson,data/real/btc_usd_d12_book_full.ndjson,data/real/btc_usd_d13_book_full.ndjson,data/real/btc_usd_d14_book_full.ndjson,data/real/btc_usd_d15_book_full.ndjson,data/real/btc_usd_d16_book_full.ndjson,data/real/btc_usd_d17_book_full.ndjson,data/real/btc_usd_d18_book_full.ndjson,data/real/btc_usd_d19_book_full.ndjson,data/real/btc_usd_d20_book_full.ndjson,data/real/btc_usd_d21_book_full.ndjson,data/real/btc_usd_d22_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
+uv run xexeclab book-grid-phase-across --input data/real/btc_usd_d5_book_full.ndjson,data/real/btc_usd_d6_book_full.ndjson,data/real/btc_usd_d7_book_full.ndjson,data/real/btc_usd_d8_book_full.ndjson,data/real/btc_usd_d9_book_full.ndjson,data/real/btc_usd_d10_book_full.ndjson,data/real/btc_usd_d11_book_full.ndjson,data/real/btc_usd_d12_book_full.ndjson,data/real/btc_usd_d13_book_full.ndjson,data/real/btc_usd_d14_book_full.ndjson,data/real/btc_usd_d15_book_full.ndjson,data/real/btc_usd_d16_book_full.ndjson,data/real/btc_usd_d17_book_full.ndjson,data/real/btc_usd_d18_book_full.ndjson,data/real/btc_usd_d19_book_full.ndjson,data/real/btc_usd_d20_book_full.ndjson,data/real/btc_usd_d21_book_full.ndjson,data/real/btc_usd_d22_book_full.ndjson,data/real/btc_usd_d23_book_full.ndjson --every-grid 0.25,0.5,1,2,5,10 --phases 10
 
 # cost of sweeping a marketable order through the L2 book (realised VWAP / slippage)
 uv run xexeclab sweep   --input data/sample_book.ndjson --side buy --size 2.0
@@ -459,9 +459,9 @@ This is a **market-data and execution-analytics** project, not a trading system.
   `data/sample_quotes.ndjson`, and `data/sample_book.ndjson` let every command
   and test run with no network. The `data/sample_*` files are written by hand
   to make each command's point on a few rows. `data/real/` holds a hundred and
-  thirty-two recorded sessions — twenty-two ten-minute runs of consecutive BTC-USD trades on
-  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355, 3,042, 1,882, 3,049, 5,228, 3,288, 2,794, 2,963, 3,092, 3,003, 6,548, 9,128, 45,718 and 9,193 of them —
-  plus 100 seconds of recorded quotes and twenty recorded books. They are real but are not a sample
+  thirty-eight recorded sessions — twenty-three ten-minute runs of consecutive BTC-USD trades on
+  different days, 1,916, 5,248, 1,986, 938, 2,425, 1,738, 2,778, 2,987, 2,355, 3,042, 1,882, 3,049, 5,228, 3,288, 2,794, 2,963, 3,092, 3,003, 6,548, 9,128, 45,718, 9,193 and 7,636 of them —
+  plus 100 seconds of recorded quotes and twenty-one recorded books. They are real but are not a sample
   of a market: see `data/real/README.md`. The day-three book keeps ten levels
   a side, which averaged 0.66 BTC on the ask: a 2 BTC sweep runs off it in
   every snapshot, so its cost there is a floor. The day-four book keeps fifty,
@@ -635,7 +635,22 @@ This is a **market-data and execution-analytics** project, not a trading system.
   seconds goes from four books to five. At four starts `faintest_held_book`
   reads `[7, 2, 9, 9, 9, 16]`. The edge books trade places as the spacing
   widens, so neither edge is a fixed property of a book. It is measured on
-  eighteen books, not proven. No start and no spacing is named best.
+  eighteen books, not proven. **The book losing the most starts is a faint
+  one.** `most_missed_side` reads the full-rate side of `most_missed_book`
+  (null when no book misses a start), so the weakest book reads as a faint
+  side or a clear one. A nineteenth book (day twenty-three, a Thursday
+  lunchtime, 7,636 trades and 16.8 BTC; queue +0.098 on the bid) loses its
+  side at some starts of 2, 5 and 10 seconds. On nineteen books at ten starts
+  the book losing most is day seven at every split spacing up to five seconds,
+  and day seven's side (0.017) is the faintest of all nineteen; at ten seconds
+  it is day five (0.170), under a third of the clearest side lost there
+  (0.630). At four starts day twenty-three, itself faint, is the book losing
+  most at ten seconds. So the starts lost pile up on faint books while the
+  clearest losses are scattered across others: the two edges measure
+  different things. Day twenty-three is kept at one second on a side fainter
+  than the clearest lost, so `held_no_clearer` there goes from one to two.
+  It is measured on nineteen books, not proven. No start and no spacing is
+  named best.
 - L2 depth is **reconstructed** from Coinbase's `level2_batch` channel (a
   snapshot plus batched deltas) and recorded to the top-N levels per side —
   enough for resting-depth, depth-imbalance, spread, and **top-of-book queue-size**
