@@ -117,6 +117,7 @@ FULL_RATE_BOOKS = (
     "data/real/btc_usd_d20_book_full.ndjson",
     "data/real/btc_usd_d21_book_full.ndjson",
     "data/real/btc_usd_d22_book_full.ndjson",
+    "data/real/btc_usd_d23_book_full.ndjson",
 )
 COEF_BPS = 12.5
 PERM_COEF_BPS = 7.5
