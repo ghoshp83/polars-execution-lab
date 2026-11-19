@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.65.0] - 2026-11-19
+
+### Added
+- **`most_missed_side`** on each `book-grid-phase-across` spacing (Rust and
+  Python): the full-rate `|avg_queue_imbalance|` of `most_missed_book`, never
+  above `strongest_side_missed`; null when no book misses a start.
+- **A twenty-third recorded day**, `data/real/btc_usd_d23_{1..6}`: the
+  Thursday lunchtime after day twenty-two (12:31:00-12:41:00 UTC), with 7,636
+  trades and 16.81 BTC.
+- **A nineteenth full-rate book**, `data/real/btc_usd_d23_book_full.ndjson`:
+  fifty levels a side for thirty seconds, 439 snapshots; 58 unchanged updates
+  were not written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- On nineteen books at ten starts the book losing the most starts is day
+  seven, the faintest side of all, at every split spacing up to five seconds,
+  and day five (0.170) at ten, under a third of the clearest side lost there.
+  Misses pile up on faint books while the clearest losses are scattered.
+  Day twenty-three is kept at one second on a side fainter than the clearest
+  lost, so `held_no_clearer` there goes from 1 to 2.
+
 ## [0.64.0] - 2026-11-18
 
 ### Added
