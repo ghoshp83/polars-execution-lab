@@ -1550,3 +1550,85 @@ def test_the_faintest_side_kept_is_a_different_book_at_every_spacing():
 
     four = book_grid_phase_across(books, "BTC-USD", GRID, 4)
     assert [s["faintest_held_book"] for s in four["spacings"]] == [7, 2, 9, 9, 9, 16]
+
+
+@pytest.fixture(scope="module")
+def day_twenty_three():
+    return [read_ticks(REAL / f"btc_usd_d23_{i}.ndjson") for i in range(1, 7)]
+
+
+NINETEEN = [*EIGHTEEN, "d23"]
+
+
+def test_day_twenty_three_is_a_lunchtime_run_on_a_quarter_of_the_volume(
+    day_twenty_two, day_twenty_three
+):
+    """A twenty-third unbroken run, the Thursday lunchtime after day twenty-two:
+    7,636 trades and 16.81 BTC, fewer trades than day twenty-two on under a
+    quarter of its volume."""
+    ids = [i for s in day_twenty_three for i in s["trade_id"].to_list()]
+    ts = [t for s in day_twenty_three for t in s["ts_ns"].to_list()]
+    assert len(ids) == 7636
+    assert ids == list(range(ids[0], ids[0] + len(ids)))
+    assert ts == sorted(ts)
+    last_day_twenty_two = max(t for s in day_twenty_two for t in s["ts_ns"].to_list())
+    assert 22 * 3600 * 1_000_000_000 < ts[0] - last_day_twenty_two < 23 * 3600 * 1_000_000_000
+    volume = 0.0
+    for s in day_twenty_three:
+        for size in s["size"].to_list():
+            volume += size
+    assert 16.80 < volume < 16.81
+    assert len(ids) < sum(s.height for s in day_twenty_two)
+    twenty_two = 0.0
+    for s in day_twenty_two:
+        for size in s["size"].to_list():
+            twenty_two += size
+    assert volume < 0.25 * twenty_two
+
+
+def test_a_nineteenth_book_leans_faintly_to_the_bid_and_splits_three_spacings():
+    """The nineteenth book leans faintly to the bid (+0.098), flips twice at the
+    first start, and loses its side at some starts of 2, 5 and 10 s."""
+    book = read_book(REAL / "btc_usd_d23_book_full.ndjson")
+    sweep = book_grid_sweep(book, "BTC-USD", GRID)
+    assert sweep["full"]["snapshots"] == 439
+    assert 0.09 < sweep["full"]["avg_queue_imbalance"] < 0.10
+    assert sweep["sign_flips"] == 2
+    phase = book_grid_phase(book, "BTC-USD", GRID, 10)
+    assert [s["sign_kept_phases"] for s in phase["spacings"]] == [10, 10, 10, 8, 8, 7]
+
+    nineteen = book_grid_across(_full_rate_books(NINETEEN), "BTC-USD", GRID)
+    assert nineteen["held_spacings"] == 1
+    assert nineteen["held_without"] == [1, 1, 3, *[1] * 16]
+
+
+def test_the_book_losing_the_most_starts_has_one_of_the_faintest_sides():
+    """The book losing the most starts is a faint one: at ten starts day seven,
+    the faintest side of all nineteen, at every split spacing to 5 s, and day
+    five (0.170) at 10 s, where the clearest side lost is 0.630. At four starts
+    day twenty-three, itself faint, is the one losing most at 10 s."""
+    books = _full_rate_books(NINETEEN)
+    every = book_grid_phase_across(books, "BTC-USD", GRID, 10)
+
+    def side(j):
+        return abs(every["books"][j]["full"]["avg_queue_imbalance"])
+
+    faintest = min(side(j) for j in range(len(books)))
+    assert side(2) == faintest
+    assert [s["most_missed_side"] for s in every["spacings"]] == [
+        faintest,
+        None,
+        faintest,
+        faintest,
+        faintest,
+        side(0),
+    ]
+    ten_s = every["spacings"][5]
+    assert ten_s["most_missed_side"] < ten_s["strongest_side_missed"] / 3.0
+    # Day twenty-three, kept at 1 s on a side fainter than the clearest lost.
+    assert every["spacings"][2]["held_no_clearer"] == 2
+    assert ten_s["half_missed_by"] == 5
+
+    four = book_grid_phase_across(books, "BTC-USD", GRID, 4)
+    assert four["spacings"][5]["most_missed_book"] == 18
+    assert four["spacings"][5]["most_missed_side"] == side(18)
