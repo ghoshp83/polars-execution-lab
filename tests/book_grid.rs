@@ -471,6 +471,20 @@ fn most_missed_side_is_the_side_of_the_book_losing_the_most_starts() {
 }
 
 #[test]
+fn faintest_side_missed_is_the_low_end_of_the_sides_lost() {
+    // Nothing missed: no faintest lost side, rather than 0.0.
+    let books = [steady_book(), steady_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    assert_eq!(across.spacings[0].faintest_side_missed, None);
+    // One book misses: both ends of the range are its side.
+    let books = [steady_book(), kept_at_start_book()];
+    let across = book_grid_phase_across(&books, "BTC-USD", &[2.0], 2).unwrap();
+    let s = &across.spacings[0];
+    assert_eq!(s.faintest_side_missed, Some(s.strongest_side_missed));
+    assert!(s.faintest_side_missed <= s.most_missed_side);
+}
+
+#[test]
 fn a_phase_sweep_across_books_needs_two_books_two_starts_and_a_clean_grid() {
     assert!(book_grid_phase_across(&[book()], "BTC-USD", &[1.0], 2).is_err());
     assert!(book_grid_phase_across(&[book(), steady_book()], "BTC-USD", &[1.0], 1).is_err());
