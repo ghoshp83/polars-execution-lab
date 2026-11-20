@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.66.0] - 2026-11-20
+
+### Added
+- **`faintest_side_missed`** on each `book-grid-phase-across` spacing (Rust
+  and Python): the smallest full-rate `|avg_queue_imbalance|` of any book
+  missing a start, the other end of `strongest_side_missed` and never above
+  `most_missed_side`; null when no book misses a start.
+- **A twenty-fourth recorded day**, `data/real/btc_usd_d24_{1..6}`: the
+  Friday morning after day twenty-three (08:50:50-09:00:50 UTC), with 6,272
+  trades and 18.72 BTC.
+- **A twentieth full-rate book**, `data/real/btc_usd_d24_book_full.ndjson`:
+  fifty levels a side for thirty seconds, 319 snapshots; 161 unchanged updates
+  were not written. Equivalence tests 42 to 48 now cover it too.
+
+### Notes
+- On twenty books the faintest side lost is day seven's (0.017) at every split
+  spacing, at ten starts and at four. At ten seconds the sides lost span 0.017
+  to 0.630, so a wide grid loses faint and clear sides alike. At four starts
+  day twenty-four's single ten-second miss (0.442) is clearer than the faintest
+  side kept (0.387), so side strength no longer separates kept from lost there;
+  at ten starts `held_no_clearer` at ten seconds goes from 5 to 6.
+
 ## [0.65.0] - 2026-11-19
 
 ### Added
